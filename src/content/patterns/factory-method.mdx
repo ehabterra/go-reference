@@ -1,0 +1,172 @@
+---
+title: "Factory Method"
+category: creational
+kind: pattern
+order: 3
+difficulty: "Beginner"
+gof: true
+status: ready
+intent: "Define an interface for creating an object, but let the implementation decide which concrete type to instantiate."
+aka: "Virtual Constructor"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/simple/main.go"
+when_use:
+  - "Callers should depend on an interface, not on concrete types — so you can swap implementations freely."
+  - "You want a single place that decides which concrete type to build (and can validate the request)."
+  - "Construction needs to vary by context — a NY store builds NY pizzas, a Chicago store builds Chicago ones."
+when_avoid:
+  - "There's only one implementation and no prospect of another — a plain struct literal is clearer."
+  - "You're adding a factory purely speculatively; introduce it when variation actually appears."
+related:
+  - abstract-factory
+  - builder
+  - prototype
+  - strategy
+quiz:
+  - q: "What is the idiomatic 'factory' in everyday Go?"
+    options:
+      - text: "A function like NewThing(...) that returns an interface"
+        correct: true
+      - text: "A class with a private constructor"
+        correct: false
+      - text: "A global registry only"
+        correct: false
+      - text: "A goroutine"
+        correct: false
+    explain: "Go's everyday factory is just a constructor function returning an interface — callers get behavior without naming the concrete type."
+  - q: "How does a 'Simple Factory' differ from the GoF 'Factory Method'?"
+    options:
+      - text: "Simple Factory centralizes a switch in one place; Factory Method defers the choice to a pluggable creator per context"
+        correct: true
+      - text: "They are the same thing"
+        correct: false
+      - text: "Factory Method can't return interfaces"
+        correct: false
+      - text: "Simple Factory requires generics"
+        correct: false
+    explain: "Simple Factory is one function/method with a switch. Factory Method makes creation an overridable step so different creators (NY vs Chicago store) build different products through the same workflow."
+  - q: "Which standard-library function is a factory?"
+    options:
+      - text: "sql.Open(driverName, dsn) — returns a *sql.DB wired to the named driver"
+        correct: true
+      - text: "len(s)"
+        correct: false
+      - text: "copy(dst, src)"
+        correct: false
+      - text: "append(s, x)"
+        correct: false
+    explain: "sql.Open looks up a registered driver by name and returns a handle — you depend on the name, not the concrete driver type. image.Decode and net.Listen are similar."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🦆 Analogy">
+You ask a toy shop for "a duck." You don't say *how* to build it or which exact model — you name what you want, and the shop hands you one that quacks. Swap the shop and "a duck" might come out as a rubber squeaker instead. You program against "duck," not against a specific factory floor.
+</Callout>
+
+## The problem
+
+When code does `d := &MallardDuck{}`, it's welded to that concrete type. Every place that constructs one must change if you add a `RubberDuck`, and tests can't substitute a fake. A factory moves the `new` decision behind a function that **returns an interface**, so callers depend only on behavior.
+
+## Idiomatic Go — the constructor & the Simple Factory
+
+The everyday Go factory is a function returning an interface. A *Simple Factory* extends that with a switch when the caller chooses a kind at runtime. Edit and **Run**:
+
+<Playground client:visible title="factory.go" code={`package main
+
+import "fmt"
+
+// Product: callers depend on this, not on concrete types.
+type Duck interface{ Quack() }
+
+type MallardDuck struct{}
+
+func (MallardDuck) Quack() { fmt.Println("Quack") }
+
+type RubberDuck struct{}
+
+func (RubberDuck) Quack() { fmt.Println("Squeak") }
+
+type DecoyDuck struct{}
+
+func (DecoyDuck) Quack() { fmt.Println("...silence...") }
+
+// The factory: ask for a kind, get back a Duck.
+func NewDuck(kind string) (Duck, error) {
+	switch kind {
+	case "mallard":
+		return MallardDuck{}, nil
+	case "rubber":
+		return RubberDuck{}, nil
+	case "decoy":
+		return DecoyDuck{}, nil
+	default:
+		return nil, fmt.Errorf("unknown duck: %q", kind)
+	}
+}
+
+func main() {
+	for _, kind := range []string{"mallard", "rubber", "decoy"} {
+		d, err := NewDuck(kind)
+		if err != nil {
+			fmt.Println("error:", err)
+			continue
+		}
+		fmt.Printf("%-8s -> ", kind)
+		d.Quack()
+	}
+}`} />
+
+<Callout type="go" title="🐹 Simple Factory isn't quite the GoF pattern">
+The duck switch above is a *Simple Factory* — a handy idiom, but not formally one of the 23. The real **Factory Method** makes the creation step itself something each context overrides. The repo shows it with a pizza store.
+</Callout>
+
+## Factory Method proper — the pizza store
+
+The order workflow is fixed — prepare, bake, cut, box — but **which pizza gets created** is a step each store provides. In Go (no subclassing), the base store delegates creation to an embedded creator, and `NYPizzaStore`/`ChicagoPizzaStore` each supply their own `CreatePizza`:
+
+<Mermaid code={`classDiagram
+  class PizzaStore {
+    <<interface>>
+    +OrderPizza(kind) Pizza
+  }
+  class NYPizzaStore {
+    +CreatePizza(kind) Pizza
+  }
+  class ChicagoPizzaStore {
+    +CreatePizza(kind) Pizza
+  }
+  class Pizza { <<interface>> }
+  PizzaStore <|.. NYPizzaStore
+  PizzaStore <|.. ChicagoPizzaStore
+  NYPizzaStore ..> Pizza : NY-style
+  ChicagoPizzaStore ..> Pizza : Chicago-style`} />
+
+```go
+// OrderPizza is the fixed workflow; CreatePizza is the factory method.
+func (s *PizzaStoreBase) OrderPizza(kind PizzaType) (Pizza, error) {
+	pizza, err := s.store.CreatePizza(kind) // varies per store
+	if err != nil {
+		return nil, err
+	}
+	pizza.Prepare()
+	pizza.Bake()
+	pizza.Cut()
+	pizza.Box()
+	return pizza, nil
+}
+```
+
+Each store implements `CreatePizza` to build its own regional pizzas — same order flow, different products. See the [full NY & Chicago stores in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/pizza/method.go).
+
+## In the standard library
+
+- **`sql.Open(driver, dsn)`** — returns a `*sql.DB` for a driver registered by name.
+- **`image.Decode`** — dispatches to a decoder registered via `image.RegisterFormat`.
+- **`net.Listen("tcp", addr)`** — returns the right `net.Listener` for the network.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ A factory for one type is just indirection">
+If there's exactly one implementation, `NewThing()` returning a concrete struct is fine — don't wrap it in an interface and a switch "just in case." Add the factory when a second implementation (or a test fake) actually shows up. And prefer returning the concrete type from constructors when you can — "accept interfaces, return structs."
+</Callout>

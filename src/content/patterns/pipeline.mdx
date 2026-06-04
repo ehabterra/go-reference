@@ -1,0 +1,167 @@
+---
+title: "Pipeline"
+category: concurrency
+kind: pattern
+order: 25
+difficulty: "Intermediate"
+status: ready
+intent: "Process a stream of data through a series of stages connected by channels, where each stage is a goroutine."
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/pipeline/main.go"
+when_use:
+  - "You transform a stream in distinct steps (read → parse → filter → write) and want them to run concurrently."
+  - "You want natural back-pressure and bounded memory, with stages decoupled from each other."
+  - "You need clean cancellation so partial work shuts down without leaking goroutines."
+when_avoid:
+  - "It's a single, cheap transformation — a plain loop is simpler and faster."
+  - "Stages are so tiny that channel overhead dominates the actual work."
+  - "You need strict global ordering after fanning a stage out to many workers."
+related:
+  - fan-in-fan-out
+  - worker-pool
+  - generator
+  - context-cancellation
+quiz:
+  - q: "In a Go pipeline, who closes a stage's output channel?"
+    options:
+      - text: "The stage that owns (writes to) it — via defer close(out) when its goroutine finishes"
+        correct: true
+      - text: "The downstream consumer"
+        correct: false
+      - text: "The main function, always"
+        correct: false
+      - text: "Nobody — channels close themselves"
+        correct: false
+    explain: "Each stage owns its output channel and closes it when done. Closing from the receiver side would panic; ranging over the channel downstream ends cleanly once it's closed."
+  - q: "What is the `done` channel for?"
+    options:
+      - text: "Signalling cancellation so every stage can stop and not leak its goroutine"
+        correct: true
+      - text: "Counting how many items were processed"
+        correct: false
+      - text: "Buffering the output"
+        correct: false
+      - text: "Sorting the stream"
+        correct: false
+    explain: "Each stage selects on <-done alongside its send/receive. Closing done unblocks them all so they return — preventing goroutines stuck forever on a channel nobody reads."
+  - q: "Where does back-pressure come from?"
+    options:
+      - text: "Unbuffered channels — a fast stage blocks until the next stage is ready to receive"
+        correct: true
+      - text: "A global rate limiter"
+        correct: false
+      - text: "time.Sleep between items"
+        correct: false
+      - text: "The garbage collector"
+        correct: false
+    explain: "With unbuffered (or small-buffered) channels, a producer can't outrun its consumer — it blocks on send until the consumer receives, keeping memory bounded automatically."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏭 Analogy">
+A factory assembly line: one station stamps the part, the next paints it, the next boxes it. Each station does one job and hands the result to the next, all working at the same time on different items. If boxing slows down, the line naturally backs up — nobody piles parts on the floor. That's a pipeline.
+</Callout>
+
+## The problem
+
+You have a stream of data and several transformations to apply. Doing them in one big loop is simple but serial — and mixes the steps together. A pipeline gives **each stage its own goroutine**, connected by channels, so stages run concurrently, stay decoupled, and get back-pressure and cancellation for free.
+
+## Structure
+
+<Mermaid code={`graph LR
+  G["generator<br/>goroutine"] -->|chan int| S1["square<br/>goroutine"]
+  S1 -->|chan int| S2["square<br/>goroutine"]
+  S2 -->|chan int| M["main<br/>range loop"]
+  D["done chan"] -.cancels.-> G
+  D -.cancels.-> S1
+  D -.cancels.-> S2`} />
+
+Each stage follows the same shape: take an inbound channel, return a new outbound channel, run a goroutine that reads → transforms → sends, and `close` the output when the input is exhausted.
+
+## Idiomatic Go
+
+A generator turns values into a stream; each stage reads one channel and writes the next; `main` ranges the final channel. The `done` channel lets everything cancel cleanly. Edit and **Run**:
+
+<Playground client:visible title="pipeline.go" code={`package main
+
+import "fmt"
+
+// generator turns a list of ints into a stream.
+func generator(done <-chan struct{}, nums ...int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out) // this stage owns out, so it closes out
+		for _, n := range nums {
+			select {
+			case <-done:
+				return
+			case out <- n:
+			}
+		}
+	}()
+	return out
+}
+
+// square is a stage: read ints, emit their squares.
+func square(done <-chan struct{}, in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			select {
+			case <-done:
+				return
+			case out <- n * n:
+			}
+		}
+	}()
+	return out
+}
+
+func main() {
+	done := make(chan struct{})
+	defer close(done) // cancels every stage on return
+
+	// Compose stages: numbers -> square -> square
+	stream := square(done, square(done, generator(done, 1, 2, 3, 4)))
+
+	for n := range stream {
+		fmt.Println(n) // 1, 16, 81, 256
+	}
+}`} />
+
+## Generators & take
+
+The [repo's example](https://github.com/ehabterra/golearn/blob/main/patterns/pipeline/main.go) uses the composable style from *Concurrency in Go*: a `repeatFn` that produces an **infinite** stream, and a `take` that pulls just the first N — both honoring `done`:
+
+```go
+done := make(chan any)
+defer close(done)
+
+repeat := repeatFn(done, func() any { return rand.Int() }) // infinite
+for n := range take(done, repeat, 10) {                    // bounded
+	fmt.Println(n)
+}
+```
+
+Because every stage selects on `<-done`, closing `done` unwinds even the infinite generator — no leaked goroutines.
+
+<Callout type="go" title="🐹 The three rules that make pipelines safe">
+**1. The stage that writes a channel closes it** (`defer close(out)`), never the reader. **2. Every send and receive also selects on `<-done`** (or `ctx.Done()`), so cancellation can't deadlock. **3. Let channels carry the back-pressure** — unbuffered channels keep a fast stage from racing ahead of a slow one, so memory stays bounded without any manual throttling.
+</Callout>
+
+## Where it leads
+
+The pipeline is the foundation for the rest of Go's concurrency toolkit:
+
+- Parallelize a slow stage with [Fan-out / Fan-in](/patterns/fan-in-fan-out/).
+- Bound how many items are in flight with a [Worker Pool](/patterns/worker-pool/).
+- Replace the `done` channel with [`context.Context`](/patterns/context-cancellation/) for deadlines and request scope.
+- Wrap a stream so it always stops on cancel with the [Or-done channel](/patterns/or-done-channel/).
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Leaks happen when a consumer stops early">
+If `main` breaks out of the range loop before the stream is drained, upstream stages can block forever on a send nobody receives — a goroutine leak. The `done` channel (closed via `defer`) is what saves you: it signals every stage to abandon its pending send and return. Never start a pipeline stage without a cancellation path.
+</Callout>

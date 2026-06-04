@@ -1,0 +1,177 @@
+---
+title: "Abstract Factory"
+category: creational
+kind: pattern
+order: 4
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Provide an interface for creating families of related objects without specifying their concrete types."
+aka: "Kit"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/pizza/abstract.go"
+when_use:
+  - "You must create groups of objects that are meant to be used together and must stay consistent (all NY-style, or all Chicago-style)."
+  - "You want to swap an entire family at once by choosing a different factory."
+  - "Clients should depend only on the abstract products and factory, never the concrete families."
+when_avoid:
+  - "There's only one family, or families almost never change — the extra layer is overhead."
+  - "In Go, passing the few constructor funcs you need (or a config struct) is often simpler than a full abstract factory."
+related:
+  - factory-method
+  - builder
+  - prototype
+  - bridge
+quiz:
+  - q: "What does an Abstract Factory create?"
+    options:
+      - text: "A family of related products that are designed to work together"
+        correct: true
+      - text: "Exactly one product"
+        correct: false
+      - text: "A single global instance"
+        correct: false
+      - text: "Goroutines"
+        correct: false
+    explain: "It produces a whole set — dough, sauce, cheese — guaranteed to belong to the same family, so a NY factory never mixes in a Chicago ingredient."
+  - q: "How does Abstract Factory relate to Factory Method?"
+    options:
+      - text: "Abstract Factory makes a family of products; it's often implemented with several factory methods"
+        correct: true
+      - text: "They are unrelated"
+        correct: false
+      - text: "Abstract Factory makes one product; Factory Method makes families"
+        correct: false
+      - text: "Abstract Factory is structural"
+        correct: false
+    explain: "Factory Method creates one product and defers its type. Abstract Factory groups several such creation methods so a whole family is produced consistently."
+  - q: "What guarantees the products match?"
+    options:
+      - text: "Each concrete factory only ever builds its own family's products"
+        correct: true
+      - text: "A runtime type check on every call"
+        correct: false
+      - text: "Generics enforce it automatically"
+        correct: false
+      - text: "Nothing — matching is the caller's job"
+        correct: false
+    explain: "Because NYIngredientFactory's methods each return NY ingredients, anything built through it is internally consistent — the client can't accidentally mix families."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🪑 Analogy">
+A furniture company sells matching sets. Pick the *Victorian* line and the chair, sofa, and table all share the same ornate style; pick *Modern* and they're all sleek. You choose one factory, and everything it produces fits together. You never end up with a Victorian chair next to a Modern table.
+</Callout>
+
+## The problem
+
+[Factory Method](/patterns/factory-method/) makes **one** product. But sometimes you need a **set** of products that must be consistent with each other — a pizza's dough, sauce, and cheese should all be NY-style or all Chicago-style, never a mix. Abstract Factory bundles those creation methods so picking a factory picks a whole coherent family.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class IngredientFactory {
+    <<interface>>
+    +Dough() Dough
+    +Cheese() Cheese
+  }
+  class NYFactory {
+    +Dough() Dough
+    +Cheese() Cheese
+  }
+  class ChicagoFactory {
+    +Dough() Dough
+    +Cheese() Cheese
+  }
+  class Dough { <<interface>> }
+  class Cheese { <<interface>> }
+  IngredientFactory <|.. NYFactory
+  IngredientFactory <|.. ChicagoFactory
+  NYFactory ..> Dough : thin crust
+  NYFactory ..> Cheese : reggiano`} />
+
+## Idiomatic Go
+
+The client works only with the `IngredientFactory` interface, so swapping `NYFactory` for `ChicagoFactory` swaps the **entire** ingredient set — and they always match. Edit and **Run**:
+
+<Playground client:visible title="abstract_factory.go" code={`package main
+
+import "fmt"
+
+// Abstract products.
+type Dough interface{ String() string }
+type Cheese interface{ String() string }
+
+// Abstract factory: makes a whole family of ingredients.
+type IngredientFactory interface {
+	Dough() Dough
+	Cheese() Cheese
+}
+
+// --- NY family ---
+type thinCrust struct{}
+func (thinCrust) String() string { return "thin-crust dough" }
+type reggiano struct{}
+func (reggiano) String() string { return "reggiano cheese" }
+
+type NYFactory struct{}
+func (NYFactory) Dough() Dough   { return thinCrust{} }
+func (NYFactory) Cheese() Cheese { return reggiano{} }
+
+// --- Chicago family ---
+type deepDish struct{}
+func (deepDish) String() string { return "deep-dish dough" }
+type mozzarella struct{}
+func (mozzarella) String() string { return "mozzarella cheese" }
+
+type ChicagoFactory struct{}
+func (ChicagoFactory) Dough() Dough   { return deepDish{} }
+func (ChicagoFactory) Cheese() Cheese { return mozzarella{} }
+
+// Client depends only on the abstract factory — ingredients always match.
+func makePizza(f IngredientFactory) {
+	fmt.Printf("pizza with %s and %s\n", f.Dough(), f.Cheese())
+}
+
+func main() {
+	makePizza(NYFactory{})
+	makePizza(ChicagoFactory{})
+}`} />
+
+The [repo's version](https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/pizza/abstract.go) goes the full distance: a `PizzaIngredientFactory` with six creation methods (dough, sauce, cheese, veggies, pepperoni, clam), and `NYPizzaIngredientFactory` returning `ThinCrustDough`, `MarinaraSauce`, `ReggianoCheese`, and so on. A pizza's `Prepare()` simply asks its factory for each ingredient.
+
+<Callout type="go" title="🐹 Go often prefers something lighter">
+Abstract Factory is rarer in idiomatic Go than in Java. When you only need a couple of related constructors, passing them in directly — or a small **config struct** of dependencies, or [functional options](/patterns/builder/) — is usually clearer than a formal factory interface. Reach for the full pattern when the *family* abstraction genuinely earns its keep (pluggable backends, theme kits, platform-specific widget sets).
+</Callout>
+
+## Factory Method vs Abstract Factory
+
+<div class="dp-tradeoffs">
+  <div class="dp-tradeoffs__col dp-tradeoffs__col--use">
+    <h4>Factory Method</h4>
+    <ul>
+      <li>Creates <strong>one</strong> product</li>
+      <li>Defers <em>which concrete type</em></li>
+      <li>One creation method</li>
+    </ul>
+  </div>
+  <div class="dp-tradeoffs__col dp-tradeoffs__col--avoid">
+    <h4>Abstract Factory</h4>
+    <ul>
+      <li>Creates a <strong>family</strong> of products</li>
+      <li>Guarantees they're <em>consistent</em></li>
+      <li>Several creation methods, often built from factory methods</li>
+    </ul>
+  </div>
+</div>
+
+## In the standard library & ecosystem
+
+Pure Abstract Factory is uncommon in Go's stdlib (the language nudges you toward simpler construction), but the shape appears wherever a chosen provider yields a matched set — e.g. a database driver producing its own `Conn`, `Stmt`, and `Tx` types, or a cloud SDK whose "client" hands back service-specific request/response objects.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Adding a new product is the hard part">
+Abstract Factory shines when you add new *families* (just write one more concrete factory). It's painful when you add a new *product type* — every existing factory must grow another method. If your products change more than your families do, reconsider the abstraction.
+</Callout>
