@@ -1,0 +1,142 @@
+---
+title: "Worker Pool"
+category: concurrency
+kind: pattern
+order: 27
+difficulty: "Beginner"
+status: ready
+intent: "Bound concurrency by feeding jobs to a fixed number of long-lived worker goroutines."
+when_use:
+  - "You have a stream/queue of jobs and want to cap how many run at once."
+  - "Unbounded 'one goroutine per job' would exhaust memory, connections, or a rate limit."
+  - "Workers can be reused across many jobs."
+when_avoid:
+  - "Work is trivial and unbounded concurrency is fine — just launch goroutines."
+  - "You need per-job error handling and cancellation — reach for errgroup."
+related:
+  - fan-in-fan-out
+  - semaphore
+  - errgroup
+  - pipeline
+quiz:
+  - q: "What does a worker pool bound?"
+    options:
+      - text: "The number of goroutines doing work concurrently"
+        correct: true
+      - text: "The total number of jobs"
+        correct: false
+      - text: "The size of each job"
+        correct: false
+      - text: "Memory per goroutine"
+        correct: false
+    explain: "A fixed set of N workers pull from a shared jobs channel, so at most N jobs run at once regardless of how many are queued — predictable resource use."
+  - q: "How do workers know there are no more jobs?"
+    options:
+      - text: "The producer closes the jobs channel; each worker's range ends"
+        correct: true
+      - text: "They poll a boolean"
+        correct: false
+      - text: "They time out"
+        correct: false
+      - text: "main calls os.Exit"
+        correct: false
+    explain: "Closing the jobs channel makes every worker's `for j := range jobs` loop finish naturally — the idiomatic 'no more work' signal."
+  - q: "When is the results channel safe to close?"
+    options:
+      - text: "After all workers finish — a WaitGroup gates the close"
+        correct: true
+      - text: "Immediately after sending the last job"
+        correct: false
+      - text: "Never"
+        correct: false
+      - text: "From inside a worker"
+        correct: false
+    explain: "Multiple workers send to results, so it must be closed exactly once, after all of them are done — a `wg.Wait()`-then-`close` goroutine does that."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="☎️ Analogy">
+A call center has a fixed number of agents and one queue of waiting callers. No matter how long the queue gets, only as many calls are handled at once as there are agents. Add callers and they wait; the staffing — your concurrency — stays bounded and predictable.
+</Callout>
+
+## The problem
+
+The easy move — `go process(job)` for every job — is unbounded. With a flood of jobs you spawn a flood of goroutines, each maybe opening a DB connection or hitting an API, until something falls over. A worker pool fixes the count: **N workers, one queue**.
+
+## Structure
+
+<Mermaid code={`graph LR
+  P["producer"] -->|"jobs chan"| Q(("jobs"))
+  Q --> W1["worker 1"]
+  Q --> W2["worker 2"]
+  Q --> W3["worker 3"]
+  W1 -->|"results chan"| R(("results"))
+  W2 --> R
+  W3 --> R`} />
+
+## Idiomatic Go
+
+A fixed set of workers `range` the jobs channel; a `WaitGroup` closes `results` once they've all finished. Edit and **Run**:
+
+<Playground client:visible title="worker_pool.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func worker(id int, jobs <-chan int, results chan<- int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for j := range jobs { // pulls jobs until the channel is closed
+		results <- j * j
+	}
+}
+
+func main() {
+	const numWorkers = 3
+
+	jobs := make(chan int)
+	results := make(chan int)
+
+	// start a fixed pool of workers
+	var wg sync.WaitGroup
+	for i := 1; i <= numWorkers; i++ {
+		wg.Add(1)
+		go worker(i, jobs, results, &wg)
+	}
+
+	// close results once every worker has finished
+	go func() { wg.Wait(); close(results) }()
+
+	// feed jobs, then signal "no more" by closing the channel
+	go func() {
+		defer close(jobs)
+		for j := 1; j <= 9; j++ {
+			jobs <- j
+		}
+	}()
+
+	sum := 0
+	for r := range results {
+		sum += r
+	}
+	fmt.Println("sum of squares 1..9 =", sum) // 285
+}`} />
+
+<Callout type="go" title="🐹 The shape to memorize">
+**Close `jobs`** to tell workers the work is done. **WaitGroup-then-close `results`** so the consumer's range terminates. This same skeleton — bounded workers over a channel — is how you turn the unbounded [Fan-out](/patterns/fan-in-fan-out/) into something safe for production. For a one-liner bound, `errgroup.Group.SetLimit(n)` gives you a pool with built-in error propagation.
+</Callout>
+
+## In practice
+
+- A fixed pool processing an HTTP request queue or a batch of files.
+- Capping concurrent outbound calls so you don't overwhelm a downstream service.
+- [`golang.org/x/sync/errgroup`](/patterns/errgroup/) with `SetLimit` when jobs can fail.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Deadlock from closing in the wrong place">
+If you close `results` right after sending the last job (instead of after the workers finish), a worker still writing will panic on a closed channel — or the consumer ranges a channel that never closes and the program hangs. The ordering is the whole trick: close `jobs` from the producer; close `results` only after `wg.Wait()`.
+</Callout>

@@ -1,0 +1,141 @@
+---
+title: "Semaphore"
+category: concurrency
+kind: pattern
+order: 31
+difficulty: "Intermediate"
+status: ready
+intent: "Limit how many goroutines may run a section of code (or hold a resource) at the same time."
+when_use:
+  - "You spawn many goroutines but only N may touch a limited resource at once (connections, file handles, an API rate limit)."
+  - "You want to cap concurrency for one section without restructuring into a worker pool."
+  - "You need a weighted limit (each task costs more than one slot) — use x/sync/semaphore."
+when_avoid:
+  - "You have a fixed queue of jobs — a worker pool models that more directly."
+  - "No real resource constraint exists — the limit just adds latency."
+related:
+  - worker-pool
+  - errgroup
+  - context-cancellation
+quiz:
+  - q: "What is the simplest counting semaphore in Go?"
+    options:
+      - text: "A buffered channel of capacity N — send to acquire, receive to release"
+        correct: true
+      - text: "A boolean flag"
+        correct: false
+      - text: "A time.Timer"
+        correct: false
+      - text: "An unbuffered channel"
+        correct: false
+    explain: "A `chan struct{}` with buffer N holds up to N tokens. Sending blocks once N are in flight (acquire); receiving frees a slot (release)."
+  - q: "How does a semaphore differ from a worker pool?"
+    options:
+      - text: "A semaphore caps a section while you still spawn a goroutine per task; a pool reuses a fixed set of workers pulling a queue"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "A semaphore can't bound concurrency"
+        correct: false
+      - text: "A pool has no concurrency limit"
+        correct: false
+    explain: "Both bound concurrency, but a semaphore gates access (one goroutine per task, N allowed inside) while a pool routes tasks to N persistent workers."
+  - q: "When would you use golang.org/x/sync/semaphore over a channel?"
+    options:
+      - text: "When you need weighted acquisition or context-aware blocking"
+        correct: true
+      - text: "When you have exactly one goroutine"
+        correct: false
+      - text: "When you never want to block"
+        correct: false
+      - text: "Never — channels can't do semaphores"
+        correct: false
+    explain: "x/sync/semaphore.Weighted lets a task acquire N units at once and supports Acquire(ctx, n) that respects cancellation — beyond what a plain buffered channel offers."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🅿️ Analogy">
+A parking lot has a fixed number of spaces and a gate. Cars arrive freely, but the gate only opens when a space is available; when a car leaves, the next waiting car gets in. The lot's capacity is a semaphore — it caps how many are inside at once, no matter how many show up.
+</Callout>
+
+## The problem
+
+You launch many goroutines, but only a handful may do the heavy or scarce thing simultaneously — open database connections, hold file descriptors, or call a rate-limited API. A **counting semaphore** lets all the goroutines exist while admitting only N into the critical section at a time.
+
+## Structure
+
+<Mermaid code={`graph LR
+  subgraph tokens["sem: buffered chan, cap N"]
+    T1["•"]
+    T2["•"]
+  end
+  G1["goroutine"] -->|acquire| tokens
+  G2["goroutine"] -->|acquire| tokens
+  G3["goroutine waits…"] -.blocked.-> tokens`} />
+
+## Idiomatic Go
+
+A buffered channel is the whole mechanism: send to acquire a slot, receive to release. Here six goroutines run, but the observed peak concurrency never exceeds the limit. Edit and **Run**:
+
+<Playground client:visible title="semaphore.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	const limit = 2
+	sem := make(chan struct{}, limit) // buffered channel = counting semaphore
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	running, peak := 0, 0
+
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			sem <- struct{}{}        // acquire: blocks when 'limit' are in flight
+			defer func() { <-sem }() // release on exit
+
+			mu.Lock()
+			running++
+			if running > peak {
+				peak = running
+			}
+			mu.Unlock()
+
+			// simulate some work
+			total := 0
+			for k := 0; k < 2000000; k++ {
+				total += k
+			}
+
+			mu.Lock()
+			running--
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	fmt.Printf("limit=%d, observed peak concurrency=%d\n", limit, peak)
+}`} />
+
+<Callout type="go" title="🐹 Plain channel vs x/sync/semaphore">
+For a simple "at most N at once," a `chan struct{}` of capacity N is the cleanest thing in the language — no imports. When you need **weighted** acquisition (a task that costs 3 slots) or blocking that respects a `context` deadline, reach for [`golang.org/x/sync/semaphore`](https://pkg.go.dev/golang.org/x/sync/semaphore)'s `Weighted` with `Acquire(ctx, n)`.
+</Callout>
+
+## In the standard library & ecosystem
+
+- A buffered `chan struct{}` — the idiomatic counting semaphore.
+- **`golang.org/x/sync/semaphore`** — weighted, context-aware.
+- **`golang.org/x/sync/errgroup`** with `SetLimit` — a semaphore baked into error-aware fan-out.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Always release — even on panic or early return">
+If a goroutine acquires a slot and then returns (or panics) without releasing, that slot is gone forever and the semaphore slowly starves. Pair every acquire with a `defer` release, exactly as above, so the slot comes back no matter how the goroutine exits.
+</Callout>

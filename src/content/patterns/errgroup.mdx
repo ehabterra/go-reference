@@ -1,0 +1,126 @@
+---
+title: "errgroup"
+category: concurrency
+kind: pattern
+order: 32
+difficulty: "Intermediate"
+status: ready
+intent: "Run a group of goroutines, wait for them all, capture the first error, and cancel the rest automatically."
+when_use:
+  - "You fan work out concurrently and any task can fail — you want the first error and to stop the others."
+  - "You'd otherwise hand-roll a WaitGroup plus error-collecting plus context cancellation."
+  - "You want a built-in concurrency limit via SetLimit."
+when_avoid:
+  - "Tasks never fail — a plain sync.WaitGroup is enough."
+  - "You need *every* error, not just the first — collect them yourself."
+related:
+  - context-cancellation
+  - worker-pool
+  - fan-in-fan-out
+  - semaphore
+quiz:
+  - q: "What does errgroup add over sync.WaitGroup?"
+    options:
+      - text: "Error propagation (the first error) and context cancellation of siblings"
+        correct: true
+      - text: "Faster goroutines"
+        correct: false
+      - text: "Automatic retries"
+        correct: false
+      - text: "Logging"
+        correct: false
+    explain: "errgroup is a WaitGroup plus a shared error and (with WithContext) a context that cancels the rest when one goroutine returns an error."
+  - q: "What does errgroup.WithContext give you?"
+    options:
+      - text: "A ctx that is cancelled as soon as any goroutine returns a non-nil error"
+        correct: true
+      - text: "A new goroutine pool"
+        correct: false
+      - text: "A logger"
+        correct: false
+      - text: "A mutex"
+        correct: false
+    explain: "The derived ctx is cancelled on the first error (or when Wait returns), so the other goroutines selecting on ctx.Done() can stop early."
+  - q: "How do you bound concurrency with errgroup?"
+    options:
+      - text: "g.SetLimit(n) — at most n active goroutines"
+        correct: true
+      - text: "g.Workers = n"
+        correct: false
+      - text: "It can't be bounded"
+        correct: false
+      - text: "Pass n to Wait()"
+        correct: false
+    explain: "SetLimit(n) makes g.Go block until a slot is free, turning the group into a bounded worker pool with error handling."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧗 Analogy">
+A climbing team is roped together on parallel pitches. The moment one climber falls (returns an error), the lead calls off the attempt and signals everyone to stop and come back — and reports what went wrong. That's errgroup: wait for all, but abort on the first failure.
+</Callout>
+
+## The problem
+
+You run several things concurrently and any of them might fail. A `sync.WaitGroup` waits for them, but it doesn't collect errors or stop the others when one breaks — you end up bolting on a shared error variable, a mutex, and a `context`. `golang.org/x/sync/errgroup` packages exactly that: **wait + first-error + cancel-the-rest**.
+
+## Structure
+
+<Mermaid code={`graph TD
+  G["errgroup.WithContext"] --> A["g.Go task A"]
+  G --> B["g.Go task B (fails)"]
+  G --> C["g.Go task C"]
+  B -. "first error cancels ctx" .-> A
+  B -. cancels ctx .-> C
+  G --> W["g.Wait → returns B's error"]`} />
+
+## Idiomatic Go
+
+`g.Go` launches each task; a failure cancels the shared `ctx`, and `g.Wait` returns the first error. Edit and **Run**:
+
+<Playground client:visible title="errgroup.go" code={`package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+)
+
+func main() {
+	g, ctx := errgroup.WithContext(context.Background())
+
+	jobs := []string{"alpha", "beta", "bad", "gamma"}
+	for _, job := range jobs {
+		job := job // capture per iteration
+		g.Go(func() error {
+			if job == "bad" {
+				return fmt.Errorf("job %q failed", job)
+			}
+			select {
+			case <-time.After(50 * time.Millisecond):
+				fmt.Println("done:", job)
+				return nil
+			case <-ctx.Done(): // a sibling failed → stop early
+				fmt.Println("cancelled:", job)
+				return ctx.Err()
+			}
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		fmt.Println("group failed with:", err)
+	}
+}`} />
+
+<Callout type="go" title="🐹 The everyday concurrency workhorse">
+errgroup is the answer to "run these N things at once, stop if one fails." Add `g.SetLimit(n)` and it becomes a **bounded worker pool** with error handling baked in — combining [Worker Pool](/patterns/worker-pool/), [Semaphore](/patterns/semaphore/), and [Context cancellation](/patterns/context-cancellation/) in a few lines. It lives in `golang.org/x/sync`, the semi-official extended standard library.
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ You get the FIRST error, not all of them">
+`g.Wait` returns only the first non-nil error; the rest are discarded (their goroutines are cancelled). If you need to see every failure, collect errors yourself (e.g. into a slice guarded by a mutex, or via `errors.Join`). Also: tasks must actually **watch `ctx.Done()`** — errgroup can signal cancellation, but a goroutine ignoring the context will run to completion regardless.
+</Callout>

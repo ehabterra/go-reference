@@ -1,0 +1,139 @@
+---
+title: "Or-done Channel"
+category: concurrency
+kind: pattern
+order: 29
+difficulty: "Intermediate"
+status: ready
+intent: "Wrap a value stream so that ranging over it also stops cleanly the moment a cancellation signal fires."
+when_use:
+  - "You consume a channel you don't own and must honor cancellation without sprinkling selects everywhere."
+  - "You want a plain `for v := range …` loop that still respects a done/ctx signal."
+  - "You're composing pipeline stages and want to keep each consumer simple."
+when_avoid:
+  - "You own the producer and can thread done/ctx into it directly."
+  - "The channel is finite and small — a plain range is fine."
+related:
+  - pipeline
+  - generator
+  - context-cancellation
+  - fan-in-fan-out
+quiz:
+  - q: "What problem does the or-done channel solve?"
+    options:
+      - text: "It removes the repetitive select-on-done at every receive when consuming a channel you don't control"
+        correct: true
+      - text: "It makes channels faster"
+        correct: false
+      - text: "It buffers a channel"
+        correct: false
+      - text: "It sorts values"
+        correct: false
+    explain: "Instead of writing select { case <-done; case v := <-c } at every consumption site, orDone wraps the stream once so you can simply `range` it."
+  - q: "Why are there TWO selects inside orDone?"
+    options:
+      - text: "One to receive from the source, one to send downstream — both must also watch done so neither blocks forever"
+        correct: true
+      - text: "One is a typo"
+        correct: false
+      - text: "To double throughput"
+        correct: false
+      - text: "To retry on error"
+        correct: false
+    explain: "Receiving and sending can each block. Guarding both with <-done means cancellation interrupts the wrapper whether it's waiting for input or waiting to hand a value on."
+  - q: "Does or-done protect the upstream producer too?"
+    options:
+      - text: "No — it protects the consumer side; the producer still needs its own cancellation"
+        correct: true
+      - text: "Yes, it cancels everything automatically"
+        correct: false
+      - text: "It pauses the producer"
+        correct: false
+      - text: "It closes the producer's channel"
+        correct: false
+    explain: "orDone stops the consumer from blocking, but an upstream generator with no done of its own will still leak. Cancellation must reach the producer as well."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛑 Analogy">
+A conveyor belt has an emergency stop. Whatever it's carrying, wherever the items are, hitting the button halts the belt at once. The or-done channel is that emergency stop wired around a stream: the consumer keeps it simple, and one signal stops the flow.
+</Callout>
+
+## The problem
+
+When you consume a channel from code you don't own, a plain `for v := range c` can't be interrupted — if the producer stalls, your loop blocks forever. The fix is to `select` on a cancellation channel at every receive… which clutters every consumer with the same boilerplate. **Or-done** writes that boilerplate **once** and hands you back a channel you can range normally.
+
+## Structure
+
+<Mermaid code={`graph LR
+  SRC["source chan<br/>(you don't own)"] --> OD["orDone<br/>select on done"]
+  DONE["done chan"] -.-> OD
+  OD --> C["consumer<br/>plain range"]`} />
+
+## Idiomatic Go
+
+`orDone` relays values from `c` but exits the instant `done` closes — so `main` just ranges. Edit and **Run**:
+
+<Playground client:visible title="or_done.go" code={`package main
+
+import "fmt"
+
+// orDone wraps c so iteration also stops when done is closed.
+func orDone(done <-chan struct{}, c <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-done:
+				return
+			case v, ok := <-c:
+				if !ok {
+					return
+				}
+				select { // sending can block too — guard it as well
+				case out <- v:
+				case <-done:
+					return
+				}
+			}
+		}
+	}()
+	return out
+}
+
+// an infinite source we don't control
+func numbers() <-chan int {
+	c := make(chan int)
+	go func() {
+		for i := 1; ; i++ {
+			c <- i
+		}
+	}()
+	return c
+}
+
+func main() {
+	done := make(chan struct{})
+
+	got := 0
+	for v := range orDone(done, numbers()) { // clean range; cancellation handled
+		fmt.Println(v)
+		if got++; got == 3 {
+			close(done) // stop after three values
+		}
+	}
+	fmt.Println("stopped cleanly — consumer never blocked")
+}`} />
+
+<Callout type="go" title="🐹 Straight from 'Concurrency in Go'">
+This helper (popularized by Katherine Cox-Buday's *Concurrency in Go*) keeps pipeline consumers readable: every stage can `range orDone(done, in)` instead of repeating selects. In modern code, `done` is usually a `context.Context` — the wrapper selects on `ctx.Done()` instead. It pairs naturally with [Pipeline](/patterns/pipeline/), [Generator](/patterns/generator/), and [Fan-in](/patterns/fan-in-fan-out/).
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ It guards the consumer, not the producer">
+In the example, `numbers()` has no cancellation of its own, so after `done` closes it's left blocked on a send — a leaked goroutine (harmless here only because the program exits). Or-done keeps *your* loop from hanging; it does not magically stop upstream. In real pipelines, thread the same `done`/`ctx` into the producer too.
+</Callout>

@@ -1,0 +1,130 @@
+---
+title: "Context & Cancellation"
+category: concurrency
+kind: pattern
+order: 30
+difficulty: "Intermediate"
+status: ready
+intent: "Propagate cancellation, deadlines, and request-scoped values across API boundaries and goroutine trees with context.Context."
+when_use:
+  - "You need to cancel a whole tree of goroutines from one place."
+  - "You want timeouts or deadlines on operations (requests, queries, RPCs)."
+  - "A value (request ID, auth) must travel with a call across packages."
+when_avoid:
+  - "Storing a context in a struct for later — pass it as the first argument instead."
+  - "Using ctx.Value as a general-purpose parameter bag."
+  - "Purely local code with no cancellation or boundary crossing."
+related:
+  - pipeline
+  - or-done-channel
+  - errgroup
+  - worker-pool
+quiz:
+  - q: "What is context.Context primarily for?"
+    options:
+      - text: "Carrying cancellation, deadlines, and request-scoped values across API boundaries"
+        correct: true
+      - text: "Storing global configuration"
+        correct: false
+      - text: "Replacing channels entirely"
+        correct: false
+      - text: "Logging"
+        correct: false
+    explain: "Context is the standard way to signal cancellation, enforce deadlines, and pass request-scoped data down a call tree."
+  - q: "How does a goroutine react to cancellation?"
+    options:
+      - text: "It selects on <-ctx.Done() and returns when it fires"
+        correct: true
+      - text: "It polls ctx.Err() in a tight loop"
+        correct: false
+      - text: "It calls ctx.Cancel()"
+        correct: false
+      - text: "It panics"
+        correct: false
+    explain: "ctx.Done() returns a channel that closes on cancellation or deadline; goroutines select on it and return, then ctx.Err() says why."
+  - q: "What must you always do with the cancel func from WithCancel/WithTimeout?"
+    options:
+      - text: "Call it (usually via defer) to release the context's resources"
+        correct: true
+      - text: "Ignore it"
+        correct: false
+      - text: "Store it globally"
+        correct: false
+      - text: "Pass it to every goroutine"
+        correct: false
+    explain: "Not calling cancel leaks the context's timer/goroutine until the parent is cancelled. `defer cancel()` right after creation is the rule."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📢 Analogy">
+A company issues a "stop work" order from the top. It cascades down the org chart — every department and team that was listening hears it and halts. Nobody keeps working on a cancelled project. `context.Context` is that order, flowing down a tree of goroutines.
+</Callout>
+
+## The problem
+
+A request spawns goroutines, which spawn more. When the request is cancelled — the client hung up, a deadline passed, a sibling failed — all of that work should stop, promptly, without leaking goroutines. Threading a bespoke `done` channel through every function is tedious. `context.Context` standardizes it: one value carries cancellation, deadlines, and request-scoped data down the whole tree.
+
+## Structure
+
+<Mermaid code={`graph TD
+  B["context.Background()"] --> T["WithTimeout(100ms)"]
+  T --> W1["worker 1<br/>select ctx.Done()"]
+  T --> W2["worker 2<br/>select ctx.Done()"]
+  T -. "deadline or cancel()" .-> W1
+  T -. closes Done() .-> W2`} />
+
+## Idiomatic Go
+
+`ctx` is the first parameter; workers select on `ctx.Done()`. A timeout cancels the whole tree automatically. Edit and **Run**:
+
+<Playground client:visible title="context.go" code={`package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// worker runs until its context is cancelled or the deadline passes.
+func worker(ctx context.Context, id int) {
+	for {
+		select {
+		case <-ctx.Done(): // cancelled or timed out
+			fmt.Printf("worker %d stopping: %v\n", id, ctx.Err())
+			return
+		case <-time.After(30 * time.Millisecond):
+			fmt.Printf("worker %d tick\n", id)
+		}
+	}
+}
+
+func main() {
+	// cancel the whole tree after 100ms
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel() // always release the context's resources
+
+	go worker(ctx, 1)
+	go worker(ctx, 2)
+
+	<-ctx.Done()                      // wait for the deadline
+	time.Sleep(20 * time.Millisecond) // give workers a moment to print
+	fmt.Println("main done:", ctx.Err())
+}`} />
+
+<Callout type="go" title="🐹 Context is the modern 'done' channel">
+Earlier patterns used a hand-rolled `done` channel ([Pipeline](/patterns/pipeline/), [Generator](/patterns/generator/)). In real code, `ctx.Done()` plays that role — but it also carries **deadlines** and **values**, and it composes: cancel a parent and every derived context cancels too. The conventions: pass `ctx` as the **first argument**, never store it in a struct, always `defer cancel()`, and use `ctx.Value` sparingly for genuinely request-scoped data.
+</Callout>
+
+## In the standard library
+
+- **`http.Request.Context()`** — cancelled when the client disconnects.
+- **`database/sql`** `QueryContext`, `ExecContext` — abort slow queries.
+- **`os/signal.NotifyContext`** — a context cancelled on SIGINT/SIGTERM for graceful shutdown.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ A forgotten cancel() is a leak">
+`WithCancel` and `WithTimeout` start internal bookkeeping (and a timer). If you never call the returned `cancel`, that lives until the parent context is cancelled — a slow leak the linter (`go vet`) will warn about. Write `defer cancel()` on the line after you create the context, every time.
+</Callout>

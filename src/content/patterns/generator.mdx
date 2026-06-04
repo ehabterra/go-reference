@@ -1,0 +1,121 @@
+---
+title: "Generator"
+category: concurrency
+kind: pattern
+order: 28
+difficulty: "Beginner"
+status: ready
+intent: "Produce a stream of values from a goroutine over a channel, lazily and on demand."
+when_use:
+  - "You want a lazy or infinite sequence the consumer can pull from at its own pace."
+  - "You're building the source stage of a pipeline."
+  - "You want to decouple producing values from consuming them."
+when_avoid:
+  - "It's a small finite slice — just `range` it."
+  - "No concurrency is needed — Go 1.23 range-over-func (`iter.Seq`) is simpler for synchronous sequences."
+related:
+  - pipeline
+  - iterator
+  - or-done-channel
+quiz:
+  - q: "What does a Go generator return?"
+    options:
+      - text: "A receive-only channel that a goroutine feeds"
+        correct: true
+      - text: "A slice of all values"
+        correct: false
+      - text: "An error"
+        correct: false
+      - text: "A mutex"
+        correct: false
+    explain: "The idiom is `func gen(...) <-chan T` — it starts a goroutine that sends values on a channel it returns, so the caller pulls them lazily."
+  - q: "Who closes the generator's channel?"
+    options:
+      - text: "The generator goroutine, with defer close(out)"
+        correct: true
+      - text: "The consumer"
+        correct: false
+      - text: "It must never be closed"
+        correct: false
+      - text: "The garbage collector"
+        correct: false
+    explain: "The producer owns the channel and closes it when finished, so the consumer's `range` ends cleanly."
+  - q: "How do you stop an infinite generator without leaking its goroutine?"
+    options:
+      - text: "Select on a done/ctx channel inside the generator and return when it fires"
+        correct: true
+      - text: "Call runtime.GC()"
+        correct: false
+      - text: "Set the channel to nil"
+        correct: false
+      - text: "You can't"
+        correct: false
+    explain: "An infinite generator must watch a cancellation signal (a done channel or ctx.Done()); otherwise it blocks forever on a send once the consumer stops reading."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎫 Analogy">
+A ticket dispenser produces numbers on demand: you pull one, then the next, then the next. It doesn't pre-print a million tickets — it makes each as you ask. A generator is that dispenser, handing values to a consumer one at a time over a channel.
+</Callout>
+
+## The problem
+
+You want a sequence — maybe infinite — that a consumer reads lazily, without building the whole thing in memory first. In Go, the natural shape is a function that **returns a channel** and runs a goroutine that feeds it. The consumer just `range`s the channel.
+
+## Structure
+
+<Mermaid code={`graph LR
+  G["generator goroutine<br/>for i := 1; ; i++"] -->|"&lt;-chan int"| C["consumer<br/>range / receive"]
+  D["done chan"] -.cancels.-> G`} />
+
+## Idiomatic Go
+
+`count` produces integers forever; the consumer takes only what it needs and cancels the rest via `done`. Edit and **Run**:
+
+<Playground client:visible title="generator.go" code={`package main
+
+import "fmt"
+
+// count returns a stream of integers 1, 2, 3, … on a channel.
+func count(done <-chan struct{}) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for i := 1; ; i++ {
+			select {
+			case <-done: // cancellation: stop and clean up
+				return
+			case out <- i:
+			}
+		}
+	}()
+	return out
+}
+
+func main() {
+	done := make(chan struct{})
+	defer close(done) // stops the generator when main returns
+
+	nums := count(done)
+	for i := 0; i < 5; i++ {
+		fmt.Println(<-nums) // pull five values: 1 2 3 4 5
+	}
+}`} />
+
+<Callout type="go" title="🐹 The source of every pipeline">
+A generator is just the first stage of a [Pipeline](/patterns/pipeline/): it produces, downstream stages transform. Two rules carry over — the **producer closes the channel**, and an infinite generator must **select on a cancellation signal** (a `done` channel or `ctx.Done()`) so it can't block forever once the consumer walks away. For synchronous sequences with no concurrency, Go 1.23's range-over-func (`iter.Seq`) is the simpler tool — see [Iterator](/patterns/iterator/).
+</Callout>
+
+## In the standard library
+
+- **`time.Tick` / `time.NewTicker`** generate a stream of timestamps.
+- **`context.Context.Done()`** is a one-shot generator of a cancellation signal.
+- **`bufio.Scanner`** is the synchronous cousin — a pull-based token generator.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ An infinite generator with no exit leaks">
+If `count` had no `case <-done`, then the moment the consumer stops receiving, the generator's goroutine blocks forever on `out <- i` — a leak that survives until the process dies. Always give an unbounded generator a way out.
+</Callout>

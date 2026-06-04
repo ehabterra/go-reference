@@ -1,0 +1,153 @@
+---
+title: "Pub/Sub"
+category: concurrency
+kind: pattern
+order: 33
+difficulty: "Intermediate"
+status: ready
+intent: "Broadcast events to many dynamic subscribers through a broker, decoupling producers from consumers."
+aka: "Publish–Subscribe, Event Bus"
+when_use:
+  - "Several independent consumers each need every event, and they come and go at runtime."
+  - "You want producers and consumers fully decoupled — neither knows the other."
+  - "An in-process event bus fits (notifications, cache invalidation, UI updates)."
+when_avoid:
+  - "There's a single consumer — a plain channel is enough."
+  - "You need delivery guarantees, persistence, or cross-process fan-out — use a real broker (NATS, Kafka, Redis)."
+  - "Strict global ordering across subscribers is required."
+related:
+  - observer
+  - fan-in-fan-out
+  - context-cancellation
+quiz:
+  - q: "How does Pub/Sub differ from Observer?"
+    options:
+      - text: "Pub/Sub is the concurrent, broker-mediated generalization — dynamic subscribers, often many topics, decoupled via channels"
+        correct: true
+      - text: "They are unrelated"
+        correct: false
+      - text: "Observer is concurrent, Pub/Sub is not"
+        correct: false
+      - text: "Pub/Sub requires inheritance"
+        correct: false
+    explain: "Observer is the in-object, usually synchronous form; Pub/Sub adds a broker between producers and a dynamic set of subscribers, and in Go is naturally built on channels and goroutines."
+  - q: "Why does the broker use select-with-default (or buffered channels) when publishing?"
+    options:
+      - text: "So one slow subscriber can't block delivery to all the others"
+        correct: true
+      - text: "To sort messages"
+        correct: false
+      - text: "To guarantee delivery"
+        correct: false
+      - text: "To reduce memory"
+        correct: false
+    explain: "A blocking send to a full subscriber would stall the whole Publish loop. A non-blocking send (drop, or rely on a buffer) keeps a slow consumer from freezing everyone."
+  - q: "What ends a subscriber's goroutine cleanly?"
+    options:
+      - text: "Unsubscribing closes its channel, so its `for range ch` loop returns"
+        correct: true
+      - text: "Calling os.Exit"
+        correct: false
+      - text: "A timeout in the broker"
+        correct: false
+      - text: "Nothing — it runs forever"
+        correct: false
+    explain: "Closing the subscriber's channel (on unsubscribe/shutdown) terminates its range loop, letting the goroutine exit without leaking."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📻 Analogy">
+A radio station broadcasts on a frequency. Anyone can tune in or switch off at any time, and the station has no idea who's listening — it just transmits. Subscribers come and go freely; the publisher is blissfully unaware. That's Pub/Sub.
+</Callout>
+
+## The problem
+
+Several parts of your program each need to react to the same events, and which parts are listening changes at runtime. Wiring producers directly to consumers couples them tightly. A **broker** sits in the middle: producers `Publish`, consumers `Subscribe` to get their own channel, and the broker fans each event out to all current subscribers.
+
+## Structure
+
+<Mermaid code={`graph LR
+  P["publisher"] -->|Publish| B["Broker<br/>map of subscriber chans"]
+  B --> S1["subscriber 1"]
+  B --> S2["subscriber 2"]
+  B --> S3["subscriber 3"]`} />
+
+## Idiomatic Go
+
+A broker is a mutex-guarded map of subscriber channels. `Publish` does a non-blocking send to each, so a slow subscriber can't stall the rest. Edit and **Run**:
+
+<Playground client:visible title="pubsub.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Broker struct {
+	mu   sync.RWMutex
+	subs map[chan string]struct{}
+}
+
+func NewBroker() *Broker { return &Broker{subs: make(map[chan string]struct{})} }
+
+func (b *Broker) Subscribe() chan string {
+	ch := make(chan string, 4) // small buffer absorbs bursts
+	b.mu.Lock()
+	b.subs[ch] = struct{}{}
+	b.mu.Unlock()
+	return ch
+}
+
+func (b *Broker) Publish(msg string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for ch := range b.subs {
+		select {
+		case ch <- msg: // deliver
+		default:        // subscriber is slow — drop rather than block everyone
+		}
+	}
+}
+
+func (b *Broker) closeAll() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for ch := range b.subs {
+		delete(b.subs, ch)
+		close(ch) // ends each subscriber's range loop
+	}
+}
+
+func main() {
+	b := NewBroker()
+	var wg sync.WaitGroup
+
+	for i := 1; i <= 3; i++ {
+		ch := b.Subscribe()
+		wg.Add(1)
+		go func(id int, ch chan string) {
+			defer wg.Done()
+			for msg := range ch {
+				fmt.Printf("subscriber %d got %q\n", id, msg)
+			}
+		}(i, ch)
+	}
+
+	b.Publish("hello")
+	b.Publish("world")
+
+	b.closeAll() // unsubscribe everyone and stop their goroutines
+	wg.Wait()
+}`} />
+
+<Callout type="go" title="🐹 The concurrent cousin of Observer">
+[Observer](/patterns/observer/) notifies dependents in-process, often synchronously. Pub/Sub generalizes it: a **broker** decouples publishers from a *dynamic* set of subscribers, each running in its own goroutine with its own channel. The two key choices are **back-pressure** (drop, block, or buffer for slow subscribers) and **lifecycle** (closing channels on unsubscribe so goroutines exit). For cross-process or durable delivery, swap this in-process broker for NATS, Kafka, or Redis.
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Slow subscribers force a hard choice">
+With the non-blocking `default` above, a subscriber that can't keep up simply **loses messages**. The alternatives — block the publisher, or grow an unbounded buffer — trade liveness for memory. There's no free lunch: decide explicitly whether your system prefers to drop, slow down, or buffer, and document it. Also remember to unsubscribe, or dead subscribers leak goroutines and channels forever.
+</Callout>
