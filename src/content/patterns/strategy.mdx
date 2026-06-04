@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Define a family of interchangeable algorithms, encapsulate each one, and select which to use at runtime."
 aka: "Policy"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/strategy/main.go"
 when_use:
   - "You have several variants of an algorithm (sorting orders, pricing rules, compression schemes) and want to switch between them at runtime."
   - "You want to remove a sprawling if/else or switch that picks behavior."
@@ -151,7 +150,7 @@ func main() {
 	mallard.PerformFly()       // Can't fly
 }`} />
 
-The [full example in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/strategy/main.go) extends this with a `QuackBehavior` too, plus concrete `MallardDuck` and `RubberDuck` types that embed a base `Duck` — a great look at composition.
+You can extend this with a `QuackBehavior` too, plus concrete `MallardDuck` and `RubberDuck` types that embed a base `Duck` — a great look at composition.
 
 ## Idiomatic Go — the function form
 

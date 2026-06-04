@@ -7,7 +7,6 @@ difficulty: "Intermediate"
 gof: true
 status: ready
 intent: "Define the skeleton of an algorithm once, deferring the steps that vary to per-type implementations."
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/template/main.go"
 when_use:
   - "Several variants share the same overall procedure but differ in a few steps (SMS vs email OTP, tea vs coffee)."
   - "You want to write the invariant sequence once and guarantee its order."
@@ -92,7 +91,7 @@ Sending a one-time passcode is always the same dance: generate the code, cache i
 
 ## Idiomatic Go
 
-Go has no abstract base class, so the "template method" lives on a struct that **holds an interface of the varying steps** — the repo's `OTP`/`iOTP` design. The fixed sequence calls into that interface. Edit and **Run**:
+Go has no abstract base class, so the "template method" lives on a struct that **holds an interface of the varying steps** — an `OTP`/`iOTP`-style design. The fixed sequence calls into that interface. Edit and **Run**:
 
 <Playground client:visible title="template_method.go" code={`package main
 
@@ -138,7 +137,7 @@ func main() {
 }`} />
 
 <Callout type="go" title="🐹 Two Go flavors — interface or function hooks">
-The repo embeds the base `OTP` in each channel; injecting the steps as an interface field (above) is the cleaner variant. For just one or two varying steps, you can skip the interface entirely and pass them as **function fields** on the struct — same pattern, less ceremony. Either way, the fixed flow stays in one place.
+One version embeds the base `OTP` in each channel; injecting the steps as an interface field (above) is the cleaner variant. For just one or two varying steps, you can skip the interface entirely and pass them as **function fields** on the struct — same pattern, less ceremony. Either way, the fixed flow stays in one place.
 </Callout>
 
 ## In the standard library

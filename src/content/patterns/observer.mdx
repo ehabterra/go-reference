@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Define a one-to-many dependency so that when one object changes state, all its dependents are notified automatically."
 aka: "Publish–Subscribe (in-process), Dependents"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/observer"
 when_use:
   - "One object's change must update many others, and you don't want the subject to know their concrete types."
   - "Subscribers come and go at runtime."
@@ -105,7 +104,7 @@ A `WeatherData` station has measurements; several displays must refresh whenever
 
 ## Push vs pull
 
-There are two flavors, and the repo has both:
+There are two flavors, and both are worth knowing:
 
 - **Push** — the subject hands the data to the observer: `Update(temp, humidity, pressure)`. Simple, but every observer receives everything.
 - **Pull** — the subject just signals "I changed"; each observer calls getters (`Temperature()`, `Humidity()`) to read **only what it needs**. More flexible, slightly more work.
@@ -162,7 +161,7 @@ func main() {
 
 ## The Go-native form — channels
 
-Here's where Go shines. Instead of an `Observer` interface, each observer is a **goroutine ranging over its own channel**, and the subject broadcasts events to those channels. The repo's `channels/push` version even guards against slow observers with a `select` timeout so one stuck consumer can't block the publisher:
+Here's where Go shines. Instead of an `Observer` interface, each observer is a **goroutine ranging over its own channel**, and the subject broadcasts events to those channels. A channel-based push version can even guard against slow observers with a `select` timeout, so one stuck consumer can't block the publisher:
 
 ```go
 type Message struct{ temp, hum, pres float32 }
@@ -197,7 +196,7 @@ func (w *WeatherData) Notify(m Message) {
 ```
 
 <Callout type="go" title="🐹 Two correctness details worth stealing">
-**1. Copy the observer slice under the lock, then release it before notifying.** Both repo versions do this — it avoids holding the lock during callbacks (which could re-enter the subject and deadlock) and avoids mutating the slice while iterating. **2. Don't let one observer block the rest** — the channel form's `select`-with-timeout drops messages to a stalled consumer instead of freezing the whole system.
+**1. Copy the observer slice under the lock, then release it before notifying.** Both forms above do this — it avoids holding the lock during callbacks (which could re-enter the subject and deadlock) and avoids mutating the slice while iterating. **2. Don't let one observer block the rest** — the channel form's `select`-with-timeout drops messages to a stalled consumer instead of freezing the whole system.
 </Callout>
 
 ## In the standard library & ecosystem

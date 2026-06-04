@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Ensure a type has only one instance, and provide a single, well-defined point of access to it."
 aka: "Single instance"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/singleton/main.go"
 when_use:
   - "There must be exactly one instance — a process-wide config, a connection pool, a logger, a metrics registry."
   - "That single instance needs a clear, shared access point across the program."
@@ -172,9 +171,9 @@ var instance = &Config{DSN: "postgres://localhost/app"} // created once, at star
 func Get() *Config { return instance }
 ```
 
-### The version in this repo
+### A parameterized variation
 
-The [example in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/singleton/main.go) passes the `*sync.Once` in as a parameter and even recovers from panics during construction — a nice way to see the mechanics laid bare. In production you'd usually keep the `sync.Once` as an unexported package-level variable instead.
+One variation passes the `*sync.Once` in as a parameter and even recovers from panics during construction — a nice way to see the mechanics laid bare. In production you'd usually keep the `sync.Once` as an unexported package-level variable instead.
 
 ## In the standard library
 

@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Treat individual objects and compositions of objects uniformly through one common interface."
 aka: "Object tree"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/composite/main.go"
 when_use:
   - "Your data is a part-whole hierarchy — files & folders, UI nodes, org charts, expression trees."
   - "You want client code to treat a single item and a group of items the same way."
@@ -53,7 +52,7 @@ quiz:
         correct: false
       - text: "Adapter"
         correct: false
-    explain: "Iterator gives clients a uniform way to traverse the composite without exposing its tree structure — exactly what the repo example does with a depth-first compositeIterator."
+    explain: "Iterator gives clients a uniform way to traverse the composite without exposing its tree structure — exactly what a depth-first compositeIterator does."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -166,8 +165,8 @@ func main() {
 	root.Print(0) // one call walks the entire tree
 }`} />
 
-<Callout type="go" title="🐹 Composite + Iterator in the repo">
-The [example in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/composite/main.go) goes one step further: every Component also exposes `CreateIterator()`, and a stack-based `compositeIterator` does a **depth-first traversal** of the tree. Leaves return a Null-Object `emptyIterator`. It's a lovely demonstration of Composite and [Iterator](/patterns/iterator/) working together — the caller walks the whole tree with a plain `for it.HasNext()` loop and never sees the recursion.
+<Callout type="go" title="🐹 Composite + Iterator together">
+You can take it one step further: have every Component also expose `CreateIterator()`, and a stack-based `compositeIterator` does a **depth-first traversal** of the tree. Leaves return a Null-Object `emptyIterator`. It's a lovely demonstration of Composite and [Iterator](/patterns/iterator/) working together — the caller walks the whole tree with a plain `for it.HasNext()` loop and never sees the recursion.
 </Callout>
 
 ## In the standard library

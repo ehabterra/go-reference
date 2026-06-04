@@ -6,7 +6,6 @@ order: 25
 difficulty: "Intermediate"
 status: ready
 intent: "Process a stream of data through a series of stages connected by channels, where each stage is a goroutine."
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/pipeline/main.go"
 when_use:
   - "You transform a stream in distinct steps (read → parse → filter → write) and want them to run concurrently."
   - "You want natural back-pressure and bounded memory, with stages decoupled from each other."
@@ -133,7 +132,7 @@ func main() {
 
 ## Generators & take
 
-The [repo's example](https://github.com/ehabterra/golearn/blob/main/patterns/pipeline/main.go) uses the composable style from *Concurrency in Go*: a `repeatFn` that produces an **infinite** stream, and a `take` that pulls just the first N — both honoring `done`:
+A more composable style, popularized by *Concurrency in Go*, uses a `repeatFn` that produces an **infinite** stream and a `take` that pulls just the first N — both honoring `done`:
 
 ```go
 done := make(chan any)

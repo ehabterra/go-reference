@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Attach new behavior to an object by wrapping it in another object of the same interface — without changing the original's type."
 aka: "Wrapper"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/decorator/main.go"
 when_use:
   - "You want to add responsibilities to objects dynamically, in combinations, at runtime."
   - "Subclassing every combination would explode (DarkRoastWithMochaAndWhipAndSoy…)."
@@ -101,7 +100,7 @@ Each layer delegates to the one it wraps, then adds its own contribution:
 
 ## Idiomatic Go
 
-The repo uses an explicit `component Beverage` field. Go's **struct embedding** makes it even tighter — embed the interface and override only `Description` and `Cost`. Edit and **Run**:
+A common version uses an explicit `component Beverage` field. Go's **struct embedding** makes it even tighter — embed the interface and override only `Description` and `Cost`. Edit and **Run**:
 
 <Playground client:visible title="decorator.go" code={`package main
 

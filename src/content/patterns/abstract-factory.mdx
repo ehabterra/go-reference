@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Provide an interface for creating families of related objects without specifying their concrete types."
 aka: "Kit"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/pizza/abstract.go"
 when_use:
   - "You must create groups of objects that are meant to be used together and must stay consistent (all NY-style, or all Chicago-style)."
   - "You want to swap an entire family at once by choosing a different factory."
@@ -139,7 +138,7 @@ func main() {
 	makePizza(ChicagoFactory{})
 }`} />
 
-The [repo's version](https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/pizza/abstract.go) goes the full distance: a `PizzaIngredientFactory` with six creation methods (dough, sauce, cheese, veggies, pepperoni, clam), and `NYPizzaIngredientFactory` returning `ThinCrustDough`, `MarinaraSauce`, `ReggianoCheese`, and so on. A pizza's `Prepare()` simply asks its factory for each ingredient.
+A fuller version goes the whole distance: a `PizzaIngredientFactory` with six creation methods (dough, sauce, cheese, veggies, pepperoni, clam), and `NYPizzaIngredientFactory` returning `ThinCrustDough`, `MarinaraSauce`, `ReggianoCheese`, and so on. A pizza's `Prepare()` simply asks its factory for each ingredient.
 
 <Callout type="go" title="🐹 Go often prefers something lighter">
 Abstract Factory is rarer in idiomatic Go than in Java. When you only need a couple of related constructors, passing them in directly — or a small **config struct** of dependencies, or [functional options](/patterns/builder/) — is usually clearer than a formal factory interface. Reach for the full pattern when the *family* abstraction genuinely earns its keep (pluggable backends, theme kits, platform-specific widget sets).

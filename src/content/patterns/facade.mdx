@@ -7,7 +7,6 @@ difficulty: "Beginner"
 gof: true
 status: ready
 intent: "Provide a single, simplified interface over a complex subsystem, so clients don't have to orchestrate its parts."
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/facade/main.go"
 when_use:
   - "A common task touches several subsystems (inventory, payment, shipping) and you want one entry point."
   - "You want to decouple clients from the internals so the subsystem can change behind a stable surface."
@@ -102,7 +101,7 @@ Placing an order really means: check inventory, then charge the customer, then (
 
 ## Idiomatic Go
 
-The facade is a struct holding its subsystems as **small interfaces** — which keeps it decoupled and trivially testable with fakes. This mirrors the repo's `Order` type. Edit and **Run**:
+The facade is a struct holding its subsystems as **small interfaces** — which keeps it decoupled and trivially testable with fakes. Edit and **Run**:
 
 <Playground client:visible title="facade.go" code={`package main
 

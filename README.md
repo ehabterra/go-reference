@@ -13,9 +13,9 @@ npm run build    # static output in ./dist
 npm run preview  # serve the production build
 ```
 
-> The in-page **Go Playground** "Run" button calls the serverless function in `/api/run.js`,
-> which only runs on Vercel (or via `vercel dev`). Under plain `npm run dev` the page works,
-> but "Run" will report it can't reach the runner — that's expected locally.
+> The in-page **Go Playground** "Run" button posts to the Astro endpoint `src/pages/api/run.ts`,
+> which proxies the official Go Playground compile API. It runs under `npm run dev` and deploys
+> as a Vercel serverless function — so "Run" works both locally and in production.
 
 ## How it's organized
 
@@ -26,7 +26,7 @@ npm run preview  # serve the production build
 | `src/layouts/` | `BaseLayout` (chrome) and `PatternLayout` (the per-pattern anatomy). |
 | `src/components/` | Astro UI pieces; `islands/Playground.tsx` is the React runnable editor. |
 | `src/scripts/` | `progress.js` (localStorage progress, quiz, TOC) and `mermaid.js` (lazy diagrams). |
-| `api/run.js` | Vercel function proxying the Go Playground compile API. |
+| `src/pages/api/run.ts` | On-demand endpoint proxying the Go Playground compile API (dev + Vercel). |
 
 ## Authoring a pattern page
 

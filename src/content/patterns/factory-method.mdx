@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Define an interface for creating an object, but let the implementation decide which concrete type to instantiate."
 aka: "Virtual Constructor"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/simple/main.go"
 when_use:
   - "Callers should depend on an interface, not on concrete types — so you can swap implementations freely."
   - "You want a single place that decides which concrete type to build (and can validate the request)."
@@ -118,7 +117,7 @@ func main() {
 }`} />
 
 <Callout type="go" title="🐹 Simple Factory isn't quite the GoF pattern">
-The duck switch above is a *Simple Factory* — a handy idiom, but not formally one of the 23. The real **Factory Method** makes the creation step itself something each context overrides. The repo shows it with a pizza store.
+The duck switch above is a *Simple Factory* — a handy idiom, but not formally one of the 23. The real **Factory Method** makes the creation step itself something each context overrides. Here it is with a pizza store.
 </Callout>
 
 ## Factory Method proper — the pizza store
@@ -157,7 +156,7 @@ func (s *PizzaStoreBase) OrderPizza(kind PizzaType) (Pizza, error) {
 }
 ```
 
-Each store implements `CreatePizza` to build its own regional pizzas — same order flow, different products. See the [full NY & Chicago stores in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/factory/pizza/method.go).
+Each store implements `CreatePizza` to build its own regional pizzas — same order flow, different products.
 
 ## In the standard library
 

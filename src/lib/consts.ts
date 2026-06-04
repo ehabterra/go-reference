@@ -45,4 +45,4 @@ export const CATEGORIES: CategoryMeta[] = [
   },
 ];
 
-export const REPO_URL = 'https://github.com/ehabterra/golearn';
+export const REPO_URL = 'https://github.com/ehabterra/design-patterns';

@@ -8,7 +8,6 @@ gof: true
 status: ready
 intent: "Provide a way to access the elements of a collection sequentially without exposing its underlying representation."
 aka: "Cursor"
-source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/iterator/main.go"
 when_use:
   - "Callers should traverse a collection without knowing whether it's a slice, tree, ring buffer, or DB cursor."
   - "You want one uniform traversal API across different container types."
@@ -85,7 +84,7 @@ Different collections store their elements differently — a menu in a slice, a 
 
 ## Idiomatic Go — the classic form
 
-The repo's example uses the GoF shape: a small `Iterator` interface with `HasNext`/`Next`. (Returning a concrete type beats `interface{}` so callers skip type assertions.) Edit and **Run**:
+The classic GoF form is a small `Iterator` interface with `HasNext`/`Next`. (Returning a concrete type beats `interface{}` so callers skip type assertions.) Edit and **Run**:
 
 <Playground client:visible title="iterator.go" code={`package main
 
