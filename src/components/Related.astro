@@ -1,0 +1,22 @@
+---
+import { getCollection } from 'astro:content';
+const { related } = Astro.props as { related: string[] };
+const all = await getCollection('patterns');
+const items = (related ?? [])
+  .map((slug) => all.find((p) => p.id === slug))
+  .filter((p): p is NonNullable<typeof p> => Boolean(p));
+---
+{items.length > 0 && (
+  <Fragment>
+    <h2 id="related-patterns">Related patterns</h2>
+    <div class="dp-grid">
+      {items.map((p) => (
+        <a class="dp-card" data-cat={p.data.category} data-slug={p.id} href={`/patterns/${p.id}/`}>
+          <span class="dp-card__num">{p.data.category}</span>
+          <span class="dp-card__title">{p.data.title}</span>
+          <p class="dp-card__intent">{p.data.intent}</p>
+        </a>
+      ))}
+    </div>
+  </Fragment>
+)}

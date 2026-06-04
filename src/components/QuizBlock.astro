@@ -1,0 +1,20 @@
+---
+interface QuizOption { text: string; correct: boolean; }
+interface QuizItem { q: string; options: QuizOption[]; explain?: string; }
+const { quiz } = Astro.props as { quiz: QuizItem[] };
+---
+<div class="dp-quiz" data-dp-quiz>
+  <div class="dp-quiz__head">
+    <h2 id="quiz">Check your understanding</h2>
+    <span class="dp-quiz__score" data-dp-score>Score: 0 / {quiz.length}</span>
+  </div>
+  {quiz.map((q, i) => (
+    <div class="dp-q">
+      <p class="dp-q__prompt">{i + 1}. {q.q}</p>
+      {q.options.map((o) => (
+        <button class="dp-opt" data-correct={o.correct ? 'true' : 'false'}>{o.text}</button>
+      ))}
+      {q.explain && <p class="dp-q__explain">{q.explain}</p>}
+    </div>
+  ))}
+</div>

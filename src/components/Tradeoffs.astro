@@ -1,0 +1,19 @@
+---
+const { data: d } = Astro.props;
+const show = (d.when_use?.length ?? 0) > 0 || (d.when_avoid?.length ?? 0) > 0;
+---
+{show && (
+  <Fragment>
+    <h2 id="when-to-use">When to use it — and when not</h2>
+    <div class="dp-tradeoffs">
+      <div class="dp-tradeoffs__col dp-tradeoffs__col--use">
+        <h4>✅ Reach for it when</h4>
+        <ul>{d.when_use.map((i: string) => <li>{i}</li>)}</ul>
+      </div>
+      <div class="dp-tradeoffs__col dp-tradeoffs__col--avoid">
+        <h4>⛔ Think twice when</h4>
+        <ul>{d.when_avoid.map((i: string) => <li>{i}</li>)}</ul>
+      </div>
+    </div>
+  </Fragment>
+)}

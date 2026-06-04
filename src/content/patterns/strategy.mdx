@@ -1,0 +1,186 @@
+---
+title: "Strategy"
+category: behavioral
+kind: pattern
+order: 22
+difficulty: "Beginner"
+gof: true
+status: ready
+intent: "Define a family of interchangeable algorithms, encapsulate each one, and select which to use at runtime."
+aka: "Policy"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/strategy/main.go"
+when_use:
+  - "You have several variants of an algorithm (sorting orders, pricing rules, compression schemes) and want to switch between them at runtime."
+  - "You want to remove a sprawling if/else or switch that picks behavior."
+  - "Callers should be able to plug in their own behavior without you editing the core type."
+when_avoid:
+  - "There's only ever one algorithm and no realistic chance of a second — the indirection just adds noise."
+  - "The 'strategies' differ by a single value, not behavior — a parameter is simpler than a type."
+related:
+  - state
+  - template-method
+  - command
+  - decorator
+quiz:
+  - q: "In Go, what is the most idiomatic form of a simple Strategy?"
+    options:
+      - text: "A function value (a func type) passed in"
+        correct: true
+      - text: "A deep inheritance tree"
+        correct: false
+      - text: "A global variable"
+        correct: false
+      - text: "A goroutine"
+        correct: false
+    explain: "When a strategy is a single operation, a func value is the cleanest expression — exactly what sort.Slice's less argument is."
+  - q: "How does Strategy differ from State?"
+    options:
+      - text: "They are identical"
+        correct: false
+      - text: "Strategy is chosen by the client; State transitions itself based on internal conditions"
+        correct: true
+      - text: "State is creational, Strategy is structural"
+        correct: false
+      - text: "Strategy can't use interfaces"
+        correct: false
+    explain: "Both swap behavior behind an interface, but State objects usually decide their own next state, whereas a Strategy is selected from outside and rarely changes itself."
+  - q: "Which standard-library API is a Strategy in disguise?"
+    options:
+      - text: "fmt.Println"
+        correct: false
+      - text: "sort.Slice(s, less)"
+        correct: true
+      - text: "os.Exit"
+        correct: false
+      - text: "make(chan int)"
+        correct: false
+    explain: "sort.Slice takes the comparison strategy as a function, letting you sort the same data any way you like without changing the sort algorithm."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧭 Analogy">
+Getting to the airport, you pick a *strategy*: drive, take the train, or hail a cab. The goal is identical — only the algorithm changes. You choose based on time, budget and traffic, and you can switch on the day without changing your destination.
+</Callout>
+
+## The problem
+
+A type needs to perform a task that has **several interchangeable implementations**. The naive approach hard-codes them with a conditional:
+
+```go
+func (d *Duck) Fly(kind string) {
+	switch kind {
+	case "wings":
+		// flap...
+	case "rocket":
+		// ignite...
+	case "none":
+		// can't fly
+	}
+}
+```
+
+Every new behavior means editing `Fly` and growing the switch — the type is closed against extension but you keep opening it. Strategy **pulls each algorithm into its own type behind a shared interface**, so behavior becomes a value you set, not a branch you add.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Duck {
+    -flyBehavior FlyBehavior
+    +PerformFly()
+    +SetFlyBehavior(FlyBehavior)
+  }
+  class FlyBehavior {
+    <<interface>>
+    +Fly()
+  }
+  class FlyWithWings { +Fly() }
+  class FlyNoWay { +Fly() }
+  Duck o--> FlyBehavior : delegates to
+  FlyBehavior <|.. FlyWithWings
+  FlyBehavior <|.. FlyNoWay`} />
+
+The `Duck` (the *context*) holds a `FlyBehavior` and delegates to it. Swapping the concrete behavior changes what the duck does — at runtime, without touching `Duck`.
+
+## How it works
+
+<Mermaid code={`sequenceDiagram
+  participant C as Client
+  participant D as Duck (context)
+  participant F as FlyBehavior
+  C->>D: SetFlyBehavior(FlyWithWings)
+  C->>D: PerformFly()
+  D->>F: Fly()
+  F-->>D: "Flying with wings"
+  C->>D: SetFlyBehavior(FlyNoWay)
+  C->>D: PerformFly()
+  D->>F: Fly()
+  F-->>D: "Can't fly"`} />
+
+## Idiomatic Go — the interface form
+
+Each behavior is its own type satisfying a tiny interface, and the duck delegates. Edit and **Run** it:
+
+<Playground client:visible title="strategy.go" code={`package main
+
+import "fmt"
+
+// Strategy interface + two implementations
+type FlyBehavior interface{ Fly() }
+
+type FlyWithWings struct{}
+
+func (FlyWithWings) Fly() { fmt.Println("Flying with wings") }
+
+type FlyNoWay struct{}
+
+func (FlyNoWay) Fly() { fmt.Println("Can't fly") }
+
+// Context holds a strategy and delegates to it
+type Duck struct{ fly FlyBehavior }
+
+func (d *Duck) SetFly(fb FlyBehavior) { d.fly = fb }
+func (d *Duck) PerformFly()           { d.fly.Fly() }
+
+func main() {
+	mallard := &Duck{fly: FlyWithWings{}}
+	mallard.PerformFly() // Flying with wings
+
+	mallard.SetFly(FlyNoWay{}) // swap behavior at runtime
+	mallard.PerformFly()       // Can't fly
+}`} />
+
+The [full example in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/strategy/main.go) extends this with a `QuackBehavior` too, plus concrete `MallardDuck` and `RubberDuck` types that embed a base `Duck` — a great look at composition.
+
+## Idiomatic Go — the function form
+
+Here's where Go diverges from Java. When a strategy is a **single operation**, you don't need an interface and a struct at all — a **function value** *is* the strategy:
+
+```go
+type FlyFunc func()
+
+type Duck struct{ fly FlyFunc }
+func (d *Duck) PerformFly() { d.fly() }
+
+mallard := &Duck{fly: func() { fmt.Println("Flying with wings") }}
+mallard.PerformFly()
+mallard.fly = func() { fmt.Println("Can't fly") } // swap in one line
+```
+
+<Callout type="go" title="🐹 Go reshapes this pattern">
+First-class functions collapse single-method Strategies into a `func` field or argument. Reach for the interface form when a strategy needs *multiple* methods or its own state; reach for the function form when it's one operation. Both are Strategy.
+</Callout>
+
+## In the standard library
+
+- **`sort.Slice(s, less)`** — you supply the comparison *strategy* as a function.
+- **`http.HandlerFunc`** — an adapter that lets any function be a request-handling strategy.
+- **`strings.Map(mapping, s)`** — the per-rune transformation is a pluggable strategy.
+- **`template.FuncMap`** — inject formatting strategies into a template.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Don't over-engineer a single algorithm">
+If there's truly only one implementation and no prospect of a second, an interface and a context type are ceremony with no payoff. Introduce Strategy when variation actually exists (or is clearly coming) — not speculatively.
+</Callout>

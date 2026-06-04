@@ -1,0 +1,28 @@
+---
+const { data: d } = Astro.props;
+---
+<div class="dp-callout dp-callout--gotcha">
+  <p class="dp-callout__title">🚧 This page is being written</p>
+  <p>The full walkthrough — analogy, diagrams, idiomatic Go, trade-offs and a quiz — is on its way. Here's the gist for now.</p>
+</div>
+
+{d.nutshell && (
+  <Fragment>
+    <h2 id="in-a-nutshell">In a nutshell</h2>
+    <p>{d.nutshell}</p>
+  </Fragment>
+)}
+
+<h2 id="whats-coming">What you'll find here</h2>
+<ul>
+  <li>The problem this {d.kind === 'guide' ? 'topic' : 'pattern'} solves, with a memorable real-world analogy</li>
+  <li>A UML structure diagram and a step-by-step sequence diagram</li>
+  <li>
+    An idiomatic Go implementation{d.source ? (
+      <Fragment> — <a href={d.source} target="_blank" rel="noopener">browse the source on GitHub</a></Fragment>
+    ) : ''}
+  </li>
+  <li>How Go's interfaces &amp; composition reshape the classic design</li>
+  <li>Where it shows up in the Go standard library</li>
+  <li>When to use it, when to avoid it, and a quick self-check quiz</li>
+</ul>

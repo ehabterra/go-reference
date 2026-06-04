@@ -1,0 +1,5 @@
+---
+interface Props { code: string; }
+const { code } = Astro.props;
+---
+<div class="dp-mermaid"><pre class="mermaid">{code.trim()}</pre></div>

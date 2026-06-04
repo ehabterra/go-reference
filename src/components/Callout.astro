@@ -1,0 +1,8 @@
+---
+interface Props { type?: 'intent' | 'analogy' | 'problem' | 'go' | 'gotcha' | 'tip'; title?: string; }
+const { type = 'intent', title } = Astro.props;
+---
+<div class={`dp-callout dp-callout--${type}`}>
+  {title && <p class="dp-callout__title">{title}</p>}
+  <slot />
+</div>

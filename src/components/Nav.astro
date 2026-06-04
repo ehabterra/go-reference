@@ -1,0 +1,17 @@
+---
+import { REPO_URL } from '../lib/consts';
+---
+<header class="dp-nav">
+  <div class="dp-container dp-nav__inner">
+    <a class="dp-brand" href="/">
+      <span class="dp-brand__mark">{'{}'}</span>
+      <span>Design Patterns <span style="color:var(--dp-muted);font-weight:600">· Go</span></span>
+    </a>
+    <nav class="dp-nav__links">
+      <a href="/#creational" class="hide-sm">Patterns</a>
+      <a href="/patterns/foundations/" class="hide-sm">Foundations</a>
+      <a href="/patterns/stdlib-patterns/" class="hide-sm">Stdlib</a>
+      <a href={REPO_URL} target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </div>
+</header>

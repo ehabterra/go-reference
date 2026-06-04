@@ -1,0 +1,189 @@
+---
+title: "Singleton"
+category: creational
+kind: pattern
+order: 2
+difficulty: "Beginner"
+gof: true
+status: ready
+intent: "Ensure a type has only one instance, and provide a single, well-defined point of access to it."
+aka: "Single instance"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/singleton/main.go"
+when_use:
+  - "There must be exactly one instance — a process-wide config, a connection pool, a logger, a metrics registry."
+  - "That single instance needs a clear, shared access point across the program."
+  - "Lazy, one-time initialization needs to be safe under concurrency."
+when_avoid:
+  - "You're really just reaching for a global variable — singletons hide global mutable state and make tests order-dependent."
+  - "You need to swap the implementation in tests; a singleton is hard to mock. Prefer passing a dependency in."
+  - "Multiple configurations might be needed later — a singleton bakes 'exactly one' into your architecture."
+related:
+  - factory-method
+  - abstract-factory
+  - facade
+quiz:
+  - q: "What is the idiomatic, concurrency-safe way to build a lazy singleton in Go?"
+    options:
+      - text: "A plain global variable with a nil check"
+        correct: false
+      - text: "sync.Once.Do(...)"
+        correct: true
+      - text: "A package-level mutex you lock on every access"
+        correct: false
+      - text: "time.Sleep until it's initialized"
+        correct: false
+    explain: "sync.Once guarantees the init function runs exactly once, even under concurrent calls, with no race — and no lock on the hot path after the first call."
+  - q: "What's the main design risk of the Singleton pattern?"
+    options:
+      - text: "It uses too much memory"
+        correct: false
+      - text: "It's hidden global mutable state that complicates testing and coupling"
+        correct: true
+      - text: "It can't be used with interfaces"
+        correct: false
+      - text: "It only works on one CPU core"
+        correct: false
+    explain: "A singleton is global state in disguise. It couples callers to a concrete instance and makes tests share state — often better to inject the dependency."
+  - q: "Why is a bare `if instance == nil { instance = ... }` unsafe?"
+    options:
+      - text: "It always compiles to slower code"
+        correct: false
+      - text: "Two goroutines can both see nil and both initialize — a data race"
+        correct: true
+      - text: "nil checks are not allowed in Go"
+        correct: false
+      - text: "It leaks memory"
+        correct: false
+    explain: "Without synchronization, concurrent callers race on the check-and-set, possibly creating two instances and tripping the race detector."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏛️ Analogy">
+A country has exactly one official government. No matter who you ask or where you are, "the government" refers to the same single entity — and there's a well-known way to reach it. You can't accidentally spin up a second one.
+</Callout>
+
+## The problem
+
+Some things should exist **once** per program: a configuration loaded from the environment, a database connection pool, a shared logger. If every caller created its own, you'd get inconsistent config, exhausted connections, or interleaved log files.
+
+You need two guarantees: **only one instance** is ever created, and everyone can **reach that same instance** through one access point. And in Go specifically: initialization must be **safe when many goroutines** ask for the instance at once.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Singleton {
+    -instance Singleton
+    +GetInstance() Singleton
+    +SomeMethod()
+  }
+  note for Singleton "GetInstance() always returns the same instance. The constructor is unexported."`} />
+
+Callers never construct the type directly — they go through a single accessor that hands back the one shared value.
+
+## How it works
+
+<Mermaid code={`sequenceDiagram
+  participant G1 as Goroutine 1
+  participant G2 as Goroutine 2
+  participant S as GetInstance / sync.Once
+  G1->>S: GetInstance()
+  S->>S: once.Do creates instance (runs ONCE)
+  S-->>G1: *instance
+  G2->>S: GetInstance()
+  S-->>G2: *instance (same pointer, no re-init)`} />
+
+## Idiomatic Go
+
+Go's standard library hands you the perfect tool: [`sync.Once`](https://pkg.go.dev/sync#Once). Its `Do` method runs a function exactly once, no matter how many goroutines call it concurrently — and it's faster than locking on every access.
+
+```go
+package config
+
+import "sync"
+
+type Config struct {
+	DSN   string
+	Debug bool
+}
+
+var (
+	instance *Config
+	once     sync.Once
+)
+
+// Get returns the one shared Config, initializing it on first use.
+// Safe to call from many goroutines at once.
+func Get() *Config {
+	once.Do(func() {
+		instance = &Config{DSN: "postgres://localhost/app"}
+	})
+	return instance
+}
+```
+
+Try it — this version spins up five goroutines that all race to initialize, then proves they got the same instance. Edit it and hit **Run**:
+
+<Playground client:visible title="singleton.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Config struct {
+	DSN   string
+	Debug bool
+}
+
+var (
+	instance *Config
+	once     sync.Once
+)
+
+func Get() *Config {
+	once.Do(func() {
+		fmt.Println("initializing config (this prints once)")
+		instance = &Config{DSN: "postgres://localhost/app"}
+	})
+	return instance
+}
+
+func main() {
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = Get() }()
+	}
+	wg.Wait()
+
+	a, b := Get(), Get()
+	fmt.Printf("same instance: %v\n", a == b)
+	fmt.Println("DSN:", a.DSN)
+}`} />
+
+<Callout type="tip" title="💡 Even simpler: eager init">
+If the instance is cheap and always needed, skip the laziness — a package-level variable initialized at declaration is a singleton, and Go guarantees package initialization runs once before `main`.
+</Callout>
+
+```go
+var instance = &Config{DSN: "postgres://localhost/app"} // created once, at startup
+func Get() *Config { return instance }
+```
+
+### The version in this repo
+
+The [example in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/singleton/main.go) passes the `*sync.Once` in as a parameter and even recovers from panics during construction — a nice way to see the mechanics laid bare. In production you'd usually keep the `sync.Once` as an unexported package-level variable instead.
+
+## In the standard library
+
+- **`sync.Once`** itself is the canonical building block.
+- **`http.DefaultClient`, `http.DefaultServeMux`** are package-level singletons you use every day.
+- **Go's package initialization** (`init()` + package-level vars) is a language-level singleton guarantee.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Singleton is global state wearing a tie">
+The pattern's biggest danger isn't concurrency — `sync.Once` handles that. It's that a singleton is **hidden, shared, mutable state**. It couples every caller to one concrete value, makes unit tests share state across runs, and resists mocking. Before reaching for it, ask: "could I just pass this in as a dependency?" Often the answer is yes, and your code gets more testable for it.
+</Callout>

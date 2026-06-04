@@ -1,0 +1,46 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import PatternHeader from '../components/PatternHeader.astro';
+import DraftScaffold from '../components/DraftScaffold.astro';
+import Tradeoffs from '../components/Tradeoffs.astro';
+import Related from '../components/Related.astro';
+import QuizBlock from '../components/QuizBlock.astro';
+import Pager from '../components/Pager.astro';
+
+const { entry } = Astro.props;
+const d = entry.data;
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+---
+<BaseLayout title={d.title} description={d.intent}>
+  <article>
+    <nav class="dp-breadcrumb dp-kicker">
+      <a href="/">Design Patterns</a> › <span>{cap(d.category)}</span> › <span>{d.title}</span>
+    </nav>
+
+    <PatternHeader data={d} />
+
+    <div class="dp-article">
+      <div class="dp-article__body dp-prose">
+        <slot />
+        {d.status !== 'ready' && <DraftScaffold data={d} />}
+        <Tradeoffs data={d} />
+        <Related related={d.related} />
+        {d.quiz.length > 0 && <QuizBlock quiz={d.quiz} />}
+        <Pager slug={entry.id} />
+      </div>
+
+      <aside class="dp-article__toc" aria-label="On this page">
+        <div class="dp-article__toc-inner">
+          <p class="dp-toc-title">On this page</p>
+          <ul class="dp-toc" data-dp-toc></ul>
+          <p class="dp-toc-title" style="margin-top:1.5rem">Your progress</p>
+          <button class="dp-btn" data-dp-learn={entry.id} aria-pressed="false">
+            <span data-dp-learn-label>Mark as learned</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+  </article>
+
+  <script>import '../scripts/mermaid.js';</script>
+</BaseLayout>
