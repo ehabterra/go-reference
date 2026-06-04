@@ -1,0 +1,149 @@
+---
+title: "Prototype"
+category: creational
+kind: pattern
+order: 6
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Create new objects by cloning an existing, configured instance instead of building one from scratch."
+when_use:
+  - "Constructing an object is expensive, and you already have a fully-configured one to copy."
+  - "You want to snapshot a live object's state and branch from it."
+  - "You keep a registry of pre-built prototypes to clone on demand."
+when_avoid:
+  - "The object is cheap and simple to construct — just construct it."
+  - "Deep cloning is error-prone for the type (lots of nested references); prefer immutable values."
+related:
+  - builder
+  - factory-method
+  - memento
+quiz:
+  - q: "In Go, what does `cp := *c` do when the struct has a slice field?"
+    options:
+      - text: "A shallow copy — cp and c share the same backing array for that slice"
+        correct: true
+      - text: "A full deep copy"
+        correct: false
+      - text: "It fails to compile"
+        correct: false
+      - text: "It copies only the slice"
+        correct: false
+    explain: "Struct assignment copies field values, but a slice field is just a header (ptr, len, cap) — so both structs point at the same underlying array until you copy it explicitly."
+  - q: "How do you make Clone correct for slices and maps?"
+    options:
+      - text: "Allocate new ones and copy the elements (or use slices.Clone / maps.Clone)"
+        correct: true
+      - text: "Nothing — assignment handles it"
+        correct: false
+      - text: "Mark them as const"
+        correct: false
+      - text: "Use a goroutine"
+        correct: false
+    explain: "Reference-type fields must be duplicated by hand (append([]T(nil), s...), a fresh map with copied entries) or via slices.Clone/maps.Clone, or clones will share mutable state."
+  - q: "When is Prototype most worthwhile?"
+    options:
+      - text: "When construction is expensive or you want to branch from a configured instance"
+        correct: true
+      - text: "When the object has no fields"
+        correct: false
+      - text: "When you need exactly one instance"
+        correct: false
+      - text: "Always, for every type"
+        correct: false
+    explain: "Cloning pays off when building from scratch is costly or when you want a copy of an already-set-up object to tweak independently."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📄 Analogy">
+Need ten similar contracts? You don't retype each from a blank page — you photocopy a filled-in template and change the name and a clause. Prototype is that photocopier: start from a configured object and tweak the copy.
+</Callout>
+
+## The problem
+
+Sometimes building an object from scratch is expensive or fiddly — lots of setup, computed fields, loaded resources. If you already have one configured the way you want, it's faster and simpler to **clone it** and adjust the copy. The catch in Go: a naive copy shares the original's slices, maps, and pointers.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Cloner {
+    <<interface>>
+    +Clone() Cloner
+  }
+  class Config {
+    +Name string
+    +Tags []string
+    +Clone() Config
+  }
+  Cloner <|.. Config
+  Config ..> Config : returns a deep copy`} />
+
+## Idiomatic Go — a deep Clone
+
+Go has no built-in deep copy. `cp := *c` copies value fields but **shares** slices and maps, so `Clone` must duplicate them. Edit and **Run** — notice the base stays untouched:
+
+<Playground client:visible title="prototype.go" code={`package main
+
+import "fmt"
+
+type Config struct {
+	Name   string
+	Tags   []string
+	Limits map[string]int
+}
+
+// Clone returns a DEEP copy: slices and maps are duplicated, not shared.
+func (c *Config) Clone() *Config {
+	cp := *c // copies Name, but Tags/Limits headers still point at c's data
+	cp.Tags = append([]string(nil), c.Tags...)      // fresh slice
+	cp.Limits = make(map[string]int, len(c.Limits)) // fresh map
+	for k, v := range c.Limits {
+		cp.Limits[k] = v
+	}
+	return &cp
+}
+
+func main() {
+	base := &Config{
+		Name:   "base",
+		Tags:   []string{"prod"},
+		Limits: map[string]int{"cpu": 2},
+	}
+
+	clone := base.Clone()
+	clone.Name = "service-a"
+	clone.Tags = append(clone.Tags, "team-x")
+	clone.Limits["cpu"] = 8
+
+	fmt.Printf("base:  %+v\n", *base)  // unchanged
+	fmt.Printf("clone: %+v\n", *clone) // diverged independently
+}`} />
+
+<Callout type="gotcha" title="⚠️ The shallow-copy trap">
+Skip the slice/map duplication and you get a bug that looks like spooky action at a distance:
+
+```go
+cp := *c            // shallow: cp.Tags and c.Tags share one backing array
+cp.Tags[0] = "oops" // ...so this also mutates the original!
+```
+
+A plain `*c` copy is only safe when every field is itself a value type (no slices, maps, pointers, channels).
+</Callout>
+
+## In the standard library
+
+Go gives you the cloning primitives directly (Go 1.21+):
+
+- **`slices.Clone(s)`** — copy a slice's elements into a new backing array.
+- **`maps.Clone(m)`** — shallow-copy a map.
+- **`bytes.Clone(b)`** — copy a byte slice.
+
+For arbitrary deep copies, a `gob`/`json` marshal-then-unmarshal round-trip works but is slow and drops unexported fields and functions — explicit `Clone` is usually better.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Deep clones get deep">
+If `Config` held a slice of pointers, `slices.Clone` would copy the pointers, not what they point to — the clone would still share those nested objects. Deep cloning is recursive, and the deeper the graph, the more error-prone. When that pain shows up, consider making the value **immutable** instead, so sharing is safe and no clone is needed.
+</Callout>

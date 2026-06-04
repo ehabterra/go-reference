@@ -1,0 +1,146 @@
+---
+title: "Flyweight"
+category: structural
+kind: pattern
+order: 12
+difficulty: "Advanced"
+gof: true
+status: ready
+intent: "Share common immutable state across many objects to slash memory use, keeping only per-instance data separate."
+when_use:
+  - "You hold a very large number of objects that share a lot of identical, immutable data."
+  - "Memory is the bottleneck and profiling shows that duplicated state dominates."
+  - "The shared part is large relative to the per-instance part."
+when_avoid:
+  - "There are only a few objects, or the shared data is small — the cache costs more than it saves."
+  - "The 'shared' state is mutable — flyweights must be immutable, or you get spooky cross-talk."
+  - "You're optimizing before profiling."
+related:
+  - composite
+  - factory-method
+  - singleton
+quiz:
+  - q: "What's the difference between intrinsic and extrinsic state?"
+    options:
+      - text: "Intrinsic is shared and immutable (stored once); extrinsic is per-instance and passed in"
+        correct: true
+      - text: "Intrinsic is per-instance; extrinsic is shared"
+        correct: false
+      - text: "They're the same"
+        correct: false
+      - text: "Intrinsic is private, extrinsic is public"
+        correct: false
+    explain: "Flyweight splits state: the heavy, identical part (a glyph, a tree type) is stored once and shared; the part that differs per object (a position) is kept outside, often passed as an argument."
+  - q: "What does Flyweight optimize?"
+    options:
+      - text: "Memory — by storing shared data once instead of per object"
+        correct: true
+      - text: "CPU branch prediction"
+        correct: false
+      - text: "Network latency"
+        correct: false
+      - text: "Disk I/O ordering"
+        correct: false
+    explain: "It trades a little indirection for big memory savings when millions of objects would otherwise each carry a copy of the same large immutable data."
+  - q: "Why must flyweights be immutable?"
+    options:
+      - text: "Because they're shared — mutating one would silently affect every object that references it"
+        correct: true
+      - text: "Because Go requires it"
+        correct: false
+      - text: "To make them faster"
+        correct: false
+      - text: "They don't have to be"
+        correct: false
+    explain: "A flyweight is referenced by many objects at once. If it were mutable, changing it for one would change it for all — so shared intrinsic state must be read-only."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🅰️ Analogy">
+A text editor showing a million letters doesn't store a full font definition for each one. Every 'a' shares a single glyph object — shape, font, metrics — and only the *position* of each letter is stored per occurrence. One heavy thing shared, one light thing repeated.
+</Callout>
+
+## The problem
+
+You have a huge number of objects, and most of each object is identical, immutable data. Storing that data per object burns memory. Flyweight splits each object's state into **intrinsic** (shared, immutable — stored once) and **extrinsic** (per-instance — kept outside), and hands out shared instances through a factory.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class TreeFactory {
+    -cache map
+    +GetTreeType(name, color) TreeType
+  }
+  class TreeType {
+    +Name string
+    +Color string
+    +Texture string
+  }
+  class Tree {
+    -x int
+    -y int
+    -kind TreeType
+  }
+  TreeFactory ..> TreeType : caches & shares
+  Tree o--> TreeType : references (intrinsic)
+  note for TreeType "shared, immutable"`} />
+
+## Idiomatic Go
+
+A factory caches and returns shared `TreeType` values (interning). A thousand trees, but only two heavy `TreeType` objects exist. Edit and **Run**:
+
+<Playground client:visible title="flyweight.go" code={`package main
+
+import "fmt"
+
+// Flyweight: heavy, shared, IMMUTABLE state.
+type TreeType struct {
+	Name    string
+	Color   string
+	Texture string // imagine this is large
+}
+
+// Factory caches TreeTypes so identical ones are shared, not duplicated.
+var treeTypes = map[string]*TreeType{}
+
+func GetTreeType(name, color, texture string) *TreeType {
+	key := name + "|" + color
+	if t, ok := treeTypes[key]; ok {
+		return t // reuse the shared instance
+	}
+	t := &TreeType{name, color, texture}
+	treeTypes[key] = t
+	return t
+}
+
+// Tree holds only extrinsic state (position) plus a pointer to the flyweight.
+type Tree struct {
+	x, y int
+	kind *TreeType
+}
+
+func main() {
+	var forest []Tree
+	for i := 0; i < 1000; i++ {
+		kind := GetTreeType("Oak", "green", "…big texture blob…")
+		if i%2 == 0 {
+			kind = GetTreeType("Pine", "dark-green", "…big texture blob…")
+		}
+		forest = append(forest, Tree{x: i, y: i * 2, kind: kind})
+	}
+
+	fmt.Printf("trees in forest:                 %d\n", len(forest))
+	fmt.Printf("distinct TreeType objects alloc: %d\n", len(treeTypes))
+}`} />
+
+<Callout type="go" title="🐹 It's interning + a state split">
+Flyweight in Go is a cache of shared immutable values plus the discipline of keeping per-instance data (here, `x, y`) out of the shared object. Go's strings are already flyweight-flavored — immutable, and substrings share backing memory. If the factory is used concurrently, guard the cache with a `sync.Mutex` or use `sync.Map`. (Don't confuse this with `sync.Pool`, which *reuses* objects to cut allocations rather than *sharing* immutable state.)
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Profile first; immutability is non-negotiable">
+Flyweight adds a cache and a layer of indirection — only worth it when duplicated state genuinely dominates memory, which you should confirm with `pprof`, not a hunch. And the shared object must be treated as read-only: a single mutation leaks into every object that points at it. If you need per-object changes, that data is extrinsic and belongs outside the flyweight.
+</Callout>

@@ -1,0 +1,148 @@
+---
+title: "Builder"
+category: creational
+kind: pattern
+order: 5
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Construct a complex object step by step, separating how it's built from its final representation."
+when_use:
+  - "An object has many fields, several of them optional, and you want sensible defaults."
+  - "You want a readable, extensible construction API — add an option without breaking callers."
+  - "Construction should be validated or staged before the object is usable."
+when_avoid:
+  - "The object has two or three required fields — a plain struct literal with field names is clearer."
+  - "You'd add a builder purely for symmetry; don't pay for machinery you don't need."
+related:
+  - abstract-factory
+  - factory-method
+  - prototype
+quiz:
+  - q: "What is the idiomatic Go form of Builder?"
+    options:
+      - text: "Functional options — variadic Option funcs that each mutate the target"
+        correct: true
+      - text: "A constructor with 10 positional parameters"
+        correct: false
+      - text: "Inheritance from an abstract builder"
+        correct: false
+      - text: "A global registry"
+        correct: false
+    explain: "Go has no named/default parameters or constructor overloading, so the community settled on functional options: NewX(required, ...Option) where each Option is a closure that configures the value."
+  - q: "Why prefer functional options over one big constructor?"
+    options:
+      - text: "Callers set only what they need, defaults fill the rest, and new options don't break the signature"
+        correct: true
+      - text: "They run faster"
+        correct: false
+      - text: "They use less memory"
+        correct: false
+      - text: "They avoid interfaces"
+        correct: false
+    explain: "A long positional constructor is unreadable and brittle; options are self-documenting, order-independent, defaulted, and extensible without breaking existing calls."
+  - q: "Which standard-library type literally is a Builder?"
+    options:
+      - text: "strings.Builder — accumulates a string efficiently"
+        correct: true
+      - text: "time.Time"
+        correct: false
+      - text: "sync.Mutex"
+        correct: false
+      - text: "io.EOF"
+        correct: false
+    explain: "strings.Builder builds a string piece by piece with Write/WriteString, then String() yields the result — Builder by name and by design."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🍔 Analogy">
+At a build-your-own-burger counter you start from a base and add what you want — cheese, bacon, hold the onions — while the kitchen assembles it step by step. You don't recite a fixed 12-ingredient order; you specify only your changes, and defaults cover the rest.
+</Callout>
+
+## The problem
+
+An object with many fields — half of them optional — makes constructors miserable. `NewServer("localhost", 8080, 30, true, false, nil)` is unreadable, and "telescoping" constructors (`NewServer`, `NewServerWithTLS`, `NewServerWithTLSAndTimeout`…) multiply forever. Builder separates **construction** from the **final object**, letting callers set only what they care about.
+
+## Structure
+
+<Mermaid code={`graph LR
+  D["defaults<br/>port:8080, timeout:30s"] --> O1["WithPort(443)"]
+  O1 --> O2["WithTLS()"]
+  O2 --> F["final Server"]`} />
+
+## Idiomatic Go — functional options
+
+This is the Go community's standard answer. `NewServer` applies defaults, then each `Option` closure tweaks the result. Edit and **Run**:
+
+<Playground client:visible title="builder.go" code={`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+type Server struct {
+	host    string
+	port    int
+	timeout time.Duration
+	tls     bool
+}
+
+// Option configures a Server.
+type Option func(*Server)
+
+func WithPort(p int) Option              { return func(s *Server) { s.port = p } }
+func WithTimeout(d time.Duration) Option { return func(s *Server) { s.timeout = d } }
+func WithTLS() Option                    { return func(s *Server) { s.tls = true } }
+
+// NewServer applies sensible defaults, then each option in turn.
+func NewServer(host string, opts ...Option) *Server {
+	s := &Server{host: host, port: 8080, timeout: 30 * time.Second} // defaults
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func main() {
+	a := NewServer("localhost") // all defaults
+	b := NewServer("example.com", WithPort(443), WithTLS(), WithTimeout(5*time.Second))
+
+	fmt.Printf("%+v\n", *a)
+	fmt.Printf("%+v\n", *b)
+}`} />
+
+## The classic fluent builder
+
+The GoF "method-chaining" builder is also valid Go — useful when construction is staged or needs a final `Build()` validation step:
+
+```go
+type ServerBuilder struct{ s Server }
+
+func NewServerBuilder(host string) *ServerBuilder {
+	return &ServerBuilder{Server{host: host, port: 8080}}
+}
+func (b *ServerBuilder) Port(p int) *ServerBuilder { b.s.port = p; return b }
+func (b *ServerBuilder) TLS() *ServerBuilder        { b.s.tls = true; return b }
+func (b *ServerBuilder) Build() Server              { return b.s } // validate here
+
+// NewServerBuilder("x").Port(443).TLS().Build()
+```
+
+<Callout type="go" title="🐹 Functional options win for libraries">
+Because Go has no default or named parameters, **functional options** are the idiomatic builder — and they're what gRPC, the AWS SDK, and countless libraries use. The killer feature: you can add `WithKeepAlive(...)` later and every existing caller still compiles. Reach for the chained builder when you genuinely need staged construction or a validating `Build()` step.
+</Callout>
+
+## In the standard library
+
+- **`strings.Builder`** — accumulate a string without repeated allocations.
+- **`bytes.Buffer`** — build up bytes incrementally.
+- **`net/http`** and **`text/template`** lean on option-style configuration.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Don't out-build a three-field struct">
+Functional options shine when there are many optional knobs. For a small struct, a named-field literal — `Server{Host: "x", Port: 443}` — is clearer than a pile of `WithX` functions. Add the machinery when the option count actually justifies it.
+</Callout>

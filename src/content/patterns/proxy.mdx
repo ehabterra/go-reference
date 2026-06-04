@@ -1,0 +1,145 @@
+---
+title: "Proxy"
+category: structural
+kind: pattern
+order: 13
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Provide a stand-in for another object that implements the same interface, to control access to it."
+when_use:
+  - "You want lazy/expensive initialization (create the real thing only on first use)."
+  - "You need to add access control, caching, logging, metrics, or rate-limiting in front of an object."
+  - "You're accessing a remote object and want a local stand-in (a remote proxy)."
+when_avoid:
+  - "You're adding features/behavior, not controlling access — that's a Decorator."
+  - "The extra indirection buys nothing — don't wrap for the sake of wrapping."
+related:
+  - decorator
+  - adapter
+  - facade
+quiz:
+  - q: "What is a Proxy's purpose?"
+    options:
+      - text: "Stand in for a real object (same interface) to control access to it — lazy load, cache, authorize, log, or remote it"
+        correct: true
+      - text: "Convert one interface into another"
+        correct: false
+      - text: "Create families of objects"
+        correct: false
+      - text: "Merge several subsystems"
+        correct: false
+    explain: "A proxy implements the subject's interface and forwards calls, inserting access control such as lazy creation, caching, permissions, or remoting."
+  - q: "Proxy and Decorator look structurally identical. What differs?"
+    options:
+      - text: "Intent — Decorator adds behavior/features; Proxy controls access to the real object"
+        correct: true
+      - text: "Decorator can't use interfaces"
+        correct: false
+      - text: "Proxy must use generics"
+        correct: false
+      - text: "Nothing differs"
+        correct: false
+    explain: "Both wrap an object behind the same interface. A decorator enriches what the object does; a proxy governs whether/when/how you reach it (lazy, cached, authorized, remote)."
+  - q: "Which standard-library type is a remote Proxy?"
+    options:
+      - text: "net/http/httputil.ReverseProxy"
+        correct: true
+      - text: "strings.Builder"
+        correct: false
+      - text: "sync.WaitGroup"
+        correct: false
+      - text: "sort.Slice"
+        correct: false
+    explain: "ReverseProxy stands in locally for a remote backend: it presents the http.Handler interface and forwards requests to the real server — a textbook remote proxy."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="💳 Analogy">
+A credit card is a proxy for your bank account. It offers the same operation — "pay" — but in front of the real money it adds authorization, spending limits, and a log of every transaction. The merchant never touches your account directly; they go through the stand-in.
+</Callout>
+
+## The problem
+
+You want to put a layer in front of an object — to delay its expensive creation, cache its results, check permissions, log calls, or reach it over the network — **without** changing the object or the code that uses it. A proxy implements the **same interface** as the real subject and forwards calls, slipping its control logic in between.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Image {
+    <<interface>>
+    +Display() string
+  }
+  class RealImage {
+    -file string
+    +Display() string
+  }
+  class ProxyImage {
+    -file string
+    -real RealImage
+    +Display() string
+  }
+  Image <|.. RealImage
+  Image <|.. ProxyImage
+  ProxyImage o--> RealImage : controls access to`} />
+
+## Idiomatic Go
+
+A virtual proxy loads the expensive `RealImage` only on first use, then caches it. Callers depend only on the `Image` interface and never know. Edit and **Run**:
+
+<Playground client:visible title="proxy.go" code={`package main
+
+import "fmt"
+
+// Subject interface — callers depend on this.
+type Image interface {
+	Display() string
+}
+
+// RealSubject: expensive to create.
+type RealImage struct{ file string }
+
+func NewRealImage(file string) *RealImage {
+	fmt.Println("loading", file, "from disk (expensive)")
+	return &RealImage{file}
+}
+func (r *RealImage) Display() string { return "showing " + r.file }
+
+// Proxy: same interface, but defers creation and caches the result.
+type ProxyImage struct {
+	file string
+	real *RealImage
+}
+
+func (p *ProxyImage) Display() string {
+	if p.real == nil { // virtual proxy: create on first use only
+		p.real = NewRealImage(p.file)
+	}
+	return p.real.Display()
+}
+
+func main() {
+	var img Image = &ProxyImage{file: "photo.png"}
+	fmt.Println("proxy created — nothing loaded yet")
+
+	fmt.Println(img.Display()) // loads now
+	fmt.Println(img.Display()) // cached — no second load
+}`} />
+
+<Callout type="go" title="🐹 Proxy vs Decorator — same shape, different intent">
+Both wrap an object behind its interface, so in Go they look almost the same. Ask *why* you're wrapping: adding features (compression, buffering)? That's a [Decorator](/patterns/decorator/). Controlling access (lazy, cache, auth, remote)? That's a Proxy. Common Go proxies include caching layers, lazy loaders, and `httputil.ReverseProxy`.
+</Callout>
+
+## In the standard library
+
+- **`net/http/httputil.ReverseProxy`** — a remote proxy forwarding to a backend.
+- **`database/sql`** connection pooling hands you a proxy over a real connection.
+- Lazy/`sync.Once`-guarded accessors act as virtual proxies for expensive resources.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Hidden cost and hidden state">
+A proxy makes a cheap-looking call secretly expensive (the first `Display()` hits the disk) or stateful (caching). That's the point — but document it, and mind concurrency: a virtual proxy's lazy init needs a `sync.Once` or mutex if multiple goroutines might trigger it at once, or you'll load twice and race.
+</Callout>

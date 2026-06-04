@@ -1,0 +1,144 @@
+---
+title: "Bridge"
+category: structural
+kind: pattern
+order: 8
+difficulty: "Advanced"
+gof: true
+status: ready
+intent: "Decouple an abstraction from its implementation so the two can vary independently, instead of multiplying into N×M types."
+when_use:
+  - "Two (or more) dimensions vary independently — e.g. shape × renderer, message × transport."
+  - "You'd otherwise get a class explosion (CircleSVG, CircleCanvas, SquareSVG, …)."
+  - "You want to swap the implementation at runtime."
+when_avoid:
+  - "Only one dimension actually varies — a single interface (or Strategy) is enough."
+  - "The abstraction and implementation never change independently."
+related:
+  - adapter
+  - strategy
+  - abstract-factory
+quiz:
+  - q: "What does Bridge decouple?"
+    options:
+      - text: "An abstraction (what it is) from its implementation (how it's carried out), so each varies independently"
+        correct: true
+      - text: "Two unrelated programs"
+        correct: false
+      - text: "A struct from its methods"
+        correct: false
+      - text: "Producers from consumers"
+        correct: false
+    explain: "Bridge splits a design along two axes and connects them with an interface, so you can combine any abstraction with any implementation without subclassing every pairing."
+  - q: "What explosion does Bridge prevent?"
+    options:
+      - text: "The N×M subclass explosion of combining two varying dimensions"
+        correct: true
+      - text: "Stack overflow"
+        correct: false
+      - text: "Goroutine leaks"
+        correct: false
+      - text: "Import cycles"
+        correct: false
+    explain: "Without Bridge, M shapes × N renderers means M×N concrete types. With Bridge it's M + N — each side grows independently."
+  - q: "How does Bridge differ from Adapter?"
+    options:
+      - text: "Bridge is designed up front to separate two hierarchies; Adapter retrofits compatibility onto an existing incompatible interface"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Bridge converts interfaces; Adapter splits dimensions"
+        correct: false
+      - text: "Adapter is creational"
+        correct: false
+    explain: "Adapter is reactive — make X fit interface Y after the fact. Bridge is proactive design — keep the abstraction and implementation apart so both can evolve."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📺 Analogy">
+A TV remote (the abstraction) and the TV itself (the implementation) evolve separately. A fancy universal remote works with a Sony or a Samsung; a basic remote works with both too. You don't build a SonyFancyRemote and a SamsungBasicRemote for every pairing — the remote talks to any TV through a shared interface.
+</Callout>
+
+## The problem
+
+Two things vary at once: *what* you're drawing (circle, square) and *how* it's rendered (vector, ASCII). Model them with inheritance and you need a type for every combination — `CircleVector`, `CircleASCII`, `SquareVector`… an N×M explosion. Bridge separates the two hierarchies: the abstraction **holds a reference** to an implementation interface, so each side grows on its own.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Circle {
+    -renderer Renderer
+    -radius float64
+    +Draw()
+    +Resize()
+  }
+  class Renderer {
+    <<interface>>
+    +RenderCircle(radius)
+  }
+  class VectorRenderer { +RenderCircle() }
+  class ASCIIRenderer { +RenderCircle() }
+  Circle o--> Renderer : bridges to
+  Renderer <|.. VectorRenderer
+  Renderer <|.. ASCIIRenderer`} />
+
+## Idiomatic Go
+
+In Go, Bridge is just composition: the abstraction holds the implementation as an **interface field**. Any shape pairs with any renderer — no combinatorial types. Edit and **Run**:
+
+<Playground client:visible title="bridge.go" code={`package main
+
+import "fmt"
+
+// Implementor: the "how it's rendered" dimension.
+type Renderer interface {
+	RenderCircle(radius float64) string
+}
+
+type VectorRenderer struct{}
+
+func (VectorRenderer) RenderCircle(r float64) string {
+	return fmt.Sprintf("vector circle, radius %.1f", r)
+}
+
+type ASCIIRenderer struct{}
+
+func (ASCIIRenderer) RenderCircle(r float64) string {
+	return fmt.Sprintf("ascii circle, ~%d chars wide", int(r*2))
+}
+
+// Abstraction: the "what it is" dimension, bridged to a Renderer.
+type Circle struct {
+	renderer Renderer
+	radius   float64
+}
+
+func (c Circle) Draw() string      { return c.renderer.RenderCircle(c.radius) }
+func (c *Circle) Resize(f float64) { c.radius *= f }
+
+func main() {
+	// any shape × any renderer — no CircleVector / CircleASCII explosion
+	for _, r := range []Renderer{VectorRenderer{}, ASCIIRenderer{}} {
+		c := Circle{renderer: r, radius: 5}
+		c.Resize(2)
+		fmt.Println(c.Draw())
+	}
+}`} />
+
+<Callout type="go" title="🐹 Bridge is almost invisible in Go">
+Because Go pushes you toward "composition over inheritance," Bridge often appears without anyone naming it — you just hold an interface field. The *skill* is recognizing the two independent dimensions early and refusing to let them multiply. It resembles [Strategy](/patterns/strategy/) (inject behavior) but Strategy swaps an algorithm, while Bridge separates a whole abstraction hierarchy from an implementation hierarchy.
+</Callout>
+
+## In the standard library
+
+- **`io.Writer`** bridges writers (`fmt.Fprintf`, loggers) from concrete sinks (file, buffer, socket).
+- **`database/sql`** bridges the SQL API from pluggable drivers.
+- **`log/slog`** bridges the logging front-end from its `Handler` back-ends.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Don't bridge a single dimension">
+If only one axis ever varies, a Bridge is over-design — a plain interface (or Strategy) says it better. The pattern earns its complexity only when *both* sides genuinely change independently. Introduce it when the second dimension actually appears, not before.
+</Callout>
