@@ -1,0 +1,151 @@
+---
+title: "Patterns Cheat-Sheet"
+category: practice
+kind: guide
+order: 35
+difficulty: "Reference"
+status: ready
+intent: "A one-page map of every pattern — its intent, the idiomatic Go form, and when to reach for it. Built for revision and interview prep."
+related:
+  - foundations
+  - stdlib-patterns
+quiz:
+  - q: "Wrapping an http.Handler to add logging, then auth, then gzip — each keeping the same interface — is which pattern?"
+    options:
+      - text: "Decorator (a.k.a. middleware)"
+        correct: true
+      - text: "Singleton"
+        correct: false
+      - text: "Visitor"
+        correct: false
+      - text: "Memento"
+        correct: false
+    explain: "Same interface in, same interface out, behavior added by wrapping — Decorator. In HTTP form it's a middleware chain (Chain of Responsibility too)."
+  - q: "You launch a goroutine per request but want at most 5 hitting the API at once. Which pattern?"
+    options:
+      - text: "Semaphore (a buffered chan struct{})"
+        correct: true
+      - text: "Prototype"
+        correct: false
+      - text: "Facade"
+        correct: false
+      - text: "Mediator"
+        correct: false
+    explain: "A counting semaphore caps how many goroutines are in the critical section while you still spawn one per task. A worker pool is the alternative when you have a fixed queue."
+  - q: "Letting callers decide how a slice is sorted by passing a comparison function is…"
+    options:
+      - text: "Strategy"
+        correct: true
+      - text: "Builder"
+        correct: false
+      - text: "Observer"
+        correct: false
+      - text: "Bridge"
+        correct: false
+    explain: "An interchangeable algorithm chosen at runtime — Strategy. In Go it's just a func value, exactly like sort.Slice's `less`."
+  - q: "You need exactly one shared config, initialized once, safe under concurrency."
+    options:
+      - text: "Singleton via sync.Once"
+        correct: true
+      - text: "Flyweight"
+        correct: false
+      - text: "Adapter"
+        correct: false
+      - text: "Command"
+        correct: false
+    explain: "One instance, one access point, initialized once — Singleton, and sync.Once makes the lazy version race-free."
+---
+import Callout from '../../components/Callout.astro';
+
+The whole catalog at a glance. Each row links to the full page; skim to find the right tool, then dive in.
+
+<Callout type="intent" title="🎯 How to read this">
+**Intent** is the one-line purpose. **Idiomatic Go** is the form you'll actually write — often lighter than the textbook version, because Go's interfaces, functions, embedding, and goroutines do a lot of the work.
+</Callout>
+
+## Creational — how objects get made
+
+| Pattern | Intent | Idiomatic Go |
+|---|---|---|
+| [Singleton](/patterns/singleton/) | One instance, one access point | `sync.Once`; a package-level var |
+| [Factory Method](/patterns/factory-method/) | Decide which concrete type to build, behind an interface | `NewX() Iface`; a creation method per context |
+| [Abstract Factory](/patterns/abstract-factory/) | Create a family of related objects that must match | A factory interface with several `Create…` methods |
+| [Builder](/patterns/builder/) | Construct a complex object step by step | Functional options: `New(req, ...Option)` |
+| [Prototype](/patterns/prototype/) | Create new objects by cloning a configured one | Explicit `Clone()`; `slices.Clone` / `maps.Clone` |
+
+## Structural — how objects compose
+
+| Pattern | Intent | Idiomatic Go |
+|---|---|---|
+| [Adapter](/patterns/adapter/) | Make an incompatible type fit an expected interface | A wrapper with the target's methods (`http.HandlerFunc`) |
+| [Bridge](/patterns/bridge/) | Separate an abstraction from its implementation | Hold the implementation as an interface field |
+| [Composite](/patterns/composite/) | Treat leaves and trees uniformly | An interface + a node holding `[]Iface` |
+| [Decorator](/patterns/decorator/) | Add behavior by wrapping, same interface | Embed the interface; `io` wrappers, middleware |
+| [Facade](/patterns/facade/) | One simple entry over a complex subsystem | A struct holding subsystems, coarse methods |
+| [Flyweight](/patterns/flyweight/) | Share immutable state across many objects | A cache/interning factory of shared values |
+| [Proxy](/patterns/proxy/) | A stand-in that controls access | Same interface, wraps the subject (lazy, cache, `ReverseProxy`) |
+
+## Behavioral — how objects collaborate
+
+| Pattern | Intent | Idiomatic Go |
+|---|---|---|
+| [Chain of Responsibility](/patterns/chain-of-responsibility/) | Pass a request along handlers until one handles it | HTTP middleware `func(next) Handler` |
+| [Command](/patterns/command/) | Capture a request as an object (queue, log, undo) | `Execute`/`Undo` interface; or a `func()` |
+| [Interpreter](/patterns/interpreter/) | Evaluate sentences of a small grammar | Tree of `Eval()` nodes (Composite + recursion) |
+| [Iterator](/patterns/iterator/) | Traverse a collection without exposing it | `range`, channels, or `iter.Seq` (Go 1.23) |
+| [Mediator](/patterns/mediator/) | Centralize many-to-many communication | A hub struct colleagues talk to |
+| [Memento](/patterns/memento/) | Snapshot/restore state without breaking encapsulation | Opaque struct with unexported fields |
+| [Observer](/patterns/observer/) | Notify many dependents on change | An interface list, or channels + goroutines |
+| [State](/patterns/state/) | Change behavior with internal state | One type per state implementing a `State` interface |
+| [Strategy](/patterns/strategy/) | Swap interchangeable algorithms at runtime | A `func` value or small interface (`sort.Slice`) |
+| [Template Method](/patterns/template-method/) | Fixed skeleton, caller fills the steps | Inject steps as an interface or func fields |
+| [Visitor](/patterns/visitor/) | Add operations to a stable set of types | `Accept`/`Visit` double dispatch, or a type switch |
+
+## Concurrency — the Go specials
+
+| Pattern | Intent | Idiomatic Go |
+|---|---|---|
+| [Generator](/patterns/generator/) | Lazy/infinite stream from a goroutine | `func(done) <-chan T`; producer closes the channel |
+| [Pipeline](/patterns/pipeline/) | Stream through channel-connected stages | Each stage owns and closes its output channel |
+| [Fan-out / Fan-in](/patterns/fan-in-fan-out/) | Parallelize a stage, then merge results | N workers on one chan; `WaitGroup` to merge & close |
+| [Worker Pool](/patterns/worker-pool/) | Bound concurrency with N workers | A jobs channel + a fixed set of workers |
+| [Semaphore](/patterns/semaphore/) | Cap how many run at once | Buffered `chan struct{}`; `x/sync/semaphore` |
+| [Context & Cancellation](/patterns/context-cancellation/) | Propagate cancel, deadline, request values | `ctx` first arg; select on `ctx.Done()` |
+| [Or-done](/patterns/or-done-channel/) | Range a stream that stops cleanly on cancel | Wrap each receive in a `select` on `done` |
+| [errgroup](/patterns/errgroup/) | Concurrent tasks: wait + first error + cancel | `errgroup.WithContext`, `g.Go`, `g.SetLimit` |
+| [Pub/Sub](/patterns/pub-sub/) | Broadcast to dynamic subscribers | A broker: mutex-guarded map of channels |
+
+## Decision shortcuts — "I need to…"
+
+<Callout type="tip" title="✅ Pick a pattern by what you're trying to do">
+- **…guarantee one instance** → [Singleton](/patterns/singleton/)
+- **…hide which concrete type I build** → [Factory Method](/patterns/factory-method/) / [Abstract Factory](/patterns/abstract-factory/)
+- **…handle many optional config fields** → [Builder](/patterns/builder/) (functional options)
+- **…add behavior to an object** → [Decorator](/patterns/decorator/)
+- **…control access to an object** → [Proxy](/patterns/proxy/)
+- **…make X fit interface Y** → [Adapter](/patterns/adapter/)
+- **…put one door over a subsystem** → [Facade](/patterns/facade/)
+- **…swap an algorithm at runtime** → [Strategy](/patterns/strategy/) (often just a func)
+- **…support undo/redo** → [Command](/patterns/command/) + [Memento](/patterns/memento/)
+- **…react when something changes** → [Observer](/patterns/observer/) / [Pub/Sub](/patterns/pub-sub/)
+- **…walk a tree** → [Composite](/patterns/composite/) + [Iterator](/patterns/iterator/) / [Visitor](/patterns/visitor/)
+- **…bound concurrency** → [Worker Pool](/patterns/worker-pool/) / [Semaphore](/patterns/semaphore/)
+- **…cancel a tree of goroutines** → [Context](/patterns/context-cancellation/)
+- **…run concurrent tasks that can fail** → [errgroup](/patterns/errgroup/)
+</Callout>
+
+## Patterns Go quietly reshapes
+
+<Callout type="go" title="🐹 Where a 'pattern' becomes a one-liner">
+- **Strategy** → a `func` value (`sort.Slice`'s `less`)
+- **Iterator** → `range` and `iter.Seq`
+- **Singleton** → `sync.Once`
+- **Observer / Pub-Sub** → channels + goroutines
+- **Decorator / Chain of Responsibility** → `io` wrappers and HTTP middleware
+- **Template Method / Bridge** → struct embedding + an interface field
+- **Factory** → a plain `NewX()` function
+
+The lesson from [Foundations](/patterns/foundations/): in Go, many patterns aren't ceremonies you build — they're the natural shape the language already nudges you toward.
+</Callout>
+
+## Test yourself
