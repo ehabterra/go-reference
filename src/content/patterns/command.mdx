@@ -1,0 +1,170 @@
+---
+title: "Command"
+category: behavioral
+kind: pattern
+order: 15
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Turn a request into a standalone object, letting you parameterize, queue, log, and undo operations."
+aka: "Action, Transaction"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/command/main.go"
+when_use:
+  - "You need undo/redo — each command knows how to reverse itself."
+  - "You want to queue, schedule, or log operations, or replay them later."
+  - "You want to decouple the thing that triggers an action (a button) from the thing that performs it (a device)."
+when_avoid:
+  - "A direct method call does the job — wrapping every action in an object is needless ceremony."
+  - "There's no need to store, queue, or reverse the action."
+related:
+  - strategy
+  - memento
+  - chain-of-responsibility
+quiz:
+  - q: "What does Command turn an operation into?"
+    options:
+      - text: "A first-class object you can store, pass, queue, and undo"
+        correct: true
+      - text: "A goroutine"
+        correct: false
+      - text: "A global variable"
+        correct: false
+      - text: "An interface with no methods"
+        correct: false
+    explain: "By capturing a request (plus its receiver and arguments) as an object, you can keep it in a list, log it, send it elsewhere, or call Undo() on it."
+  - q: "What makes undo/redo natural with Command?"
+    options:
+      - text: "Each command implements both Execute and Undo, and the invoker keeps a history stack"
+        correct: true
+      - text: "Go automatically reverses functions"
+        correct: false
+      - text: "The receiver stores all past states"
+        correct: false
+      - text: "Commands can't be undone"
+        correct: false
+    explain: "Because a command knows how to do *and* reverse its action, the invoker just pushes executed commands onto a stack and pops+Undo to go back."
+  - q: "Which standard-library type is a Command object?"
+    options:
+      - text: "os/exec.Cmd — a configured, runnable command"
+        correct: true
+      - text: "fmt.Stringer"
+        correct: false
+      - text: "time.Duration"
+        correct: false
+      - text: "sync.WaitGroup"
+        correct: false
+    explain: "exec.Cmd captures a request to run a program (path, args, env, I/O) as an object you configure and then Run/Start — the Command pattern in the stdlib."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎫 Analogy">
+At a diner, the waiter writes your order on a ticket and clips it to the kitchen rail. The ticket is a **command object**: it captures *what* to make, the cook (receiver) executes it, tickets can pile up in a queue, and a voided ticket can be reversed. The waiter who takes the order never has to know how to cook it.
+</Callout>
+
+## The problem
+
+You want the object that **triggers** an action (a remote button, a menu item) to be decoupled from the object that **performs** it (a light, a document). And you want to do more than fire-and-forget: queue actions, log them, replay them, and **undo** them. Command captures each request — receiver included — as an object with `Execute()` and `Undo()`.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Command {
+    <<interface>>
+    +Execute()
+    +Undo()
+  }
+  class LightOn {
+    -light Light
+    +Execute()
+    +Undo()
+  }
+  class Light {
+    +On()
+    +Off()
+  }
+  class Remote {
+    -history Command[]
+    +Press(Command)
+    +Undo()
+  }
+  Command <|.. LightOn
+  LightOn --> Light : acts on (receiver)
+  Remote o--> Command : invokes & records`} />
+
+The four roles: **Command** (interface), **Concrete command** (`LightOn`, holds the receiver), **Receiver** (`Light`, does the work), **Invoker** (`Remote`, triggers commands and keeps history).
+
+## Idiomatic Go
+
+The invoker keeps an undo stack; each press records the command, each undo pops and reverses it. Edit and **Run**:
+
+<Playground client:visible title="command.go" code={`package main
+
+import "fmt"
+
+// Receiver: the object that does the real work.
+type Light struct{ name string }
+
+func (l *Light) On()  { fmt.Printf("%s light: ON\n", l.name) }
+func (l *Light) Off() { fmt.Printf("%s light: OFF\n", l.name) }
+
+// Command: a request captured as an object, with Undo.
+type Command interface {
+	Execute()
+	Undo()
+}
+
+type LightOn struct{ light *Light }
+
+func (c LightOn) Execute() { c.light.On() }
+func (c LightOn) Undo()    { c.light.Off() }
+
+type LightOff struct{ light *Light }
+
+func (c LightOff) Execute() { c.light.Off() }
+func (c LightOff) Undo()    { c.light.On() }
+
+// Invoker: triggers commands and remembers them for undo.
+type Remote struct{ history []Command }
+
+func (r *Remote) Press(c Command) {
+	c.Execute()
+	r.history = append(r.history, c)
+}
+func (r *Remote) Undo() {
+	if len(r.history) == 0 {
+		fmt.Println("nothing to undo")
+		return
+	}
+	last := r.history[len(r.history)-1]
+	r.history = r.history[:len(r.history)-1]
+	last.Undo()
+}
+
+func main() {
+	kitchen := &Light{name: "Kitchen"}
+	r := &Remote{}
+
+	r.Press(LightOn{kitchen})
+	r.Press(LightOff{kitchen})
+	r.Undo() // reverses the OFF -> back ON
+	r.Undo() // reverses the ON  -> back OFF
+	r.Undo() // nothing left
+}`} />
+
+<Callout type="go" title="🐹 When you don't need undo, a func is enough">
+If a command is just "do this" with no reversal, Go's first-class functions collapse the whole pattern into a `type Command func()` and a slice of closures. Keep the interface form when commands need **state** (like `Undo`, parameters, or a name for logging) — which is exactly when Command earns its keep.
+</Callout>
+
+## In the standard library
+
+- **`os/exec.Cmd`** — a runnable command captured as a configurable object.
+- **`flag`** — subcommand actions captured and dispatched.
+- **Job queues** — anything you push onto a channel as "work to do" is Command-flavored.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Undo is only as good as your state capture">
+Reversing an action means restoring the previous state. For simple toggles that's trivial; for rich edits, a command may need to snapshot what it's about to change (that's where [Memento](/patterns/memento/) comes in). Don't assume `Undo` is free — design it alongside `Execute`.
+</Callout>

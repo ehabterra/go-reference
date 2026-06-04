@@ -1,0 +1,214 @@
+---
+title: "Observer"
+category: behavioral
+kind: pattern
+order: 20
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Define a one-to-many dependency so that when one object changes state, all its dependents are notified automatically."
+aka: "Publish–Subscribe (in-process), Dependents"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/observer"
+when_use:
+  - "One object's change must update many others, and you don't want the subject to know their concrete types."
+  - "Subscribers come and go at runtime."
+  - "You want loose coupling between an event source and its consumers."
+when_avoid:
+  - "There's a single, fixed dependent — a direct call is clearer."
+  - "You need strict ordering/consistency guarantees, or notifications can cascade into cycles."
+  - "Observers may forget to unsubscribe — that's a classic memory leak."
+related:
+  - pub-sub
+  - mediator
+  - strategy
+quiz:
+  - q: "What is the difference between push and pull Observer?"
+    options:
+      - text: "Push sends the changed data in the notification; pull just signals, and observers fetch what they need"
+        correct: true
+      - text: "Push is synchronous, pull is always concurrent"
+        correct: false
+      - text: "Pull sends more data than push"
+        correct: false
+      - text: "There is no difference"
+        correct: false
+    explain: "In push, the subject passes data to Update(temp, humidity). In pull, the subject just says 'something changed' and each observer calls getters to read exactly what it cares about."
+  - q: "Why does the subject copy its observer slice under the lock before notifying?"
+    options:
+      - text: "To avoid holding the lock during callbacks and to safely iterate even if an observer (un)subscribes mid-notify"
+        correct: true
+      - text: "To make a backup file"
+        correct: false
+      - text: "Because slices can't be ranged over"
+        correct: false
+      - text: "To sort the observers"
+        correct: false
+    explain: "Copying under the lock, then releasing it before calling Update, prevents deadlocks (an observer that re-enters the subject) and avoids mutating the slice while iterating it."
+  - q: "What's the Go-native channel form of Observer?"
+    options:
+      - text: "Each observer is a goroutine ranging over its own channel; the subject sends events to those channels"
+        correct: true
+      - text: "Observers poll a global variable in a busy loop"
+        correct: false
+      - text: "The subject calls os.Exit on change"
+        correct: false
+      - text: "Reflection on struct tags"
+        correct: false
+    explain: "Channels are Go's broadcast primitive: the subject holds a list of channels and sends each a Message; observers receive in their own goroutine. A select-with-timeout can drop messages to slow observers."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📰 Analogy">
+A newspaper publisher doesn't know who its readers are. When a new edition is ready, every current subscriber gets a copy delivered. You can subscribe or cancel at any time, and the publisher keeps doing its job. Subject and subscribers are loosely coupled — that's Observer.
+</Callout>
+
+## The problem
+
+A `WeatherData` station has measurements; several displays must refresh whenever those measurements change. Hard-coding the displays into `WeatherData` couples them forever and blocks adding new displays. Observer flips it: the subject keeps a **list of observers** and notifies them through a small interface, never knowing their concrete types.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Subject {
+    <<interface>>
+    +Register(Observer)
+    +Remove(Observer)
+    +notify()
+  }
+  class Observer {
+    <<interface>>
+    +Update(data)
+  }
+  class WeatherData {
+    -observers Observer[]
+    +SetMeasurements()
+  }
+  class Display {
+    +Update(data)
+  }
+  Subject <|.. WeatherData
+  Observer <|.. Display
+  WeatherData o--> Observer : notifies`} />
+
+## How it works
+
+<Mermaid code={`sequenceDiagram
+  participant W as WeatherData (subject)
+  participant A as Phone display
+  participant B as Window display
+  W->>W: SetMeasurements(80, 65)
+  W->>A: Update(80, 65)
+  W->>B: Update(80, 65)
+  Note over A,B: every registered observer reacts`} />
+
+## Push vs pull
+
+There are two flavors, and the repo has both:
+
+- **Push** — the subject hands the data to the observer: `Update(temp, humidity, pressure)`. Simple, but every observer receives everything.
+- **Pull** — the subject just signals "I changed"; each observer calls getters (`Temperature()`, `Humidity()`) to read **only what it needs**. More flexible, slightly more work.
+
+## Idiomatic Go — the interface form (push)
+
+The classic shape: a `Subject` holding `[]Observer`, notifying each on change. Edit and **Run**:
+
+<Playground client:visible title="observer.go" code={`package main
+
+import "fmt"
+
+// Observer is notified with the new data (push style).
+type Observer interface {
+	Update(temp, humidity float32)
+}
+
+type WeatherData struct {
+	observers []Observer
+	temp, hum float32
+}
+
+func (w *WeatherData) Register(o Observer) { w.observers = append(w.observers, o) }
+func (w *WeatherData) Remove(o Observer) {
+	for i, x := range w.observers {
+		if x == o {
+			w.observers = append(w.observers[:i], w.observers[i+1:]...)
+			return
+		}
+	}
+}
+func (w *WeatherData) SetMeasurements(temp, hum float32) {
+	w.temp, w.hum = temp, hum
+	for _, o := range w.observers { // notify everyone
+		o.Update(temp, hum)
+	}
+}
+
+// A concrete observer.
+type Display struct{ name string }
+
+func (d *Display) Update(temp, hum float32) {
+	fmt.Printf("%s: %.0fF, %.0f%% humidity\n", d.name, temp, hum)
+}
+
+func main() {
+	wd := &WeatherData{}
+	wd.Register(&Display{"Phone"})
+	wd.Register(&Display{"Window"})
+
+	wd.SetMeasurements(80, 65)
+	wd.SetMeasurements(82, 70)
+}`} />
+
+## The Go-native form — channels
+
+Here's where Go shines. Instead of an `Observer` interface, each observer is a **goroutine ranging over its own channel**, and the subject broadcasts events to those channels. The repo's `channels/push` version even guards against slow observers with a `select` timeout so one stuck consumer can't block the publisher:
+
+```go
+type Message struct{ temp, hum, pres float32 }
+
+type WeatherData struct {
+	mu        sync.Mutex
+	observers []chan<- Message
+}
+
+func (w *WeatherData) Register(ch chan<- Message) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.observers = append(w.observers, ch)
+}
+
+func (w *WeatherData) Notify(m Message) {
+	w.mu.Lock()
+	subs := append([]chan<- Message(nil), w.observers...) // copy under lock
+	w.mu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- m: // delivered
+		case <-time.After(100 * time.Millisecond):
+			// slow observer — drop rather than block the subject
+		}
+	}
+}
+
+// each observer runs its own loop:
+//   go func() { for m := range ch { display.Update(m) } }()
+```
+
+<Callout type="go" title="🐹 Two correctness details worth stealing">
+**1. Copy the observer slice under the lock, then release it before notifying.** Both repo versions do this — it avoids holding the lock during callbacks (which could re-enter the subject and deadlock) and avoids mutating the slice while iterating. **2. Don't let one observer block the rest** — the channel form's `select`-with-timeout drops messages to a stalled consumer instead of freezing the whole system.
+</Callout>
+
+## In the standard library & ecosystem
+
+- **Channels** are Go's built-in broadcast primitive — the idiomatic Observer substrate.
+- **`context.Context`** cancellation is Observer-like: many goroutines watch `ctx.Done()` and react when it closes.
+- **`sync.Cond`** offers wait/signal/broadcast for the lower-level cases.
+- Scale it up to multiple producers and dynamic topics and you have [Pub/Sub](/patterns/pub-sub/).
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ The lapsed-listener leak">
+If observers register but never unregister (or their channels are never closed), the subject holds references forever and they never get garbage-collected — a slow memory leak. Always provide and use `Remove`/`Close`, and consider weak references or context-scoped lifetimes for long-lived subjects.
+</Callout>

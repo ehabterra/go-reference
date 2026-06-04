@@ -1,0 +1,158 @@
+---
+title: "Iterator"
+category: behavioral
+kind: pattern
+order: 17
+difficulty: "Beginner"
+gof: true
+status: ready
+intent: "Provide a way to access the elements of a collection sequentially without exposing its underlying representation."
+aka: "Cursor"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/iterator/main.go"
+when_use:
+  - "Callers should traverse a collection without knowing whether it's a slice, tree, ring buffer, or DB cursor."
+  - "You want one uniform traversal API across different container types."
+  - "You need more than one independent walk over the same data at once."
+when_avoid:
+  - "It's a plain slice or map — a `for range` is simpler than any iterator machinery."
+  - "You'd be building an iterator framework where the language already gives you one."
+related:
+  - composite
+  - generator
+  - visitor
+quiz:
+  - q: "What does the Iterator pattern hide from the caller?"
+    options:
+      - text: "The collection's underlying representation (slice, tree, cursor…)"
+        correct: true
+      - text: "The number of elements"
+        correct: false
+      - text: "The element type"
+        correct: false
+      - text: "Nothing — it just adds a loop"
+        correct: false
+    explain: "The caller uses HasNext/Next (or `range`) without depending on how the collection stores its elements, so the container can change internally without breaking callers."
+  - q: "What is Go's modern, built-in form of Iterator (Go 1.23+)?"
+    options:
+      - text: "range-over-func — a func(yield) you can use directly in `for range`"
+        correct: true
+      - text: "The reflect package"
+        correct: false
+      - text: "A linked list in container/list"
+        correct: false
+      - text: "goroutines only"
+        correct: false
+    explain: "Go 1.23 added range-over-func: a function of type iter.Seq[T] can be ranged over directly, making custom iteration first-class without HasNext/Next boilerplate."
+  - q: "Which is a standard-library iterator?"
+    options:
+      - text: "bufio.Scanner (Scan/Text over tokens)"
+        correct: true
+      - text: "fmt.Sprintf"
+        correct: false
+      - text: "sync.Once"
+        correct: false
+      - text: "os.Getenv"
+        correct: false
+    explain: "bufio.Scanner walks tokens (lines, words) one at a time via Scan()/Text() without revealing the buffer underneath — a textbook iterator. sql.Rows is another."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📺 Analogy">
+A TV remote's "channel up" button steps you through channels one at a time. You never need to know whether channels are stored in an array, a linked list, or fetched over the network — you just keep pressing "next" until there's nothing left. That button is an iterator.
+</Callout>
+
+## The problem
+
+Different collections store their elements differently — a menu in a slice, a filesystem in a tree, query results in a database cursor. If callers loop using each collection's internal shape, they're coupled to that shape. Iterator gives every collection the **same traversal interface**, so the container can change internally without breaking the code that walks it.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Iterator {
+    <<interface>>
+    +HasNext() bool
+    +Next() string
+  }
+  class MenuIterator {
+    -items string[]
+    -pos int
+    +HasNext() bool
+    +Next() string
+  }
+  Iterator <|.. MenuIterator`} />
+
+## Idiomatic Go — the classic form
+
+The repo's example uses the GoF shape: a small `Iterator` interface with `HasNext`/`Next`. (Returning a concrete type beats `interface{}` so callers skip type assertions.) Edit and **Run**:
+
+<Playground client:visible title="iterator.go" code={`package main
+
+import "fmt"
+
+// Iterator: a uniform way to walk a collection.
+type Iterator interface {
+	HasNext() bool
+	Next() string
+}
+
+type MenuIterator struct {
+	items []string
+	pos   int
+}
+
+func (m *MenuIterator) HasNext() bool { return m.pos < len(m.items) }
+func (m *MenuIterator) Next() string {
+	item := m.items[m.pos]
+	m.pos++
+	return item
+}
+
+func main() {
+	it := &MenuIterator{items: []string{"Pizza", "Burger", "Risotto"}}
+	for it.HasNext() {
+		fmt.Println(it.Next())
+	}
+}`} />
+
+## Idiomatic Go — range-over-func (Go 1.23+)
+
+Modern Go makes custom iteration first-class. A function of type `iter.Seq[T]` can be ranged over directly — no `HasNext`/`Next`, no exposed index:
+
+```go
+import "iter"
+
+func Menu() iter.Seq[string] {
+	items := []string{"Pizza", "Burger", "Risotto"}
+	return func(yield func(string) bool) {
+		for _, item := range items {
+			if !yield(item) { // stop early if the caller breaks
+				return
+			}
+		}
+	}
+}
+
+func main() {
+	for dish := range Menu() { // looks just like ranging a slice
+		fmt.Println(dish)
+	}
+}
+```
+
+<Callout type="go" title="🐹 Go gives you three iterators">
+For a plain slice or map, just use `for range`. For custom sequences, prefer **range-over-func** (`iter.Seq`). Reach for the classic `HasNext`/`Next` interface only when you need an explicit cursor object you can pass around or pause. Channels are a fourth, concurrent option — see [Generator](/patterns/generator/).
+</Callout>
+
+## In the standard library
+
+- **`bufio.Scanner`** — `Scan()` / `Text()` walk tokens without exposing the buffer.
+- **`sql.Rows`** — `Next()` / `Scan()` iterate query results.
+- **`slices.All`, `maps.Keys`, `strings.Lines`** (Go 1.23+) — return `iter.Seq` values.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Don't out-engineer a slice">
+If your data is already a slice, a custom iterator adds indirection for nothing — `for range` is the idiomatic answer. Build an iterator when the *structure* is non-trivial (a tree, a paged API, a stream) or when you genuinely need to hide it.
+</Callout>

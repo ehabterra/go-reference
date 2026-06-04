@@ -1,0 +1,154 @@
+---
+title: "Template Method"
+category: behavioral
+kind: pattern
+order: 23
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Define the skeleton of an algorithm once, deferring the steps that vary to per-type implementations."
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/template/main.go"
+when_use:
+  - "Several variants share the same overall procedure but differ in a few steps (SMS vs email OTP, tea vs coffee)."
+  - "You want to write the invariant sequence once and guarantee its order."
+  - "You want to let callers customize specific steps without touching the orchestration."
+when_avoid:
+  - "There's only one variant — there's no skeleton worth abstracting."
+  - "The steps don't really share a fixed order; Strategy or plain functions fit better."
+related:
+  - strategy
+  - factory-method
+  - command
+quiz:
+  - q: "What does Template Method fix, and what does it vary?"
+    options:
+      - text: "It fixes the algorithm's skeleton (the steps and their order) and varies individual steps"
+        correct: true
+      - text: "It fixes the steps and varies the order"
+        correct: false
+      - text: "It varies everything"
+        correct: false
+      - text: "It fixes nothing"
+        correct: false
+    explain: "The template method holds the invariant sequence; subtypes (or injected step implementations) fill in the parts that differ."
+  - q: "Go has no inheritance — how is Template Method expressed idiomatically?"
+    options:
+      - text: "A struct holds an interface of the varying steps; the template method calls that interface"
+        correct: true
+      - text: "Deep embedding chains only"
+        correct: false
+      - text: "Reflection over method names"
+        correct: false
+      - text: "It can't be done in Go"
+        correct: false
+    explain: "Instead of an abstract base class with overridable hooks, you inject the varying steps as an interface (or as function fields) and the fixed sequence calls into them."
+  - q: "How does Template Method differ from Strategy?"
+    options:
+      - text: "Template Method varies steps within a fixed skeleton; Strategy swaps the whole algorithm"
+        correct: true
+      - text: "They are the same"
+        correct: false
+      - text: "Strategy uses inheritance, Template Method uses functions"
+        correct: false
+      - text: "Template Method is creational"
+        correct: false
+    explain: "Template Method keeps control of the overall flow and lets you fill in blanks; Strategy hands the entire algorithm over to an interchangeable object."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🍵 Analogy">
+Making a hot drink follows a fixed recipe: boil water, brew, pour into a cup, add condiments. Tea and coffee differ only in *how* they brew and *what* condiments they add — the steps and their order never change. Template Method is that recipe card: the skeleton is fixed, two steps are left blank for each drink to fill in.
+</Callout>
+
+## The problem
+
+Sending a one-time passcode is always the same dance: generate the code, cache it, build a message, send a notification. Only a couple of steps differ between **SMS** and **email**. If you copy the whole sequence into each channel, the shared order drifts and bugs creep in. Template Method writes the sequence **once** and lets each channel supply just the steps that vary.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class OTPFlow {
+    -steps OTPSteps
+    +GenAndSend(length) "fixed skeleton"
+  }
+  class OTPSteps {
+    <<interface>>
+    +genOTP(length)
+    +saveCache(otp)
+    +message(otp)
+    +send(msg)
+  }
+  class SMS {
+    +genOTP() +saveCache() +message() +send()
+  }
+  class Email {
+    +genOTP() +saveCache() +message() +send()
+  }
+  OTPFlow o--> OTPSteps : calls the varying steps
+  OTPSteps <|.. SMS
+  OTPSteps <|.. Email`} />
+
+## Idiomatic Go
+
+Go has no abstract base class, so the "template method" lives on a struct that **holds an interface of the varying steps** — the repo's `OTP`/`iOTP` design. The fixed sequence calls into that interface. Edit and **Run**:
+
+<Playground client:visible title="template_method.go" code={`package main
+
+import "fmt"
+
+// The steps that vary between channels.
+type OTPSteps interface {
+	genOTP(length int) string
+	saveCache(otp string)
+	message(otp string) string
+	send(msg string) error
+}
+
+// Template method: the fixed sequence, written exactly once.
+type OTPFlow struct{ steps OTPSteps }
+
+func (f OTPFlow) GenAndSend(length int) error {
+	otp := f.steps.genOTP(length) // varies
+	f.steps.saveCache(otp)        // varies
+	msg := f.steps.message(otp)   // varies
+	fmt.Println(msg)
+	return f.steps.send(msg)      // varies
+}
+
+type SMS struct{}
+
+func (SMS) genOTP(n int) string       { return "1234" }
+func (SMS) saveCache(otp string)      { fmt.Println("SMS OTP cached") }
+func (SMS) message(otp string) string { return "Your SMS login code is " + otp }
+func (SMS) send(msg string) error     { fmt.Println("sent via SMS"); return nil }
+
+type Email struct{}
+
+func (Email) genOTP(n int) string       { return "5678" }
+func (Email) saveCache(otp string)      { fmt.Println("Email OTP cached") }
+func (Email) message(otp string) string { return "Your email login code is " + otp }
+func (Email) send(msg string) error     { fmt.Println("sent via Email"); return nil }
+
+func main() {
+	OTPFlow{steps: SMS{}}.GenAndSend(4)
+	fmt.Println("---")
+	OTPFlow{steps: Email{}}.GenAndSend(4)
+}`} />
+
+<Callout type="go" title="🐹 Two Go flavors — interface or function hooks">
+The repo embeds the base `OTP` in each channel; injecting the steps as an interface field (above) is the cleaner variant. For just one or two varying steps, you can skip the interface entirely and pass them as **function fields** on the struct — same pattern, less ceremony. Either way, the fixed flow stays in one place.
+</Callout>
+
+## In the standard library
+
+- **`sort.Sort`** — the sorting algorithm is the fixed skeleton; your `Len`/`Less`/`Swap` are the varying steps.
+- **`text/template` execution** — a fixed render loop calls your funcs and data.
+- **`testing`** — the test runner's setup → run → teardown flow with your `TestXxx` body as the variable step.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Watch the line with Strategy">
+If you find yourself letting callers replace the *whole* procedure, you've drifted into [Strategy](/patterns/strategy/). Template Method's value is that it **owns the flow** and only opens specific holes. If there's no meaningful fixed skeleton, don't force one.
+</Callout>
