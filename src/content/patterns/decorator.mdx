@@ -1,0 +1,155 @@
+---
+title: "Decorator"
+category: structural
+kind: pattern
+order: 10
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Attach new behavior to an object by wrapping it in another object of the same interface — without changing the original's type."
+aka: "Wrapper"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/decorator/main.go"
+when_use:
+  - "You want to add responsibilities to objects dynamically, in combinations, at runtime."
+  - "Subclassing every combination would explode (DarkRoastWithMochaAndWhipAndSoy…)."
+  - "You want to keep the base type closed for modification but open for extension."
+when_avoid:
+  - "There's exactly one fixed extension — just put it in the type."
+  - "Deeply nested wrappers make stack traces and debugging hard to follow."
+  - "Behavior depends on the *order* of wrapping in ways that surprise callers."
+related:
+  - composite
+  - adapter
+  - strategy
+  - chain-of-responsibility
+quiz:
+  - q: "How does Decorator differ from Adapter?"
+    options:
+      - text: "Decorator keeps the same interface and adds behavior; Adapter converts one interface into a different one"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Decorator changes the interface; Adapter keeps it"
+        correct: false
+      - text: "Decorator only works on numbers"
+        correct: false
+    explain: "A decorator is a wrapper that *is-a* the thing it wraps (same interface) and enriches it. An adapter is a wrapper that makes an object look like a *different* interface."
+  - q: "What Go feature makes decorators especially concise?"
+    options:
+      - text: "Goroutines"
+        correct: false
+      - text: "Struct embedding — embed the interface, override only the methods you change"
+        correct: true
+      - text: "The unsafe package"
+        correct: false
+      - text: "Build tags"
+        correct: false
+    explain: "Embedding the wrapped interface promotes all its methods automatically, so a decorator only writes the methods it actually modifies."
+  - q: "Which is a Decorator in Go's standard library?"
+    options:
+      - text: "gzip.NewWriter(w) wrapping an io.Writer"
+        correct: true
+      - text: "fmt.Sprintf"
+        correct: false
+      - text: "make([]int, 0)"
+        correct: false
+      - text: "os.Exit(1)"
+        correct: false
+    explain: "gzip.NewWriter wraps an io.Writer and returns an io.Writer that compresses — same interface, added behavior. bufio.NewReader and io.MultiWriter are the same idea."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="☕ Analogy">
+You order a dark roast. Add a shot of mocha — the price goes up and the name grows. Add whip, then soy. At each step you still have "a beverage" you can ask for a description and a cost, but it's been wrapped with one more topping. You never defined a `DarkRoastWithMochaAndWhipAndSoy` class — you just kept wrapping.
+</Callout>
+
+## The problem
+
+You want to add features to objects in **arbitrary combinations**. Modelling each combination as its own type is hopeless: with five condiments you'd need dozens of classes. Decorator instead makes each feature a **wrapper that holds a beverage and adds to it**, so combinations are built at runtime by nesting.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Beverage {
+    <<interface>>
+    +Description() string
+    +Cost() float64
+  }
+  class DarkRoast {
+    +Description() string
+    +Cost() float64
+  }
+  class Mocha {
+    -component Beverage
+    +Description() string
+    +Cost() float64
+  }
+  Beverage <|.. DarkRoast
+  Beverage <|.. Mocha
+  Mocha o--> Beverage : wraps`} />
+
+A decorator (`Mocha`) both **implements** `Beverage` and **holds** a `Beverage`. That dual role is what lets you stack wrappers indefinitely.
+
+## How it works
+
+Each layer delegates to the one it wraps, then adds its own contribution:
+
+<Mermaid code={`graph LR
+  D["DarkRoast<br/>$1.99"] --> M["+ Mocha<br/>+$0.20"] --> M2["+ Mocha<br/>+$0.20"] --> W["+ Whip<br/>+$0.10"] --> T["= $2.49"]`} />
+
+## Idiomatic Go
+
+The repo uses an explicit `component Beverage` field. Go's **struct embedding** makes it even tighter — embed the interface and override only `Description` and `Cost`. Edit and **Run**:
+
+<Playground client:visible title="decorator.go" code={`package main
+
+import "fmt"
+
+type Beverage interface {
+	Description() string
+	Cost() float64
+}
+
+// Base component.
+type DarkRoast struct{}
+
+func (DarkRoast) Description() string { return "Dark Roast" }
+func (DarkRoast) Cost() float64       { return 1.99 }
+
+// Mocha embeds a Beverage and decorates it.
+type Mocha struct{ Beverage }
+
+func (m Mocha) Description() string { return m.Beverage.Description() + ", Mocha" }
+func (m Mocha) Cost() float64       { return m.Beverage.Cost() + 0.20 }
+
+// Whip is another decorator.
+type Whip struct{ Beverage }
+
+func (w Whip) Description() string { return w.Beverage.Description() + ", Whip" }
+func (w Whip) Cost() float64       { return w.Beverage.Cost() + 0.10 }
+
+func main() {
+	var b Beverage = DarkRoast{}
+	b = Mocha{b}
+	b = Mocha{b} // double mocha
+	b = Whip{b}
+	fmt.Printf("%s = $%.2f\n", b.Description(), b.Cost())
+}`} />
+
+<Callout type="go" title="🐹 Decorators are everywhere in Go">
+The `io` package is built on decorators: `gzip.NewWriter(f)` wraps an `io.Writer` to add compression, `bufio.NewWriter(gz)` wraps that to add buffering — each keeps the `io.Writer` interface. The same idea drives HTTP middleware: `func(next http.Handler) http.Handler` wraps a handler with logging, auth, or recovery while still being an `http.Handler`.
+</Callout>
+
+## In the standard library
+
+- **`compress/gzip.NewWriter`, `bufio.NewReader/Writer`** — wrap an `io.Reader`/`io.Writer`.
+- **`io.MultiWriter`, `io.LimitReader`, `io.TeeReader`** — readers/writers that decorate others.
+- **`net/http` middleware** — handler wrappers for logging, auth, gzip, recovery.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Order matters, and depth hurts">
+Wrapping order changes behavior — gzip-then-buffer is not the same as buffer-then-gzip. And a tower of ten wrappers makes stack traces and debugging painful. Use decorators for genuinely composable, independent features; if the layering is fixed, a single type is clearer.
+</Callout>

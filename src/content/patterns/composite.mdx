@@ -1,0 +1,183 @@
+---
+title: "Composite"
+category: structural
+kind: pattern
+order: 9
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Treat individual objects and compositions of objects uniformly through one common interface."
+aka: "Object tree"
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/composite/main.go"
+when_use:
+  - "Your data is a part-whole hierarchy — files & folders, UI nodes, org charts, expression trees."
+  - "You want client code to treat a single item and a group of items the same way."
+  - "Operations should recurse through the structure without the caller writing the recursion."
+when_avoid:
+  - "The structure is flat — a plain slice is simpler than a tree of interfaces."
+  - "Leaves and containers need very different APIs; forcing one interface makes leaves implement meaningless methods."
+related:
+  - iterator
+  - decorator
+  - visitor
+quiz:
+  - q: "What makes Composite work?"
+    options:
+      - text: "Leaves and containers share one common interface, and containers hold a slice of that interface"
+        correct: true
+      - text: "Every node must be the same concrete type"
+        correct: false
+      - text: "It requires class inheritance"
+        correct: false
+      - text: "It only works for binary trees"
+        correct: false
+    explain: "Both File (leaf) and Folder (container) satisfy the Component interface, and Folder holds []Component — so a folder can contain files and other folders interchangeably."
+  - q: "Why does the caller's `root.Print(0)` not need a type switch?"
+    options:
+      - text: "Because Go has no type switches"
+        correct: false
+      - text: "Because each Component knows how to print itself; folders just recurse into their children"
+        correct: true
+      - text: "Because all files are printed first"
+        correct: false
+      - text: "Because Print is a package function"
+        correct: false
+    explain: "Polymorphism: Print is on the interface. A Folder's Print loops its children and calls their Print — leaf or folder, the call is identical."
+  - q: "Which pattern most naturally pairs with Composite to walk the tree?"
+    options:
+      - text: "Singleton"
+        correct: false
+      - text: "Iterator"
+        correct: true
+      - text: "Factory"
+        correct: false
+      - text: "Adapter"
+        correct: false
+    explain: "Iterator gives clients a uniform way to traverse the composite without exposing its tree structure — exactly what the repo example does with a depth-first compositeIterator."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗂️ Analogy">
+A folder on your computer can hold files — and other folders, which hold more files and folders. When you ask the OS for a folder's size, you don't care how deep it nests: the same request works whether it contains one file or a thousand nested folders. A folder and a file are, in that moment, the same kind of thing.
+</Callout>
+
+## The problem
+
+You have a **tree**: files inside folders, UI elements inside containers, an org chart of managers and reports. The painful way to process it is to keep asking "is this a single thing or a group?" and branching:
+
+```go
+func printAny(x any, indent int) {
+	switch v := x.(type) {
+	case *File:
+		// print file
+	case *Folder:
+		// print folder, then loop children and recurse...
+	}
+}
+```
+
+Every operation re-implements that type switch and recursion. Composite removes both by giving **leaves and containers one shared interface** — so the recursion lives inside the containers, and callers just make one polymorphic call.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Component {
+    <<interface>>
+    +Name() string
+    +Print(indent)
+  }
+  class File {
+    +Name() string
+    +Print(indent)
+  }
+  class Folder {
+    -children Component[]
+    +Add(Component)
+    +Name() string
+    +Print(indent)
+  }
+  Component <|.. File
+  Component <|.. Folder
+  Folder o--> Component : children`} />
+
+The crucial line is `Folder o--> Component`: a container holds the **same interface** it implements. That self-reference is what lets folders nest folders to any depth.
+
+## How it works
+
+One call on the root fans out through the whole tree:
+
+<Mermaid code={`graph TD
+  P["Folder: project"] --> M["File: go.mod"]
+  P --> S["Folder: src"]
+  S --> A["File: main.go"]
+  S --> B["File: util.go"]`} />
+
+## Idiomatic Go
+
+There's no inheritance — just a small interface and a struct that embeds a slice of it. Edit and **Run**:
+
+<Playground client:visible title="composite.go" code={`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Component: the common interface leaves and composites both satisfy.
+type Component interface {
+	Name() string
+	Print(indent int)
+}
+
+// File is a leaf — no children.
+type File struct{ name string }
+
+func (f *File) Name() string { return f.name }
+func (f *File) Print(indent int) {
+	fmt.Printf("%sFile: %s\n", strings.Repeat("  ", indent), f.name)
+}
+
+// Folder is a composite — it holds child Components (files OR folders).
+type Folder struct {
+	name     string
+	children []Component
+}
+
+func (f *Folder) Name() string   { return f.name }
+func (f *Folder) Add(c Component) { f.children = append(f.children, c) }
+func (f *Folder) Print(indent int) {
+	fmt.Printf("%sFolder: %s\n", strings.Repeat("  ", indent), f.name)
+	for _, c := range f.children {
+		c.Print(indent + 1) // same call — leaf or folder
+	}
+}
+
+func main() {
+	root := &Folder{name: "project"}
+	root.Add(&File{name: "go.mod"})
+
+	src := &Folder{name: "src"}
+	src.Add(&File{name: "main.go"})
+	src.Add(&File{name: "util.go"})
+	root.Add(src)
+
+	root.Print(0) // one call walks the entire tree
+}`} />
+
+<Callout type="go" title="🐹 Composite + Iterator in the repo">
+The [example in the repo](https://github.com/ehabterra/golearn/blob/main/patterns/gof/composite/main.go) goes one step further: every Component also exposes `CreateIterator()`, and a stack-based `compositeIterator` does a **depth-first traversal** of the tree. Leaves return a Null-Object `emptyIterator`. It's a lovely demonstration of Composite and [Iterator](/patterns/iterator/) working together — the caller walks the whole tree with a plain `for it.HasNext()` loop and never sees the recursion.
+</Callout>
+
+## In the standard library
+
+- **`io/fs` & `filepath.WalkDir`** walk a composite file tree through the `fs.FS` interface.
+- **`go/ast`** nodes form a composite — `ast.Inspect` recurses uniformly over them.
+- **`html.Node`** (`golang.org/x/net/html`) is a composite DOM tree.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Don't force a leaf to fake container methods">
+If your `Component` interface includes `Add(child)` and a leaf can't have children, the leaf is stuck implementing a method that panics or no-ops. Keep the shared interface to what **both** truly support (here: `Name`, `Print`), and put child management (`Add`) only on `Folder`. A meaningful common interface beats a bloated one.
+</Callout>

@@ -1,0 +1,163 @@
+---
+title: "Facade"
+category: structural
+kind: pattern
+order: 11
+difficulty: "Beginner"
+gof: true
+status: ready
+intent: "Provide a single, simplified interface over a complex subsystem, so clients don't have to orchestrate its parts."
+source: "https://github.com/ehabterra/golearn/blob/main/patterns/gof/facade/main.go"
+when_use:
+  - "A common task touches several subsystems (inventory, payment, shipping) and you want one entry point."
+  - "You want to decouple clients from the internals so the subsystem can change behind a stable surface."
+  - "You're wrapping a messy or legacy API and want to expose just the parts people actually need."
+when_avoid:
+  - "Clients genuinely need fine-grained control of the subsystem — a facade would hide what they require."
+  - "The 'facade' keeps growing until it's a god-object that does everything."
+related:
+  - adapter
+  - mediator
+  - singleton
+quiz:
+  - q: "What is a Facade's job?"
+    options:
+      - text: "Simplify — present one easy interface over many collaborating parts"
+        correct: true
+      - text: "Convert one interface into another"
+        correct: false
+      - text: "Add behavior by wrapping"
+        correct: false
+      - text: "Ensure a single instance"
+        correct: false
+    explain: "A facade orchestrates several subsystem calls behind one method. It simplifies (many → one); it doesn't translate interfaces (that's Adapter) or add layers (Decorator)."
+  - q: "In Go, what does a Facade usually look like?"
+    options:
+      - text: "A struct holding its subsystems (often as interfaces) with a few high-level methods"
+        correct: true
+      - text: "A global variable"
+        correct: false
+      - text: "A goroutine pool"
+        correct: false
+      - text: "A generic type parameter"
+        correct: false
+    explain: "Idiomatically it's a struct whose fields are the subsystem dependencies (as small interfaces, which also makes it testable), exposing coarse methods like PlaceOrder."
+  - q: "How does Facade differ from Adapter?"
+    options:
+      - text: "Facade simplifies many parts into one interface; Adapter makes one object match a different interface"
+        correct: true
+      - text: "They are the same"
+        correct: false
+      - text: "Facade always returns errors"
+        correct: false
+      - text: "Adapter must use generics"
+        correct: false
+    explain: "Facade is about reducing complexity across a subsystem; Adapter is about interface compatibility for a single object."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛎️ Analogy">
+At a hotel, you call the concierge for "dinner reservation, taxi at 7, and theatre tickets." You don't phone the restaurant, the cab company and the box office yourself. The concierge is a **facade** — one friendly interface in front of many services working together.
+</Callout>
+
+## The problem
+
+Placing an order really means: check inventory, then charge the customer, then (maybe) reserve shipping. If every caller wires those steps together, the orchestration logic is duplicated and clients are coupled to every subsystem. A **Facade** puts that workflow behind a single `PlaceOrder` method.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class OrderService {
+    -pay Payment
+    -stock Inventory
+    +PlaceOrder(user, product, qty)
+  }
+  class Payment {
+    <<interface>>
+    +Charge(user, amount)
+  }
+  class Inventory {
+    <<interface>>
+    +InStock(product, qty)
+  }
+  OrderService --> Payment
+  OrderService --> Inventory
+  note for OrderService "Clients call one method; the facade runs the multi-step dance."`} />
+
+## How it works
+
+<Mermaid code={`sequenceDiagram
+  participant C as Client
+  participant F as OrderService (facade)
+  participant I as Inventory
+  participant P as Payment
+  C->>F: PlaceOrder(user, product, qty)
+  F->>I: InStock(product, qty)?
+  I-->>F: true
+  F->>P: Charge(user, total)
+  P-->>F: ok
+  F-->>C: order placed`} />
+
+## Idiomatic Go
+
+The facade is a struct holding its subsystems as **small interfaces** — which keeps it decoupled and trivially testable with fakes. This mirrors the repo's `Order` type. Edit and **Run**:
+
+<Playground client:visible title="facade.go" code={`package main
+
+import "fmt"
+
+// Subsystem contracts (small interfaces).
+type Payment interface{ Charge(user string, amount float64) error }
+type Inventory interface{ InStock(product string, qty int) bool }
+
+// Concrete (fake) subsystems.
+type stripe struct{}
+func (stripe) Charge(user string, amount float64) error {
+	fmt.Printf("charged %s $%.2f\n", user, amount)
+	return nil
+}
+
+type warehouse struct{}
+func (warehouse) InStock(product string, qty int) bool { return qty <= 10 }
+
+// Facade: one method hides the orchestration.
+type OrderService struct {
+	pay   Payment
+	stock Inventory
+}
+
+func (o OrderService) PlaceOrder(user, product string, qty int, price float64) error {
+	if !o.stock.InStock(product, qty) {
+		return fmt.Errorf("%s: not enough stock", product)
+	}
+	if err := o.pay.Charge(user, price*float64(qty)); err != nil {
+		return err
+	}
+	fmt.Printf("order placed: %d x %s\n", qty, product)
+	return nil
+}
+
+func main() {
+	svc := OrderService{pay: stripe{}, stock: warehouse{}}
+	if err := svc.PlaceOrder("ada", "keyboard", 2, 49.99); err != nil {
+		fmt.Println("error:", err)
+	}
+}`} />
+
+<Callout type="go" title="🐹 The facade is just dependency injection">
+Notice there's nothing exotic here — a struct with interface fields and a high-level method. Because the subsystems are interfaces, your tests inject fakes and assert on the orchestration. "Facade" is mostly a name for good, coarse-grained API design over a subsystem.
+</Callout>
+
+## In the standard library
+
+- **`http.Get` / `http.Post`** are facades over `Client`, `Transport`, and `Request` construction.
+- **`log.Println`** and friends are a facade over the default `Logger`.
+- **`os.ReadFile`** hides open + read + close behind one call.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Beware the god-facade">
+A facade should expose the *common* path, not every knob. When it grows a method for every possible operation, it becomes a bottleneck and a god-object. Keep it focused; let advanced callers reach the subsystems directly when they truly need to.
+</Callout>
