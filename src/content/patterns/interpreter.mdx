@@ -1,0 +1,142 @@
+---
+title: "Interpreter"
+category: behavioral
+kind: pattern
+order: 16
+difficulty: "Advanced"
+gof: true
+status: ready
+intent: "Define a grammar for a simple language and an interpreter that evaluates sentences by walking an expression tree."
+when_use:
+  - "You have a small, stable language you control — a rules engine, an expression evaluator, a tiny DSL."
+  - "Sentences in that language recur often enough to be worth modelling as a tree."
+  - "Each grammar rule maps cleanly to a type with an Eval method."
+when_avoid:
+  - "The grammar is large or changes often — use a real parser/generator instead of hand-built nodes."
+  - "Performance matters — interpreting a tree is slower than compiling."
+related:
+  - composite
+  - visitor
+  - iterator
+quiz:
+  - q: "What is an Interpreter, structurally?"
+    options:
+      - text: "A Composite of expression nodes with a recursive Eval — terminals (numbers) and non-terminals (operations)"
+        correct: true
+      - text: "A single switch statement"
+        correct: false
+      - text: "A goroutine pool"
+        correct: false
+      - text: "A factory of factories"
+        correct: false
+    explain: "Each grammar rule is a node type implementing a common Eval; non-terminal nodes hold child expressions and recurse — it's Composite plus recursion."
+  - q: "What does Interpreter NOT cover?"
+    options:
+      - text: "Parsing — turning text into the expression tree is a separate concern (a lexer/parser)"
+        correct: true
+      - text: "Evaluating the tree"
+        correct: false
+      - text: "Representing the grammar"
+        correct: false
+      - text: "Recursion"
+        correct: false
+    explain: "The pattern is about representing and evaluating a grammar. Producing the tree from source text is the job of a parser, which Interpreter assumes you already have."
+  - q: "When should you NOT hand-roll an Interpreter?"
+    options:
+      - text: "When the grammar is large or evolving — reach for go/parser, a parser generator, or a library"
+        correct: true
+      - text: "When the grammar is tiny and fixed"
+        correct: false
+      - text: "When you need to evaluate expressions"
+        correct: false
+      - text: "When you control the language"
+        correct: false
+    explain: "Hand-built node-per-rule interpreters scale badly. For real languages, use proper parsing tooling; Interpreter suits only small, stable grammars."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧮 Analogy">
+A calculator reading `3 + 4 * 2` doesn't just scan left to right — it understands the grammar: multiplication binds tighter, so it computes `4 * 2` first, then adds `3`. Interpreter is that understanding made concrete: each rule of the little language is a piece that knows how to evaluate itself.
+</Callout>
+
+## The problem
+
+You have a small, well-defined language — arithmetic, a rules expression, a query filter — and you want to evaluate sentences in it. Interpreter represents each grammar rule as a **node type**, assembles sentences into an **expression tree**, and evaluates the tree recursively. (Turning text into that tree is a separate parsing step.)
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Expr {
+    <<interface>>
+    +Eval() int
+  }
+  class Num { -value int; +Eval() }
+  class Add { -left Expr; -right Expr; +Eval() }
+  class Mul { -left Expr; -right Expr; +Eval() }
+  Expr <|.. Num
+  Expr <|.. Add
+  Expr <|.. Mul
+  Add o--> Expr : left, right
+  Mul o--> Expr : left, right`} />
+
+The expression `3 + 4 * 2` becomes this tree, evaluated bottom-up:
+
+<Mermaid code={`graph TD
+  A["Add"] --> N3["Num 3"]
+  A --> M["Mul"]
+  M --> N4["Num 4"]
+  M --> N2["Num 2"]`} />
+
+## Idiomatic Go
+
+Each node implements `Eval`; non-terminal nodes recurse into their children. Edit and **Run**:
+
+<Playground client:visible title="interpreter.go" code={`package main
+
+import "fmt"
+
+// Expr is a node in the expression tree.
+type Expr interface {
+	Eval() int
+}
+
+// Terminal: a literal number.
+type Num struct{ value int }
+
+func (n Num) Eval() int { return n.value }
+
+// Non-terminals: operations that recurse into sub-expressions.
+type Add struct{ left, right Expr }
+
+func (a Add) Eval() int { return a.left.Eval() + a.right.Eval() }
+
+type Mul struct{ left, right Expr }
+
+func (m Mul) Eval() int { return m.left.Eval() * m.right.Eval() }
+
+func main() {
+	// represents: 3 + 4 * 2  ==  3 + (4 * 2)
+	expr := Add{
+		left:  Num{3},
+		right: Mul{left: Num{4}, right: Num{2}},
+	}
+	fmt.Println(expr.Eval()) // 11
+}`} />
+
+<Callout type="go" title="🐹 It's Composite with an Eval, plus a parser you bring">
+Interpreter is really [Composite](/patterns/composite/) — terminals and non-terminals sharing one `Eval` interface — walked recursively. The piece it leaves out is turning `"3 + 4 * 2"` into the tree; that's a lexer/parser. Go's standard library is full of interpreters: `text/template` and `html/template` interpret a template language, `regexp` compiles and runs patterns, and `go/parser` + `go/types` interpret Go itself. Use the pattern for *small, stable* grammars — and a real parser for anything bigger.
+</Callout>
+
+## In the standard library
+
+- **`text/template` / `html/template`** — interpret a templating language.
+- **`regexp`** — compiles a pattern, then interprets it against input.
+- **`go/ast` + `go/types`** — a full interpreter/visitor over Go source.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Grammars grow; hand-rolled nodes don't scale">
+A node-per-rule interpreter is delightful for a five-rule grammar and miserable for fifty. Operator precedence, error handling, and parsing quickly dominate. The moment your "little language" starts growing, switch to a proper parser (a generator, a PEG library like `participle`, or `go/parser` if it's Go-like) and keep Interpreter for the genuinely tiny DSLs.
+</Callout>

@@ -1,0 +1,162 @@
+---
+title: "Chain of Responsibility"
+category: behavioral
+kind: pattern
+order: 14
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Pass a request along a chain of handlers until one of them handles it, decoupling sender from receiver."
+when_use:
+  - "More than one object might handle a request, and the handler isn't known in advance."
+  - "You want to decouple the sender from the concrete receiver."
+  - "The set or order of handlers should be configurable — middleware, validation pipelines, approval flows."
+when_avoid:
+  - "Exactly one object always handles the request — call it directly."
+  - "A request might silently fall off the end of the chain unhandled and that's a bug."
+related:
+  - command
+  - decorator
+  - mediator
+  - observer
+quiz:
+  - q: "What does a handler in the chain do?"
+    options:
+      - text: "Either handle the request, or pass it to the next handler"
+        correct: true
+      - text: "Always handle and stop"
+        correct: false
+      - text: "Always pass it on"
+        correct: false
+      - text: "Broadcast it to all handlers at once"
+        correct: false
+    explain: "Each handler decides: if it can handle the request it does (often stopping the chain); otherwise it forwards to the next one."
+  - q: "Which Go idiom IS Chain of Responsibility?"
+    options:
+      - text: "net/http middleware — func(next http.Handler) http.Handler"
+        correct: true
+      - text: "sync.Once"
+        correct: false
+      - text: "json.Marshal"
+        correct: false
+      - text: "make(chan int)"
+        correct: false
+    explain: "HTTP middleware composes handlers where each can act and then call next.ServeHTTP — or short-circuit — which is exactly a chain of responsibility."
+  - q: "What does the pattern decouple?"
+    options:
+      - text: "The sender of a request from whichever handler ends up servicing it"
+        correct: true
+      - text: "Goroutines from channels"
+        correct: false
+      - text: "Structs from interfaces"
+        correct: false
+      - text: "Producers from consumers"
+        correct: false
+    explain: "The sender just hands the request to the front of the chain; it never needs to know which handler (if any) will process it."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎧 Analogy">
+You call customer support. Tier-1 tries to help; if it's beyond them, they escalate to tier-2; if still stuck, to a manager. You made one call — each level either resolves your issue or passes it up. You never had to know who'd ultimately handle it.
+</Callout>
+
+## The problem
+
+A request could be handled by one of several handlers, but the sender shouldn't be wired to a specific one. Chain of Responsibility links handlers together; each gets a shot and either **handles** the request or **passes it on**. Adding, removing, or reordering handlers doesn't touch the sender.
+
+## Structure
+
+<Mermaid code={`graph LR
+  R["Request: $5000"] --> L["Team Lead<br/>≤ $100?"]
+  L -->|too big| M["Manager<br/>≤ $1000?"]
+  M -->|too big| D["Director<br/>≤ $10000?"]
+  D -->|handles it| OK["approved"]`} />
+
+## Idiomatic Go
+
+Each approver handles amounts up to its limit, or forwards to the next. Edit and **Run**:
+
+<Playground client:visible title="chain.go" code={`package main
+
+import "fmt"
+
+type Request struct{ amount int }
+
+// Approver handles a request or passes it along.
+type Approver interface {
+	Approve(r Request)
+	SetNext(Approver)
+}
+
+// base provides the "pass it on" behavior via embedding.
+type base struct{ next Approver }
+
+func (b *base) SetNext(a Approver) { b.next = a }
+func (b *base) passOn(r Request) {
+	if b.next != nil {
+		b.next.Approve(r)
+	} else {
+		fmt.Printf("$%d needs board approval\n", r.amount)
+	}
+}
+
+type TeamLead struct{ base }
+
+func (t *TeamLead) Approve(r Request) {
+	if r.amount <= 100 {
+		fmt.Printf("Team lead approved $%d\n", r.amount)
+		return
+	}
+	t.passOn(r)
+}
+
+type Manager struct{ base }
+
+func (m *Manager) Approve(r Request) {
+	if r.amount <= 1000 {
+		fmt.Printf("Manager approved $%d\n", r.amount)
+		return
+	}
+	m.passOn(r)
+}
+
+type Director struct{ base }
+
+func (d *Director) Approve(r Request) {
+	if r.amount <= 10000 {
+		fmt.Printf("Director approved $%d\n", r.amount)
+		return
+	}
+	d.passOn(r)
+}
+
+func main() {
+	lead, mgr, dir := &TeamLead{}, &Manager{}, &Director{}
+	lead.SetNext(mgr)
+	mgr.SetNext(dir)
+
+	for _, amt := range []int{50, 500, 5000, 50000} {
+		lead.Approve(Request{amount: amt})
+	}
+}`} />
+
+<Callout type="go" title="🐹 You already use this: HTTP middleware">
+The most idiomatic Go chain is `func(next http.Handler) http.Handler`. Each middleware can do work and call `next.ServeHTTP` — or short-circuit (reject an unauthenticated request and never call `next`). Composing logging, auth, gzip, and recovery into one handler is Chain of Responsibility, and it's the backbone of every Go web framework.
+
+```go
+func Logging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Println(r.Method, r.URL.Path)
+		next.ServeHTTP(w, r) // pass along the chain
+	})
+}
+```
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Mind the end of the chain">
+If no handler accepts the request, it can silently fall off the end. Decide explicitly what that means — a default handler, an error, or a panic — as the example does with "needs board approval." A request that vanishes unhandled is a bug that's hard to spot.
+</Callout>

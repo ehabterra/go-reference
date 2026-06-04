@@ -1,0 +1,138 @@
+---
+title: "Mediator"
+category: behavioral
+kind: pattern
+order: 18
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Centralize communication between objects in a mediator, so they don't refer to each other directly."
+when_use:
+  - "Many objects interact in complex, many-to-many ways, creating a tangle of direct references."
+  - "You want to reduce coupling between colleagues and put coordination logic in one place."
+  - "Interaction rules change often — keeping them in a mediator localizes the churn."
+when_avoid:
+  - "Only a couple of objects interact — direct calls are clearer."
+  - "The mediator keeps absorbing logic until it's a god-object."
+related:
+  - observer
+  - facade
+  - command
+quiz:
+  - q: "What does a Mediator replace?"
+    options:
+      - text: "A web of direct object-to-object references (a mesh) with a hub-and-spoke through one coordinator"
+        correct: true
+      - text: "All goroutines"
+        correct: false
+      - text: "Constructors"
+        correct: false
+      - text: "Interfaces"
+        correct: false
+    explain: "Instead of every colleague referencing every other (N×N), each talks only to the mediator, which routes and coordinates — turning a mesh into spokes."
+  - q: "How does Mediator differ from Facade?"
+    options:
+      - text: "A facade is a one-way simplified entry to a subsystem; a mediator enables many-to-many coordination among peers"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Facade is behavioral, Mediator is structural"
+        correct: false
+      - text: "Mediator hides nothing"
+        correct: false
+    explain: "Facade simplifies access to a subsystem in one direction. Mediator sits between peers and coordinates their bidirectional interactions."
+  - q: "What's the main risk of Mediator?"
+    options:
+      - text: "The mediator becomes an all-knowing god-object as it absorbs interaction logic"
+        correct: true
+      - text: "It can't use interfaces"
+        correct: false
+      - text: "It leaks goroutines"
+        correct: false
+      - text: "It requires inheritance"
+        correct: false
+    explain: "Centralizing coordination is the point, but unchecked it concentrates too much knowledge and logic in one place, becoming a maintenance bottleneck."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛫 Analogy">
+Planes near an airport don't negotiate landings with each other directly — that would be chaos. They all talk to one air-traffic-control tower, which coordinates everyone. The tower is the mediator: each plane knows only the tower, not the other planes.
+</Callout>
+
+## The problem
+
+When every object holds references to every other object it interacts with, you get a dense mesh — N objects, up to N×N connections — that's rigid and hard to change. A **Mediator** becomes the hub: each colleague talks only to it, and it encapsulates how they coordinate. Add or change an interaction in one place.
+
+## Structure
+
+<Mermaid code={`graph TD
+  A["Alice"] --> M["ChatRoom<br/>(mediator)"]
+  B["Bob"] --> M
+  C["Carol"] --> M
+  M --> A
+  M --> B
+  M --> C`} />
+
+## Idiomatic Go
+
+A chat room mediates between users: each user sends to the room, and the room broadcasts — users never reference each other. Edit and **Run**:
+
+<Playground client:visible title="mediator.go" code={`package main
+
+import "fmt"
+
+// Mediator coordinates the colleagues.
+type Mediator interface {
+	Broadcast(from, msg string)
+	Register(u *User)
+}
+
+type ChatRoom struct{ users map[string]*User }
+
+func NewChatRoom() *ChatRoom { return &ChatRoom{users: map[string]*User{}} }
+
+func (c *ChatRoom) Register(u *User) {
+	c.users[u.name] = u
+	u.room = c
+}
+func (c *ChatRoom) Broadcast(from, msg string) {
+	for name, u := range c.users {
+		if name != from { // don't echo back to the sender
+			u.Receive(from, msg)
+		}
+	}
+}
+
+// Colleague: talks only to the mediator, never to other users.
+type User struct {
+	name string
+	room Mediator
+}
+
+func (u *User) Send(msg string) { u.room.Broadcast(u.name, msg) }
+func (u *User) Receive(from, msg string) {
+	fmt.Printf("[%s] %s: %s\n", u.name, from, msg)
+}
+
+func main() {
+	room := NewChatRoom()
+	alice, bob, carol := &User{name: "Alice"}, &User{name: "Bob"}, &User{name: "Carol"}
+	room.Register(alice)
+	room.Register(bob)
+	room.Register(carol)
+
+	alice.Send("hi everyone")
+	bob.Send("hey Alice")
+}`} />
+
+<Callout type="go" title="🐹 Mediator, Observer, and Facade">
+They're easy to confuse. [**Observer**](/patterns/observer/) is one-way broadcast (subject → observers). **Mediator** is many-to-many coordination among peers, with the routing *logic* centralized. [**Facade**](/patterns/facade/) is a one-way simplified door onto a subsystem. In Go, a mediator is just a struct holding references to its colleagues; the colleagues depend only on the mediator interface, which keeps them swappable and testable.
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ The god-object trap">
+A mediator concentrates coordination — handy until it knows about *everything* and every change touches it. Keep it focused on coordination, push domain logic back into the colleagues, and split it if it grows too large. A bloated mediator is just the mesh's complexity relocated, not removed.
+</Callout>

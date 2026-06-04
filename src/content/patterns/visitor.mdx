@@ -1,0 +1,159 @@
+---
+title: "Visitor"
+category: behavioral
+kind: pattern
+order: 24
+difficulty: "Advanced"
+gof: true
+status: ready
+intent: "Add new operations to a set of object types without modifying those types, by moving each operation into a visitor."
+when_use:
+  - "You have a stable set of types (e.g. AST nodes, shapes) and keep adding new operations over them."
+  - "You want to keep unrelated operations (print, evaluate, type-check) out of the data types themselves."
+  - "You want the compiler to force you to handle every type for each operation."
+when_avoid:
+  - "The set of types changes often — every new type forces an update to every visitor."
+  - "There are only a few cases — a type switch is simpler than the Accept/Visit dance."
+related:
+  - composite
+  - iterator
+  - strategy
+quiz:
+  - q: "What does Visitor let you add without touching the element types?"
+    options:
+      - text: "New operations over the existing types"
+        correct: true
+      - text: "New element types"
+        correct: false
+      - text: "New goroutines"
+        correct: false
+      - text: "New fields"
+        correct: false
+    explain: "Each operation becomes a visitor with a method per element type; you add operations freely. The trade-off is the reverse: adding an element type means updating every visitor."
+  - q: "Why does each element have an Accept(visitor) method?"
+    options:
+      - text: "For double dispatch — Accept calls back the visitor method specific to the element's concrete type"
+        correct: true
+      - text: "To start a goroutine"
+        correct: false
+      - text: "To clone itself"
+        correct: false
+      - text: "To satisfy fmt.Stringer"
+        correct: false
+    explain: "Go (like Java) dispatches on one type at a time. Accept resolves the element type, then calls v.VisitCircle/VisitRectangle — together that's double dispatch (element type × operation)."
+  - q: "What is Go's pragmatic alternative to a full Visitor?"
+    options:
+      - text: "A type switch over the concrete types"
+        correct: true
+      - text: "Reflection on struct tags"
+        correct: false
+      - text: "A global map of funcs"
+        correct: false
+      - text: "Embedding"
+        correct: false
+    explain: "`switch s := shape.(type) { case *Circle: … }` is simpler for a few cases, though you lose the compiler guarantee that every type is handled."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧾 Analogy">
+A tax auditor visits different businesses — a restaurant, a factory, a shop. Each business "accepts" the auditor and the auditor applies the right rules for that type. Next year a *different* inspector (fire safety) visits the same businesses with entirely different checks. The businesses don't change; the visiting operations do.
+</Callout>
+
+## The problem
+
+You have a fixed family of types — shapes, or the nodes of a syntax tree — and you keep needing new operations over them: compute area, render, type-check, serialize. Adding each operation as a method on every type bloats the types and scatters unrelated logic. **Visitor** pulls each operation into its own object; elements simply `Accept` a visitor.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Shape {
+    <<interface>>
+    +Accept(Visitor)
+  }
+  class Visitor {
+    <<interface>>
+    +VisitCircle(Circle)
+    +VisitRectangle(Rectangle)
+  }
+  class Circle { +Accept(Visitor) }
+  class Rectangle { +Accept(Visitor) }
+  class AreaVisitor { +VisitCircle() +VisitRectangle() }
+  Shape <|.. Circle
+  Shape <|.. Rectangle
+  Visitor <|.. AreaVisitor
+  Circle ..> Visitor : Accept calls VisitCircle
+  Rectangle ..> Visitor : Accept calls VisitRectangle`} />
+
+## Idiomatic Go
+
+Adding a new operation means writing a new `Visitor` — the shapes never change. Edit and **Run**:
+
+<Playground client:visible title="visitor.go" code={`package main
+
+import (
+	"fmt"
+	"math"
+)
+
+// Visitor has a method per concrete element type.
+type Visitor interface {
+	VisitCircle(c *Circle)
+	VisitRectangle(r *Rectangle)
+}
+
+// Element accepts a visitor (double dispatch).
+type Shape interface{ Accept(v Visitor) }
+
+type Circle struct{ radius float64 }
+
+func (c *Circle) Accept(v Visitor) { v.VisitCircle(c) }
+
+type Rectangle struct{ w, h float64 }
+
+func (r *Rectangle) Accept(v Visitor) { v.VisitRectangle(r) }
+
+// A new operation = a new visitor, with zero changes to the shapes.
+type AreaVisitor struct{ total float64 }
+
+func (a *AreaVisitor) VisitCircle(c *Circle)       { a.total += math.Pi * c.radius * c.radius }
+func (a *AreaVisitor) VisitRectangle(r *Rectangle) { a.total += r.w * r.h }
+
+func main() {
+	shapes := []Shape{
+		&Circle{radius: 2},
+		&Rectangle{w: 3, h: 4},
+		&Circle{radius: 1},
+	}
+
+	area := &AreaVisitor{}
+	for _, s := range shapes {
+		s.Accept(area)
+	}
+	fmt.Printf("total area: %.2f\n", area.total)
+}`} />
+
+<Callout type="go" title="🐹 The type switch is Go's shortcut">
+Go developers often skip the Accept/Visit ceremony and use a **type switch**:
+
+```go
+switch s := shape.(type) {
+case *Circle:    area += math.Pi * s.radius * s.radius
+case *Rectangle: area += s.w * s.h
+}
+```
+
+It's simpler, but you lose what full Visitor buys you: the compiler forcing every visitor to handle every type. Use the type switch for a few ad-hoc cases; use the Visitor interface when operations are many and you want that exhaustiveness — which is why `go/ast.Walk` takes an `ast.Visitor`.
+</Callout>
+
+## In the standard library
+
+- **`go/ast.Walk` + `ast.Visitor`** — the Visitor pattern, by name, over Go syntax trees.
+- **`filepath.WalkDir`** — applies a function to every node of a directory tree.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Easy to add operations, painful to add types">
+Visitor optimizes for stable types and growing operations. The moment you add a new element type (say `Triangle`), every existing visitor must grow a `VisitTriangle` — the compiler will make you. If your *types* churn more than your *operations*, Visitor fights you, and a type switch (or rethinking the design) is the better bet.
+</Callout>

@@ -1,0 +1,149 @@
+---
+title: "Memento"
+category: behavioral
+kind: pattern
+order: 19
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Capture and externalize an object's internal state so it can be restored later — without violating its encapsulation."
+when_use:
+  - "You need undo/redo, checkpoints, or snapshots of an object's state."
+  - "You want to roll back to a previous state after a failed operation (transactions)."
+  - "The state should be saved without exposing the object's internals to the saver."
+when_avoid:
+  - "The state is huge — full snapshots cost too much memory; store diffs or use Command to reverse actions."
+  - "The object is trivial — saving and restoring a field by hand is simpler."
+related:
+  - command
+  - prototype
+  - state
+quiz:
+  - q: "What does Memento preserve while saving state?"
+    options:
+      - text: "Encapsulation — the saved state is opaque to everyone but the originator"
+        correct: true
+      - text: "Thread safety"
+        correct: false
+      - text: "Type erasure"
+        correct: false
+      - text: "Network transparency"
+        correct: false
+    explain: "The memento captures internal state in an object whose contents only the originator can read, so the caretaker can store/restore it without seeing inside."
+  - q: "In Go, what enforces the memento's opacity?"
+    options:
+      - text: "Unexported fields — only the originator's package can read them"
+        correct: true
+      - text: "Generics"
+        correct: false
+      - text: "Reflection"
+        correct: false
+      - text: "Build tags"
+        correct: false
+    explain: "Go's encapsulation is at the package level. With unexported memento fields, the caretaker can hold mementos but can't inspect or tamper with them."
+  - q: "Which pattern commonly pairs with Memento for undo?"
+    options:
+      - text: "Command — a command stores a memento to reverse its effect"
+        correct: true
+      - text: "Singleton"
+        correct: false
+      - text: "Adapter"
+        correct: false
+      - text: "Flyweight"
+        correct: false
+    explain: "Command + Memento is the classic undo combo: the command captures a snapshot (or enough state) before acting, so Undo can restore it."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎮 Analogy">
+A video game save point captures your entire state — position, inventory, health — in one blob. Hours later you reload it and you're exactly where you were. You never see the save file's internals; you just save and restore. That blob is a memento.
+</Callout>
+
+## The problem
+
+You want undo, checkpoints, or rollback — which means capturing an object's state and restoring it later. But you don't want the thing doing the saving (the *caretaker*) to rummage through the object's private fields. Memento puts the snapshot in an **opaque object**: the originator creates and reads it; everyone else just holds it.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Editor {
+    -text string
+    +Save() memento
+    +Restore(memento)
+  }
+  class memento {
+    -text string
+  }
+  class History {
+    -stack memento[]
+    +Push(memento)
+    +Pop() memento
+  }
+  Editor ..> memento : creates & reads
+  History o--> memento : stores (opaque)`} />
+
+## Idiomatic Go
+
+`memento` has unexported fields, so `History` (the caretaker) can stack snapshots without reading them — only the `Editor` can. Edit and **Run**:
+
+<Playground client:visible title="memento.go" code={`package main
+
+import "fmt"
+
+// memento: an opaque snapshot. Unexported fields keep it private.
+type memento struct{ text string }
+
+// Originator.
+type Editor struct{ text string }
+
+func (e *Editor) Type(s string)     { e.text += s }
+func (e *Editor) Text() string      { return e.text }
+func (e *Editor) Save() memento     { return memento{text: e.text} }
+func (e *Editor) Restore(m memento) { e.text = m.text }
+
+// Caretaker: keeps history, treats mementos as opaque tokens.
+type History struct{ stack []memento }
+
+func (h *History) Push(m memento) { h.stack = append(h.stack, m) }
+func (h *History) Pop() (memento, bool) {
+	if len(h.stack) == 0 {
+		return memento{}, false
+	}
+	m := h.stack[len(h.stack)-1]
+	h.stack = h.stack[:len(h.stack)-1]
+	return m, true
+}
+
+func main() {
+	ed := &Editor{}
+	hist := &History{}
+
+	ed.Type("Hello")
+	hist.Push(ed.Save()) // checkpoint
+	ed.Type(", World")
+	hist.Push(ed.Save()) // checkpoint
+	ed.Type("!!!")
+
+	fmt.Println("now:   ", ed.Text()) // Hello, World!!!
+
+	if m, ok := hist.Pop(); ok {
+		ed.Restore(m)
+		fmt.Println("undo 1:", ed.Text()) // Hello, World
+	}
+	if m, ok := hist.Pop(); ok {
+		ed.Restore(m)
+		fmt.Println("undo 2:", ed.Text()) // Hello
+	}
+}`} />
+
+<Callout type="go" title="🐹 Encapsulation by package, undo by Command">
+Go has no `private` keyword — encapsulation is per package. Unexported memento fields mean the caretaker can hold snapshots but not peek inside, which is exactly the pattern's intent. Memento pairs naturally with [Command](/patterns/command/) for undo (a command snapshots state before acting) and shares the [Prototype](/patterns/prototype/) deep-copy caveat: if your state has slices or maps, the snapshot must copy them, not alias them.
+</Callout>
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Full snapshots can get expensive">
+Saving the whole state on every checkpoint is simple but memory-hungry for large objects or long histories. When that bites, store **diffs** (what changed) instead of full copies, cap the history depth, or use Command's `Undo` to reverse actions rather than restore snapshots.
+</Callout>

@@ -1,0 +1,151 @@
+---
+title: "State"
+category: behavioral
+kind: pattern
+order: 21
+difficulty: "Intermediate"
+gof: true
+status: ready
+intent: "Let an object alter its behavior when its internal state changes, as if it changed class."
+when_use:
+  - "An object's behavior depends on its state, and you have big switch/if blocks on a state field repeated across methods."
+  - "There are several states with their own behavior and clear transitions between them."
+  - "States should decide their own next state."
+when_avoid:
+  - "There are only two trivial states — a boolean and a switch is simpler."
+  - "Transitions are so simple they don't justify a type per state."
+related:
+  - strategy
+  - command
+  - observer
+quiz:
+  - q: "How does State differ from Strategy?"
+    options:
+      - text: "State objects usually drive their own transitions; a Strategy is chosen from outside and rarely changes itself"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "State is creational"
+        correct: false
+      - text: "Strategy can't use interfaces"
+        correct: false
+    explain: "Both swap behavior behind an interface, but a state machine moves itself between states, whereas a strategy is selected by the client and stays put."
+  - q: "What does the State pattern replace?"
+    options:
+      - text: "Sprawling switch/if statements on a state field, repeated across methods"
+        correct: true
+      - text: "All interfaces"
+        correct: false
+      - text: "Goroutines"
+        correct: false
+      - text: "Constructors"
+        correct: false
+    explain: "Each state becomes its own type implementing a shared interface; the context delegates to the current state, so the conditionals disappear."
+  - q: "Where does the transition logic live?"
+    options:
+      - text: "Inside each state — it sets the context's next state"
+        correct: true
+      - text: "In a global function"
+        correct: false
+      - text: "In the client only"
+        correct: false
+      - text: "Nowhere; states never change"
+        correct: false
+    explain: "A concrete state handles an event and assigns the context's `state` field to the next state, keeping each transition local to where it makes sense."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚦 Analogy">
+A turnstile is either locked or unlocked, and the *same actions* mean different things depending on which. Insert a coin while locked and it unlocks; push while unlocked and you go through — and it locks again. The object's behavior changes with its state, as if it briefly became a different machine.
+</Callout>
+
+## The problem
+
+When behavior depends on state, the naive code sprouts the same `switch state { … }` in every method, and adding a state means editing them all. The State pattern makes **each state its own type** implementing a shared interface. The context delegates to its current state, and each state knows how to behave *and* what to transition to.
+
+## Structure
+
+<Mermaid code={`classDiagram
+  class Turnstile {
+    -state State
+    +Coin()
+    +Push()
+  }
+  class State {
+    <<interface>>
+    +Coin(t)
+    +Push(t)
+  }
+  class Locked { +Coin() +Push() }
+  class Unlocked { +Coin() +Push() }
+  Turnstile o--> State : current
+  State <|.. Locked
+  State <|.. Unlocked`} />
+
+## How it works
+
+<Mermaid code={`stateDiagram-v2
+  [*] --> Locked
+  Locked --> Unlocked : Coin
+  Unlocked --> Locked : Push
+  Locked --> Locked : Push (blocked)
+  Unlocked --> Unlocked : Coin (returned)`} />
+
+## Idiomatic Go
+
+Each state is a small struct implementing `State`; transitions just reassign the turnstile's `state` field. Edit and **Run**:
+
+<Playground client:visible title="state.go" code={`package main
+
+import "fmt"
+
+// State defines how the turnstile reacts to each event.
+type State interface {
+	Coin(t *Turnstile)
+	Push(t *Turnstile)
+}
+
+type Turnstile struct{ state State }
+
+func (t *Turnstile) Coin() { t.state.Coin(t) }
+func (t *Turnstile) Push() { t.state.Push(t) }
+
+type Locked struct{}
+
+func (Locked) Coin(t *Turnstile) {
+	fmt.Println("coin accepted → unlocking")
+	t.state = Unlocked{} // transition
+}
+func (Locked) Push(t *Turnstile) { fmt.Println("push blocked (locked)") }
+
+type Unlocked struct{}
+
+func (Unlocked) Coin(t *Turnstile) { fmt.Println("already unlocked, coin returned") }
+func (Unlocked) Push(t *Turnstile) {
+	fmt.Println("push → you go through, locking")
+	t.state = Locked{} // transition
+}
+
+func main() {
+	t := &Turnstile{state: Locked{}}
+	t.Push() // blocked
+	t.Coin() // unlock
+	t.Push() // go through, lock
+	t.Push() // blocked again
+}`} />
+
+<Callout type="go" title="🐹 State vs Strategy — who's in charge">
+Structurally they're twins: a context delegating to an interface. The difference is *agency*. A **Strategy** is handed to the object from outside and just runs. A **State** drives the machine — it decides when to flip the context to the next state. In Go each state is usually a tiny (often empty) struct, so the whole machine is just a handful of methods and a `state` field, replacing a pile of conditionals.
+</Callout>
+
+## In practice
+
+State machines are everywhere: TCP connection states, HTTP/2 streams, order/payment lifecycles, parser/lexer states (`text/template`'s lexer is a classic function-based state machine), and game logic.
+
+## Pitfalls
+
+<Callout type="gotcha" title="⚠️ Don't make a state machine out of a boolean">
+If you have two states and one transition, a `bool` and an `if` are clearer than two structs and an interface. The pattern pays off when states multiply, each carries its own behavior, and the transition table would otherwise be scattered across many `switch` statements.
+</Callout>
