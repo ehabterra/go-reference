@@ -2,10 +2,12 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
+import Card from '../../components/Card.astro';
 import { DSA_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('dsa');
-const slugs = topics.map((t) => t.id).join(',');
+const slugs = topics.filter((t) => t.data.kind === 'topic').map((t) => t.id).join(',');
+const cheat = topics.find((t) => t.id === 'cheat-sheet');
 ---
 <BaseLayout title="Data Structures & Algorithms" description="A Go-first guide to data structures and algorithms — Big-O, arrays and slices, linked lists, hash tables, trees, graphs, sorting, searching and dynamic programming, with diagrams and runnable code.">
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>DSA</span></nav>
@@ -39,6 +41,23 @@ const slugs = topics.map((t) => t.id).join(',');
   {DSA_CATEGORIES.map((c) => (
     <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="dsa" base="/dsa" />
   ))}
+
+  {cheat && (
+    <Fragment>
+      <h2 class="dp-section-head" style="border:0;" data-i18n="dsa.revise">Revise</h2>
+      <div class="dp-grid">
+        <Card
+          slug={cheat.id}
+          category="practice"
+          title={cheat.data.title}
+          intent={cheat.data.intent}
+          numLabel={`REFERENCE · ${cheat.data.difficulty}`}
+          footLabel="One-page recap"
+          base="/dsa"
+        />
+      </div>
+    </Fragment>
+  )}
 
   <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
     <p class="dp-callout__title" data-i18n="dsa.go.title">🐹 Reach for the standard library first</p>

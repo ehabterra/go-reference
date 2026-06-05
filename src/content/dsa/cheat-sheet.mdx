@@ -1,0 +1,126 @@
+---
+title: "DSA Cheat-Sheet"
+category: practice
+kind: guide
+order: 17
+difficulty: "Reference"
+status: ready
+intent: "A one-page map of the structures and algorithms — their costs, when to reach for each, and the Go stdlib that already implements them. Built for revision and interview prep."
+related:
+  - big-o
+  - hash-tables
+  - dynamic-programming
+quiz:
+  - q: "You need average O(1) lookup, insert and delete by key, and order doesn't matter. Which structure?"
+    options:
+      - text: "Hash table (Go's built-in map)"
+        correct: true
+      - text: "Balanced binary search tree"
+        correct: false
+      - text: "Sorted slice"
+        correct: false
+      - text: "Linked list"
+        correct: false
+    explain: "Hashing gives average O(1) for all three; a BST is O(log n) and keeps order you don't need here. Reach for a map (a set is map[T]struct{})."
+  - q: "What's the right tool for the shortest path in hops on an unweighted graph?"
+    options:
+      - text: "BFS — it expands outward in layers, so the first time it reaches a node is along a fewest-edges path"
+        correct: true
+      - text: "DFS"
+        correct: false
+      - text: "Dijkstra"
+        correct: false
+      - text: "Binary search"
+        correct: false
+    explain: "BFS visits in ring order, so it reaches every node by a fewest-edges path first. DFS may find a longer path first; Dijkstra is for weighted graphs."
+  - q: "Greedy makes change for 6 from coins {1,3,4} as 4+1+1 = 3 coins. Why prefer DP here?"
+    options:
+      - text: "Greedy isn't optimal for arbitrary coin sets — DP finds 3+3 = 2 coins"
+        correct: true
+      - text: "Greedy is slower than DP"
+        correct: false
+      - text: "DP uses less memory"
+        correct: false
+      - text: "They always give the same answer"
+        correct: false
+    explain: "Greedy only works when the coin system has the greedy-choice property. For {1,3,4} making 6, greedy gives 3 coins but DP gives the optimal 2 (3+3)."
+---
+import Callout from '../../components/Callout.astro';
+
+The whole track at a glance — costs, the right tool for a job, and the Go that already ships it. Each row links to the full page; skim to find the tool, then dive in.
+
+<Callout type="intent" title="🎯 How to read this">
+Complexities are **average case** unless noted. **Big-O** drops constants and lower-order terms — it describes how cost *grows*, which is what decides whether your code survives 10× the data.
+</Callout>
+
+## Complexity at a glance
+
+| Class | Name | Example in Go |
+|---|---|---|
+| O(1) | constant | `m[key]`, `s[i]`, `len(s)` |
+| O(log n) | logarithmic | [binary search](/dsa/binary-search/), balanced-tree lookup |
+| O(n) | linear | one loop over a slice |
+| O(n log n) | linearithmic | [`slices.Sort`](/dsa/sorting/), merge sort |
+| O(n²) | quadratic | nested loops over the same input |
+| O(2ⁿ) | exponential | naive recursive subsets / [Fibonacci](/dsa/dynamic-programming/) |
+
+## Data structures — cost & when
+
+| Structure | Access | Search | Insert | Delete | Reach for it when |
+|---|---|---|---|---|---|
+| [Array / slice](/dsa/arrays-and-slices/) | O(1) | O(n) | O(1)\* | O(n) | dense indexed data; the default |
+| [Linked list](/dsa/linked-lists/) | O(n) | O(n) | O(1)† | O(1)† | O(1) splice at a held node (LRU) |
+| [Stack / queue](/dsa/stacks-and-queues/) | — | — | O(1) | O(1) | LIFO / FIFO discipline |
+| [Hash table](/dsa/hash-tables/) | — | O(1) | O(1) | O(1) | fast lookup by key, unordered |
+| [BST (balanced)](/dsa/binary-search-trees/) | — | O(log n) | O(log n) | O(log n) | ordered iteration, range queries |
+| [Heap](/dsa/heaps/) | O(1) peek | — | O(log n) | O(log n) | always pop the min/max next |
+| [Trie](/dsa/tries/) | — | O(L) | O(L) | O(L) | prefix search, autocomplete |
+
+\* amortized for `append`; † given a pointer to the node.
+
+## Algorithm patterns
+
+| Pattern | Use it when | Cost |
+|---|---|---|
+| [Binary search](/dsa/binary-search/) | input is sorted, or a monotonic predicate | O(log n) |
+| [Sorting](/dsa/sorting/) | order matters; unlocks search & two-pointer | O(n log n) |
+| [Two pointers](/dsa/two-pointers/) | sorted array, pair/triplet, in-place | O(n) |
+| [Sliding window](/dsa/two-pointers/) | contiguous subarray / substring | O(n) |
+| [BFS](/dsa/graphs/) | shortest path in hops (unweighted) | O(V + E) |
+| [DFS](/dsa/graphs/) | reachability, cycles, topological order | O(V + E) |
+| [Backtracking](/dsa/recursion-and-backtracking/) | enumerate candidates, undo on dead ends | exponential, pruned |
+| [Dynamic programming](/dsa/dynamic-programming/) | overlapping subproblems + optimal substructure | states × transition |
+| [Greedy](/dsa/greedy/) | a local choice is provably global | often O(n log n) |
+
+## The Go standard library already has it
+
+| Need | Reach for |
+|---|---|
+| Sort a slice | `slices.Sort`, `slices.SortFunc`, `sort.Slice` |
+| Binary search | `slices.BinarySearch`, `sort.Search` |
+| Map / set | built-in `map`; a set is `map[T]struct{}` |
+| Priority queue | `container/heap` |
+| Doubly linked list | `container/list` |
+| Min / max of two | `min`, `max` builtins (Go 1.21) |
+| Clone a slice / map | `slices.Clone`, `maps.Clone` |
+
+## Decision shortcuts — "I need to…"
+
+<Callout type="tip" title="✅ Pick a structure or pattern by what you're doing">
+- **…look up by key, fast** → [hash table](/dsa/hash-tables/)
+- **…keep data sorted / range queries** → [balanced BST](/dsa/binary-search-trees/) (or sorted slice + [binary search](/dsa/binary-search/))
+- **…always take the smallest/largest next** → [heap](/dsa/heaps/)
+- **…prefix match / autocomplete** → [trie](/dsa/tries/)
+- **…LIFO or FIFO ordering** → [stack / queue](/dsa/stacks-and-queues/)
+- **…shortest path in an unweighted graph** → [BFS](/dsa/graphs/)
+- **…visit everything / detect a cycle** → [DFS](/dsa/graphs/)
+- **…all combinations or permutations** → [backtracking](/dsa/recursion-and-backtracking/)
+- **…optimize over overlapping subproblems** → [dynamic programming](/dsa/dynamic-programming/)
+- **…a provably-optimal local choice** → [greedy](/dsa/greedy/)
+</Callout>
+
+<Callout type="go" title="🐹 Interview reflex: brute force first, then trade space for time">
+State the costs and edge cases out loud, write a correct brute force, then name the bottleneck and the pattern that removes it — a hash set turns an O(n²) duplicate scan into O(n); sorting unlocks two pointers; memoization collapses exponential recursion to polynomial. And in real Go, prefer the standard library over a hand-rolled structure unless asked to build it.
+</Callout>
+
+## Test yourself
