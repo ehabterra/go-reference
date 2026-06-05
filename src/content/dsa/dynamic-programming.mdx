@@ -1,0 +1,206 @@
+---
+title: "Dynamic Programming"
+category: algorithms
+kind: topic
+order: 5
+difficulty: "Advanced"
+status: ready
+intent: "Solve problems with overlapping subproblems and optimal substructure — from exponential recursion to top-down memoization and bottom-up tabulation in Go."
+related:
+  - recursion-and-backtracking
+  - big-o
+  - greedy
+quiz:
+  - q: "What two properties must a problem have for dynamic programming to apply?"
+    options:
+      - text: "Overlapping subproblems and optimal substructure"
+        correct: true
+      - text: "Sorted input and a comparison function"
+        correct: false
+      - text: "A balanced tree and a hash map"
+        correct: false
+      - text: "Constant space and no recursion"
+        correct: false
+    explain: "DP needs overlapping subproblems (the same smaller problem is solved many times, so caching pays off) and optimal substructure (an optimal answer is built from optimal answers to subproblems)."
+  - q: "Naive recursive Fibonacci is O(2ⁿ). What does adding memoization make it?"
+    options:
+      - text: "O(n) — each subproblem fib(0)..fib(n) is computed once and reused"
+        correct: true
+      - text: "O(log n)"
+        correct: false
+      - text: "Still O(2ⁿ), memoization only saves space"
+        correct: false
+      - text: "O(n²)"
+        correct: false
+    explain: "There are only n+1 distinct subproblems. Memoization computes each once and returns the cached value thereafter, collapsing the exponential tree into n linear steps."
+  - q: "Why does a greedy 'take the biggest coin' strategy fail for coin change with coins like [1, 3, 4] making 6, while DP succeeds?"
+    options:
+      - text: "Greedy commits to 4 then needs 1+1 (3 coins); DP explores all options and finds 3+3 (2 coins)"
+        correct: true
+      - text: "Greedy is slower than DP for this input"
+        correct: false
+      - text: "DP only works when the coins are sorted"
+        correct: false
+      - text: "Greedy uses more memory than DP"
+        correct: false
+    explain: "A locally optimal choice (the largest coin that fits) is not always globally optimal. DP considers every coin for every amount, so it finds the true minimum 3+3=2."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Imagine climbing a staircase and being asked, over and over, "how many ways to reach step 7?" A forgetful climber re-derives the answer from scratch every single time, re-counting the same lower steps again and again. A climber with a notebook writes each step's answer down once and just reads it back later. Dynamic programming is the notebook: solve each subproblem one time, remember it, and reuse it.
+</Callout>
+
+## What makes a problem a DP problem
+
+Dynamic programming applies when a problem has two properties at once:
+
+- **Overlapping subproblems** — the same smaller problem shows up many times. Solve it once, cache the answer, and every later occurrence is a free lookup.
+- **Optimal substructure** — an optimal solution to the whole is built from optimal solutions to its parts. That lets you combine subproblem answers instead of searching the entire space.
+
+When both hold, you get the classic progression: **naive recursion** re-solves subproblems and explodes (often `O(2ⁿ)`), then **memoization** (top-down) caches results, then **tabulation** (bottom-up) fills a table in dependency order. The last two are usually `O(n)` or `O(n·m)`.
+
+<Mermaid code={`graph TD
+  F5["fib(5)"] --> F4["fib(4)"]
+  F5 --> F3a["fib(3)"]
+  F4 --> F3b["fib(3)"]
+  F4 --> F2a["fib(2)"]
+  F3a --> F2b["fib(2)"]
+  F3a --> F1a["fib(1)"]
+  F3b --> F2c["fib(2)"]
+  F3b --> F1b["fib(1)"]
+  classDef dup fill:#2a0f17,stroke:#f43f5e,color:#ffd7e0;
+  class F3b,F2a,F2b,F2c,F1a,F1b dup;`} />
+
+The red nodes are recomputed work — `fib(3)` and `fib(2)` appear again and again. That repetition is exactly what memoization erases.
+
+## Fibonacci three ways
+
+`fib(n) = fib(n-1) + fib(n-2)` is the canonical example because the naive version visibly re-solves the same calls. The playground below runs all three approaches and counts how many times each actually calls into `fib`, so you can see the `O(2ⁿ)` → `O(n)` collapse directly:
+
+<Playground client:visible title="fib_three_ways.go" code={`package main
+
+import "fmt"
+
+// 1) Naive recursion: re-solves overlapping subproblems. O(2^n).
+var naiveCalls int
+
+func fibNaive(n int) int {
+	naiveCalls++
+	if n < 2 {
+		return n
+	}
+	return fibNaive(n-1) + fibNaive(n-2)
+}
+
+// 2) Top-down memoization: cache each result, compute it once. O(n).
+var memoCalls int
+
+func fibMemo(n int, cache []int) int {
+	memoCalls++
+	if n < 2 {
+		return n
+	}
+	if cache[n] != -1 {
+		return cache[n] // already solved
+	}
+	cache[n] = fibMemo(n-1, cache) + fibMemo(n-2, cache)
+	return cache[n]
+}
+
+// 3) Bottom-up tabulation: fill a table in order, no recursion. O(n) time, O(1) space.
+func fibTab(n int) int {
+	if n < 2 {
+		return n
+	}
+	prev, curr := 0, 1
+	for i := 2; i <= n; i++ {
+		prev, curr = curr, prev+curr
+	}
+	return curr
+}
+
+func main() {
+	const n = 30
+
+	naiveValue := fibNaive(n)
+
+	cache := make([]int, n+1)
+	for i := range cache {
+		cache[i] = -1
+	}
+	memoValue := fibMemo(n, cache)
+
+	tabValue := fibTab(n)
+
+	fmt.Printf("fib(%d) = %d (all three agree: %v)\n",
+		n, naiveValue, naiveValue == memoValue && memoValue == tabValue)
+	fmt.Printf("naive calls: %d  (exponential)\n", naiveCalls)
+	fmt.Printf("memo  calls: %d  (linear)\n", memoCalls)
+}`} />
+
+The call counts tell the whole story: naive makes over two million calls for `fib(30)`, while memoization makes about sixty. Same answer, wildly different cost.
+
+## A second classic: coin change (minimum coins)
+
+Fibonacci shows the mechanics; coin change shows the *power*. Given coin denominations and a target amount, find the **fewest coins** that sum to it. The subproblem is "min coins for amount `a`", and it overlaps heavily — many amounts depend on the same smaller amounts.
+
+Bottom-up, `dp[a]` = minimum coins to make amount `a`. Start with `dp[0] = 0` and build up: for each amount, try every coin and take the best.
+
+<Mermaid code={`graph LR
+  A0["dp[0]=0"] --> A1["dp[1]"]
+  A1 --> A2["dp[2]"]
+  A2 --> A3["dp[3]"]
+  A3 --> A4["dp[4]"]
+  A4 --> A5["dp[5]"]
+  A5 --> A6["dp[6]=min over coins"]`} />
+
+<Playground client:visible title="coin_change.go" code={`package main
+
+import "fmt"
+
+// minCoins returns the fewest coins summing to amount, or -1 if impossible.
+// Bottom-up DP: dp[a] = min coins for amount a. Time O(amount * len(coins)).
+func minCoins(coins []int, amount int) int {
+	const unreachable = 1 << 30
+	dp := make([]int, amount+1)
+	for a := 1; a <= amount; a++ {
+		dp[a] = unreachable
+	}
+	// dp[0] stays 0: zero coins make amount 0.
+
+	for a := 1; a <= amount; a++ {
+		for _, c := range coins {
+			if c <= a && dp[a-c]+1 < dp[a] {
+				dp[a] = dp[a-c] + 1
+			}
+		}
+	}
+
+	if dp[amount] >= unreachable {
+		return -1
+	}
+	return dp[amount]
+}
+
+func main() {
+	coins := []int{1, 3, 4}
+	amount := 6
+
+	n := minCoins(coins, amount)
+	fmt.Printf("coins %v, amount %d -> %d coins (DP, exact)\n", coins, amount, n)
+	// DP finds 3+3 = 2 coins. A greedy 4+1+1 would use 3.
+
+	// Impossible case: no combination of {2} reaches an odd amount.
+	fmt.Printf("coins %v, amount %d -> %d\n", []int{2}, 3, minCoins([]int{2}, 3))
+}`} />
+
+For coins `[1, 3, 4]` and amount `6`, DP returns **2** (`3 + 3`). A greedy "take the largest coin that fits" would grab `4`, then `1 + 1`, for **3** coins — wrong. DP is exact because it considers every coin for every amount instead of committing early. That contrast with [greedy algorithms](/dsa/greedy/) is the key takeaway: greedy is faster but only correct for special coin systems; DP always finds the true minimum.
+
+<Callout type="gotcha" title="⚠️ Define the state and base case before you write a loop">
+Most DP bugs are state bugs, not loop bugs. Pin down three things first: **what `dp[i]` means** (a precise sentence — "min coins for amount i"), the **recurrence** (how `dp[i]` is built from smaller entries), and the **base case** (`dp[0] = 0`). Initialize "impossible" entries to a sentinel (a large number for minimization, not `0`, or you'll mistake "unreachable" for "free"). Get those right and the loops almost write themselves.
+</Callout>
+
+Next: when the locally optimal choice *is* enough — [greedy algorithms](/dsa/greedy/).

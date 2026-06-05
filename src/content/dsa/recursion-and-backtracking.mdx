@@ -1,0 +1,179 @@
+---
+title: "Recursion & Backtracking"
+category: algorithms
+kind: topic
+order: 4
+difficulty: "Intermediate"
+status: ready
+intent: "Define a problem in terms of itself — base case plus recursive case, the call stack and its limits, and backtracking's choose / explore / un-choose loop."
+related:
+  - binary-trees
+  - dynamic-programming
+  - graphs
+quiz:
+  - q: "Every correct recursion needs which two parts?"
+    options:
+      - text: "A base case that stops, and a recursive case that moves toward it"
+        correct: true
+      - text: "A loop and a counter"
+        correct: false
+      - text: "Two functions that call each other"
+        correct: false
+      - text: "A global variable and a return statement"
+        correct: false
+    explain: "Without a base case the calls never stop; without progress toward it the base case is never reached. Both together guarantee termination."
+  - q: "Why does very deep recursion risk a stack overflow?"
+    options:
+      - text: "Each pending call keeps a frame on the call stack, and the stack has a limited size"
+        correct: true
+      - text: "Recursion leaks heap memory that the GC can't free"
+        correct: false
+      - text: "Go forbids more than 100 nested calls"
+        correct: false
+      - text: "The function gets recompiled on every call"
+        correct: false
+    explain: "A call can't return until its recursive call does, so frames pile up to a depth of O(n). At a few hundred thousand deep that exhausts the goroutine stack. (Go grows stacks dynamically, but not without bound.)"
+  - q: "What is the defining move of backtracking?"
+    options:
+      - text: "Choose, recurse to explore, then un-choose to restore state before the next choice"
+        correct: true
+      - text: "Sort the input and binary-search it"
+        correct: false
+      - text: "Cache every result in a map"
+        correct: false
+      - text: "Swap two pointers from the ends"
+        correct: false
+    explain: "Backtracking builds a partial solution incrementally; after exploring a branch it undoes that step so the shared state is clean for the next branch. Choose / explore / un-choose."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Exploring a maze with a ball of string: at each fork you pick a passage and walk on (choose), follow it as far as it goes (explore), and if it dead-ends you reel the string back to the fork and try the next passage (un-choose). Recursion is the walking deeper; backtracking is the reeling back. The string is the call stack remembering exactly where you were.
+</Callout>
+
+## Base case plus recursive case
+
+A recursive function solves a problem by calling itself on a **smaller** version of the same problem. It needs exactly two ingredients:
+
+- a **base case** — the smallest input, answered directly with no further calls,
+- a **recursive case** — reduce the problem one step and combine the sub-answer.
+
+Factorial is the textbook shape: `0! = 1` (base), and `n! = n × (n-1)!` (recursive). Each call peels off one `n` until it bottoms out, then the answers multiply back up as the stack unwinds.
+
+<Mermaid code={`graph TD
+  A["factorial(4)"] --> B["4 * factorial(3)"]
+  B --> C["3 * factorial(2)"]
+  C --> D["2 * factorial(1)"]
+  D --> E["1 * factorial(0)"]
+  E --> F["factorial(0) = 1  (base case)"]`} />
+
+## The call stack and its limit
+
+Each pending call keeps a **stack frame** — its parameters and locals — alive until it returns. A recursion `n` deep stacks `n` frames, so it costs **O(n)** space even when it returns a single number. Go grows a goroutine's stack on demand, but not infinitely: run far enough (hundreds of thousands deep) and you hit `fatal error: stack overflow`. The fix is to bound the depth, switch to an iterative loop, or make the call a [tail-free shape](/dsa/stacks-and-queues/) you can drive with an explicit stack.
+
+<Playground client:visible title="recursion.go" code={`package main
+
+import "fmt"
+
+// factorial is the canonical recursion: a base case and one smaller call.
+func factorial(n int) int {
+	if n <= 1 { // base case: 0! and 1! are both 1
+		return 1
+	}
+	return n * factorial(n-1) // recursive case: shrink n by one
+}
+
+// power computes base^exp recursively, halving exp each step so the
+// depth is O(log exp) rather than O(exp).
+func power(base, exp int) int {
+	if exp == 0 { // base case
+		return 1
+	}
+	half := power(base, exp/2)
+	if exp%2 == 0 {
+		return half * half
+	}
+	return base * half * half
+}
+
+func main() {
+	for n := 0; n <= 6; n++ {
+		fmt.Printf("%d! = %d\n", n, factorial(n))
+	}
+	fmt.Printf("2^10 = %d\n", power(2, 10))
+}`} />
+
+## Backtracking: choose, explore, un-choose
+
+Backtracking is recursion that **builds a partial solution and undoes it**. At each step you make a choice, recurse to explore everything that follows from it, then reverse the choice so the shared state is pristine for the next branch. It's how you generate every permutation, subset, or board arrangement without duplicating work.
+
+The undo step is the whole trick: because all branches share one slice or one used-set, you must leave it exactly as you found it.
+
+<Mermaid code={`graph TD
+  A["perm of [1,2,3]"] --> B["pick 1"]
+  A --> C["pick 2"]
+  A --> D["pick 3"]
+  B --> B1["1,2,3"]
+  B --> B2["1,3,2"]
+  C --> C1["2,1,3"]
+  C --> C2["2,3,1"]
+  D --> D1["3,1,2"]
+  D --> D2["3,2,1"]`} />
+
+<Playground client:visible title="permutations.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// permute generates every ordering of nums using backtracking.
+// current is the partial arrangement; used marks which indices are taken.
+func permute(nums []int, used []bool, current []int, out *[][]int) {
+	if len(current) == len(nums) { // base case: a full permutation
+		perm := make([]int, len(current))
+		copy(perm, current)
+		*out = append(*out, perm)
+		return
+	}
+	for i := range nums {
+		if used[i] {
+			continue
+		}
+		// choose
+		used[i] = true
+		current = append(current, nums[i])
+		// explore
+		permute(nums, used, current, out)
+		// un-choose: restore state for the next branch
+		current = current[:len(current)-1]
+		used[i] = false
+	}
+}
+
+func main() {
+	nums := []int{1, 2, 3}
+	var out [][]int
+	permute(nums, make([]bool, len(nums)), nil, &out)
+
+	// Sort the results so the printed output is deterministic.
+	lines := make([]string, 0, len(out))
+	for _, p := range out {
+		lines = append(lines, fmt.Sprint(p))
+	}
+	sort.Strings(lines)
+	fmt.Printf("%d permutations:\n%s\n", len(out), strings.Join(lines, "\n"))
+}`} />
+
+<Callout type="gotcha" title="⚠️ Copy before you store, and always un-choose">
+Two classic backtracking bugs. First, **storing the shared slice directly** — `*out = append(*out, current)` saves a pointer to a buffer you keep mutating, so every stored answer ends up identical; copy it (`make` + `copy`) before saving. Second, **forgetting to un-choose** — skip the restore and the next branch inherits stale state, producing wrong or missing results. The append/truncate pair must be perfectly balanced.
+</Callout>
+
+<Callout type="tip" title="🐹 When subproblems repeat, memoize">
+Plain recursion redoes work: naive `fib(n)` recomputes the same `fib(k)` exponentially many times. When the call tree has **overlapping subproblems**, cache each result in a `map` or slice and the exponential collapses to linear. That's the bridge from recursion to [dynamic programming](/dsa/dynamic-programming/).
+</Callout>
+
+Next: caching overlapping subproblems to turn exponential recursion into polynomial — [dynamic programming](/dsa/dynamic-programming/).

@@ -1,0 +1,187 @@
+---
+title: "Sorting"
+category: algorithms
+kind: topic
+order: 2
+difficulty: "Intermediate"
+status: ready
+intent: "Why comparison sorts can't beat O(n log n) — merge sort and quicksort by hand, then the one line you actually write in Go: slices.Sort."
+related:
+  - binary-search
+  - big-o
+  - two-pointers
+quiz:
+  - q: "Why can no comparison-based sort do better than O(n log n) in the worst case?"
+    options:
+      - text: "There are n! possible orderings, and each comparison splits the possibilities in half, so you need at least log₂(n!) ≈ n log n comparisons to single one out"
+        correct: true
+      - text: "Because computers are too slow"
+        correct: false
+      - text: "Because slices can't hold more than n log n elements"
+        correct: false
+      - text: "It can — quicksort is O(n)"
+        correct: false
+    explain: "Any algorithm that only compares pairs must distinguish all n! permutations. A comparison yields one bit, and log₂(n!) ≈ n log n by Stirling's approximation — that's the information-theoretic floor."
+  - q: "What is quicksort's worst-case time, and when does it happen?"
+    options:
+      - text: "O(n²), when pivots are chosen badly (e.g. always the smallest) on already-sorted or adversarial input"
+        correct: true
+      - text: "O(n log n) always — there is no bad case"
+        correct: false
+      - text: "O(n), on sorted input"
+        correct: false
+      - text: "O(2ⁿ)"
+        correct: false
+    explain: "If each pivot splits off just one element, partitioning runs n times over shrinking ranges → O(n²). Good pivot choice (random or median-of-three) makes this case astronomically unlikely, keeping the average at O(n log n)."
+  - q: "What does `slices.Sort` use under the hood, and is it stable?"
+    options:
+      - text: "An introsort variant; it is NOT guaranteed stable — use slices.SortStableFunc when equal elements must keep their order"
+        correct: true
+      - text: "Bubble sort, and it is stable"
+        correct: false
+      - text: "Merge sort, and it is always stable"
+        correct: false
+      - text: "It calls the operating system's sort"
+        correct: false
+    explain: "Go's standard sort is a pattern-defeating introsort (quicksort that falls back to heapsort to dodge the O(n²) case). It is not stable; reach for the *Stable* variants when ties must preserve input order."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🃏 Analogy">
+Sorting a shuffled deck two ways. Merge sort: split the deck into tiny piles, then repeatedly merge two sorted piles into one bigger sorted pile — calm, predictable, but you need spare table space for the piles. Quicksort: pick a card, slap everything smaller to its left and bigger to its right, then sort each side the same way — no spare space, blazing fast, but pick a bad card every time and it crawls.
+</Callout>
+
+## The O(n log n) wall
+
+Any sort that works by **comparing pairs** of elements has a hard floor: there are `n!` possible orderings of n items, and each comparison gives you one bit — true or false — so it takes at least `log₂(n!) ≈ n log n` comparisons to pin down the one correct order. No clever comparison sort beats that asymptotically; merge sort and a well-pivoted quicksort both hit it.
+
+(Specialized non-comparison sorts like counting or radix sort can do O(n) — but only by exploiting structure in the keys, not by comparing.)
+
+## Merge sort: stable, predictable, O(n) space
+
+Merge sort splits the slice in half, sorts each half recursively, then **merges** the two sorted halves by repeatedly taking the smaller front element. It's **stable** (equal elements keep their original order) and always O(n log n) — but it needs O(n) scratch space for the merge.
+
+<Mermaid code={`graph TD
+  A["[5, 2, 8, 1]"] --> B["[5, 2]"]
+  A --> C["[8, 1]"]
+  B --> D["[2, 5]"]
+  C --> E["[1, 8]"]
+  D --> F["merge → [1, 2, 5, 8]"]
+  E --> F`} />
+
+<Playground client:visible title="mergesort.go" code={`package main
+
+import "fmt"
+
+// mergeSort returns a new sorted slice. Stable, O(n log n) time, O(n) space.
+func mergeSort(a []int) []int {
+	if len(a) <= 1 {
+		return a
+	}
+	mid := len(a) / 2
+	left := mergeSort(a[:mid])
+	right := mergeSort(a[mid:])
+	return merge(left, right)
+}
+
+// merge combines two sorted slices into one sorted slice.
+func merge(left, right []int) []int {
+	out := make([]int, 0, len(left)+len(right))
+	i, j := 0, 0
+	for i < len(left) && j < len(right) {
+		// <= keeps equal elements in order, so the sort is stable.
+		if left[i] <= right[j] {
+			out = append(out, left[i])
+			i++
+		} else {
+			out = append(out, right[j])
+			j++
+		}
+	}
+	out = append(out, left[i:]...)  // drain whatever is left
+	out = append(out, right[j:]...)
+	return out
+}
+
+func main() {
+	a := []int{5, 2, 8, 1, 9, 3, 7, 4, 6}
+	fmt.Println("input: ", a)
+	fmt.Println("sorted:", mergeSort(a))
+}`} />
+
+## Quicksort: in-place, fast average, risky worst case
+
+Quicksort picks a **pivot**, then **partitions** the slice so everything smaller sits left of the pivot and everything larger sits right — the pivot lands in its final spot. It then recurses on each side. It sorts **in place** (O(log n) stack space) and is usually the fastest in practice because it's cache-friendly.
+
+The catch is the pivot. A balanced split gives O(n log n); a consistently lopsided one (e.g. always picking the smallest element on already-sorted data) degrades to **O(n²)**. Real implementations defend against this with randomized or median-of-three pivots — and Go's goes further, falling back to heapsort if it detects bad behavior.
+
+```go
+// In-place quicksort (Lomuto partition). Average O(n log n), worst O(n²).
+func quickSort(a []int, lo, hi int) {
+	if lo >= hi {
+		return
+	}
+	pivot := a[hi] // last element as pivot (simple, but vulnerable to sorted input)
+	i := lo
+	for j := lo; j < hi; j++ {
+		if a[j] < pivot {
+			a[i], a[j] = a[j], a[i] // swap small element left
+			i++
+		}
+	}
+	a[i], a[hi] = a[hi], a[i] // put pivot in its final place
+	quickSort(a, lo, i-1)
+	quickSort(a, i+1, hi)
+}
+```
+
+## In real Go, you call the stdlib
+
+You almost never write the loops above in production. The standard library's sort is a tuned **introsort** (a pattern-defeating quicksort that falls back to heapsort to guarantee O(n log n), with insertion sort for tiny ranges). Two front doors:
+
+- [`slices.Sort`](https://pkg.go.dev/slices#Sort) (Go 1.21+) for ordered element types, and [`slices.SortFunc`](https://pkg.go.dev/slices#SortFunc) with a comparison function for anything else.
+- [`sort.Slice`](https://pkg.go.dev/sort#Slice), the older reflection-based form, taking a `less(i, j)` closure.
+
+Neither is stable; use `slices.SortStableFunc` or `sort.SliceStable` when equal elements must keep their input order.
+
+<Playground client:visible title="sortstructs.go" code={`package main
+
+import (
+	"fmt"
+	"slices"
+	"sort"
+)
+
+type Person struct {
+	Name string
+	Age  int
+}
+
+func main() {
+	people := []Person{
+		{"Bob", 31},
+		{"Ada", 36},
+		{"Cleo", 31},
+		{"Dan", 24},
+	}
+
+	// slices.SortFunc: sort by Age ascending. cmp.Compare-style: <0, 0, >0.
+	slices.SortFunc(people, func(a, b Person) int {
+		return a.Age - b.Age
+	})
+	fmt.Println("by age: ", people)
+
+	// sort.Slice: the older closure form. Sort by Name ascending.
+	sort.Slice(people, func(i, j int) bool {
+		return people[i].Name < people[j].Name
+	})
+	fmt.Println("by name:", people)
+}`} />
+
+<Callout type="gotcha" title="⚠️ The stdlib sort is not stable">
+`slices.Sort`, `slices.SortFunc`, and `sort.Slice` may reorder elements that compare equal — handy when you sort by Age, then expect ties still grouped by a previous Name order. They won't be. Reach for `slices.SortStableFunc` or `sort.SliceStable` when stability matters (at a small constant-factor cost). Also: `slices.SortFunc`'s callback returns an `int` (negative / zero / positive), while `sort.Slice`'s returns a `bool` (`less`) — mixing them up is a common compile error.
+</Callout>
+
+Next: a different way to walk a sorted slice — [two pointers](/dsa/two-pointers/).

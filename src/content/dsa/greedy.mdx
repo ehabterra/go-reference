@@ -1,0 +1,199 @@
+---
+title: "Greedy Algorithms"
+category: algorithms
+kind: topic
+order: 6
+difficulty: "Intermediate"
+status: ready
+intent: "Make the locally optimal choice and never look back — when greedy is provably correct, classic wins like interval scheduling, and where it fails."
+related:
+  - dynamic-programming
+  - sorting
+  - graphs
+quiz:
+  - q: "What is the defining behavior of a greedy algorithm?"
+    options:
+      - text: "Make the locally optimal choice at each step and never reconsider it"
+        correct: true
+      - text: "Try every combination and keep the best"
+        correct: false
+      - text: "Cache subproblem results in a table"
+        correct: false
+      - text: "Always split the input in half"
+        correct: false
+    explain: "Greedy commits to the best-looking choice right now and moves on. It never backtracks or revises, which is what makes it fast — and also what makes it wrong unless the problem has the greedy-choice property."
+  - q: "For interval (activity) scheduling — picking the most non-overlapping intervals — which greedy rule is provably optimal?"
+    options:
+      - text: "Sort by earliest finish time, then take each interval that starts after the last one taken finishes"
+        correct: true
+      - text: "Sort by earliest start time and take greedily"
+        correct: false
+      - text: "Sort by shortest duration and take greedily"
+        correct: false
+      - text: "Take intervals in their original order"
+        correct: false
+    explain: "Earliest-finish-time leaves the most room for future intervals, so it's optimal. Earliest-start and shortest-duration both have counterexamples where they pick fewer intervals."
+  - q: "Greedy coin change with coins [1, 3, 4] making 6 gives 4+1+1 = 3 coins. What's the real minimum?"
+    options:
+      - text: "2 coins (3 + 3) — greedy's early commitment to the largest coin is suboptimal"
+        correct: true
+      - text: "3 coins — greedy is correct here"
+        correct: false
+      - text: "1 coin"
+        correct: false
+      - text: "4 coins"
+        correct: false
+    explain: "Greedy grabs the largest coin (4) first and gets stuck needing 1+1. The optimum 3+3=2 requires not taking the biggest coin. Greedy coin change is only correct for canonical systems like US coins."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🥾 Analogy">
+A hiker without a map just walks toward whichever direction looks most downhill, step after step, never backtracking. On a smooth valley that beeline reaches the bottom fast. But on rugged terrain it can stride confidently into a pocket and get stuck — locally lowest, yet not the true low point. Greedy algorithms are that hiker: fast and simple when the landscape cooperates, and confidently wrong when it doesn't.
+</Callout>
+
+## Greedy: commit locally, never reconsider
+
+A **greedy algorithm** builds a solution one piece at a time, always taking the choice that looks best *right now* and never undoing it. No backtracking, no table of subproblems — just a single forward pass, which is why greedy is typically the fastest approach when it works.
+
+But "when it works" is the whole catch. Greedy is correct only when the problem has two properties:
+
+- **Greedy-choice property** — a globally optimal solution can be reached by a sequence of locally optimal choices. The best first move is safe to lock in.
+- **Optimal substructure** — after making that choice, what remains is a smaller instance of the same problem, and an optimal solution to it extends your choice into a global optimum.
+
+When those hold, greedy is provably optimal *and* fast. When they don't, you need [dynamic programming](/dsa/dynamic-programming/), which explores all options instead of committing early.
+
+<Mermaid code={`graph TD
+  S["problem"] --> C{"greedy-choice<br/>property?"}
+  C -->|yes| G["greedy: one pass, locally optimal"]
+  C -->|no| D["dynamic programming: explore all options"]
+  classDef good fill:#0f2a1a,stroke:#22c55e,color:#d7ffe9;
+  classDef warn fill:#2a0f17,stroke:#f43f5e,color:#ffd7e0;
+  class G good;
+  class D warn;`} />
+
+A few classics greedy nails: **interval scheduling** (most non-overlapping meetings → sort by earliest finish), **coin change for canonical systems** (US coins → always grab the largest that fits), and **Huffman coding** (repeatedly merge the two least-frequent symbols to build an optimal prefix code).
+
+## Interval scheduling by earliest finish time
+
+You have a set of meetings, each with a start and finish time, and one room. Pick the **most** meetings that don't overlap. The optimal greedy rule is counterintuitive: ignore start times and **sort by finish time**, then walk through taking any meeting that starts at or after the last one you took finishes. Finishing early leaves the most room for what follows.
+
+<Playground client:visible title="interval_scheduling.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+type Interval struct {
+	name       string
+	start, fin int
+}
+
+// maxNonOverlapping returns the largest set of mutually non-overlapping intervals.
+// Greedy: sort by finish time, then take each that starts at/after the last finish.
+func maxNonOverlapping(items []Interval) []Interval {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].fin != items[j].fin {
+			return items[i].fin < items[j].fin
+		}
+		return items[i].start < items[j].start // tie-break for deterministic output
+	})
+
+	var chosen []Interval
+	lastFinish := -1 << 30
+	for _, it := range items {
+		if it.start >= lastFinish {
+			chosen = append(chosen, it)
+			lastFinish = it.fin
+		}
+	}
+	return chosen
+}
+
+func main() {
+	meetings := []Interval{
+		{"A", 1, 4},
+		{"B", 3, 5},
+		{"C", 0, 6},
+		{"D", 5, 7},
+		{"E", 3, 9},
+		{"F", 8, 9},
+	}
+
+	chosen := maxNonOverlapping(meetings)
+	fmt.Printf("picked %d non-overlapping meetings:\n", len(chosen))
+	for _, it := range chosen {
+		fmt.Printf("  %s [%d, %d)\n", it.name, it.start, it.fin)
+	}
+}`} />
+
+The greedy pass picks A, D, F — three meetings — and no other selection does better. Crucially, picking the longest meeting C `[0,6)` first would have blocked everything else; earliest-finish avoids that trap.
+
+## Where greedy fails: coin change
+
+The same "take the biggest that fits" instinct that works for US coins breaks on other systems. With coins `[1, 3, 4]` and amount `6`, greedy grabs `4`, then is forced into `1 + 1` — **3 coins**. The real optimum is `3 + 3` — **2 coins** — which requires *not* taking the largest coin. Greedy can't see that because it never reconsiders.
+
+This playground runs both and prints the gap, so the failure is concrete and deterministic:
+
+<Playground client:visible title="greedy_vs_dp_coins.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+// greedyCoins: take the largest coin that fits, repeatedly. Fast but not always optimal.
+func greedyCoins(coins []int, amount int) int {
+	sorted := append([]int(nil), coins...)
+	sort.Sort(sort.Reverse(sort.IntSlice(sorted))) // largest first, deterministic
+	count := 0
+	for _, c := range sorted {
+		for amount >= c {
+			amount -= c
+			count++
+		}
+	}
+	if amount != 0 {
+		return -1 // greedy got stuck
+	}
+	return count
+}
+
+// dpCoins: bottom-up DP, always the true minimum.
+func dpCoins(coins []int, amount int) int {
+	const unreachable = 1 << 30
+	dp := make([]int, amount+1)
+	for a := 1; a <= amount; a++ {
+		dp[a] = unreachable
+		for _, c := range coins {
+			if c <= a && dp[a-c]+1 < dp[a] {
+				dp[a] = dp[a-c] + 1
+			}
+		}
+	}
+	if dp[amount] >= unreachable {
+		return -1
+	}
+	return dp[amount]
+}
+
+func main() {
+	coins := []int{1, 3, 4}
+	amount := 6
+
+	g := greedyCoins(coins, amount)
+	d := dpCoins(coins, amount)
+
+	fmt.Printf("coins %v, amount %d\n", coins, amount)
+	fmt.Printf("greedy: %d coins (4+1+1)\n", g)
+	fmt.Printf("DP:     %d coins (3+3, optimal)\n", d)
+	fmt.Printf("greedy is wrong by %d coin(s)\n", g-d)
+}`} />
+
+<Callout type="gotcha" title="⚠️ Fast is not the same as correct — prove the greedy choice">
+Greedy's danger is that it always returns *an* answer, and that answer often looks plausible. Before trusting it, prove (or at least convince yourself) that the locally optimal choice is globally safe — typically with an exchange argument: show any optimal solution can be rewritten to start with the greedy choice without getting worse. If you can't, or you find a counterexample like `[1, 3, 4]` making `6`, reach for [dynamic programming](/dsa/dynamic-programming/) instead. Greedy trades correctness for speed; only spend that trade when you've earned it.
+</Callout>
+
+Next: back to the [Data Structures & Algorithms track](/dsa/), or revisit when greedy isn't enough — [dynamic programming](/dsa/dynamic-programming/).

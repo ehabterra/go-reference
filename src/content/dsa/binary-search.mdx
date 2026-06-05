@@ -1,0 +1,143 @@
+---
+title: "Binary Search"
+category: algorithms
+kind: topic
+order: 1
+difficulty: "Beginner"
+status: ready
+intent: "Find a value in a sorted slice in O(log n) by repeatedly halving the range — the correct loop, the off-by-one traps, and the stdlib helpers."
+related:
+  - big-o
+  - sorting
+  - arrays-and-slices
+quiz:
+  - q: "What must be true about the slice before you binary-search it?"
+    options:
+      - text: "It must be sorted by the same order the search assumes"
+        correct: true
+      - text: "It must contain only unique values"
+        correct: false
+      - text: "It must have a power-of-two length"
+        correct: false
+      - text: "Nothing — binary search works on any slice"
+        correct: false
+    explain: "Binary search decides which half to keep by comparing against the middle element. That decision is only valid if the data is ordered; on an unsorted slice it discards the wrong half and misses the target."
+  - q: "Why write `mid := lo + (hi-lo)/2` instead of `mid := (lo+hi)/2`?"
+    options:
+      - text: "`lo+hi` can overflow for large indices; `lo + (hi-lo)/2` computes the same midpoint without overflowing"
+        correct: true
+      - text: "It runs faster"
+        correct: false
+      - text: "It rounds up instead of down"
+        correct: false
+      - text: "They are never equal"
+        correct: false
+    explain: "For huge slices `lo+hi` can exceed the integer range and wrap negative. `hi-lo` is always within range, so `lo + (hi-lo)/2` is the safe, equivalent form."
+  - q: "What does `sort.Search` return when the target is not present?"
+    options:
+      - text: "The index where the target would be inserted to keep the slice sorted"
+        correct: true
+      - text: "-1"
+        correct: false
+      - text: "The length of the slice, always"
+        correct: false
+      - text: "A panic"
+        correct: false
+    explain: "`sort.Search` finds the smallest index where a predicate becomes true — the insertion point. You then check that index yourself to confirm whether the value actually matched."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Guessing a number between 1 and 100: a friend says "higher" or "lower" after each guess. Start at 50, then 75 or 25, then halve again — you corner the answer in about seven guesses, not a hundred. Binary search is exactly that, run against a sorted slice: every comparison throws away half of what's left.
+</Callout>
+
+## Halve the range each step
+
+Binary search keeps a window `[lo, hi]` of indices that could still hold the target. Look at the middle; if it's too small, the answer must be to the right, so move `lo` past `mid`; if it's too big, move `hi` before `mid`. Each step discards half the window, so n elements take about log₂(n) steps — 20 for a million.
+
+<Mermaid code={`graph TD
+  A["lo=0  hi=15  mid=7<br/>a[7] < target → go right"] --> B["lo=8  hi=15  mid=11<br/>a[11] > target → go left"]
+  B --> C["lo=8  hi=10  mid=9<br/>a[9] == target → found"]`} />
+
+The whole algorithm is one loop. The details that trip people up are all about boundaries: the loop condition and how you move `lo` and `hi`.
+
+<Playground client:visible title="binarysearch.go" code={`package main
+
+import "fmt"
+
+// binarySearch returns the index of target in the sorted slice a,
+// or -1 if it is not present. Runs in O(log n).
+func binarySearch(a []int, target int) int {
+	lo, hi := 0, len(a)-1 // inclusive window [lo, hi]
+	for lo <= hi {        // note: <=, so a one-element window is still checked
+		mid := lo + (hi-lo)/2 // avoids lo+hi overflow on huge slices
+		switch {
+		case a[mid] == target:
+			return mid
+		case a[mid] < target:
+			lo = mid + 1 // target is to the right; drop mid and left half
+		default:
+			hi = mid - 1 // target is to the left; drop mid and right half
+		}
+	}
+	return -1
+}
+
+func main() {
+	a := []int{1, 3, 4, 7, 9, 11, 15, 22, 30, 41}
+	for _, target := range []int{7, 22, 8} {
+		idx := binarySearch(a, target)
+		fmt.Printf("search %2d -> index %d\n", target, idx)
+	}
+}`} />
+
+## The off-by-one traps
+
+Three choices have to agree, or the loop spins forever or skips a value:
+
+- **Loop condition `lo <= hi`.** With an inclusive window, `lo == hi` is a real one-element range you must still inspect. Using `<` instead would miss it.
+- **`lo = mid + 1` and `hi = mid - 1`.** You already compared `mid`, so exclude it. Writing `lo = mid` (without `+1`) when `a[mid] < target` leaves the window the same size and loops forever.
+- **`mid := lo + (hi-lo)/2`.** Integer division rounds down, which keeps `mid` inside `[lo, hi)` when the window has two or more elements — exactly what the `+1`/`-1` updates rely on.
+
+## Reach for the standard library
+
+You rarely hand-roll this in production. The stdlib has two ready-made tools:
+
+- [`slices.BinarySearch`](https://pkg.go.dev/slices#BinarySearch) (Go 1.21+) — on an ordered slice it returns `(index, found)`: the position if present, otherwise the index where the value would be inserted.
+- [`sort.Search`](https://pkg.go.dev/sort#Search) — the general form. You give it `n` and a predicate `f(i)` that is `false … false true … true`; it returns the first index where `f` is `true`. That's the **insertion point**, so you check it yourself to confirm a real match.
+
+This second form is the key idea: binary search isn't only about slices. Any time you have a **monotonic predicate** — something that flips from false to true exactly once as a parameter grows — you can binary-search the smallest input that satisfies it. That's "binary search on the answer": instead of an index, you halve a numeric range (a speed, a capacity, a time) and probe the predicate at the midpoint.
+
+<Playground client:visible title="stdlib.go" code={`package main
+
+import (
+	"fmt"
+	"slices"
+	"sort"
+)
+
+func main() {
+	a := []int{1, 3, 4, 7, 9, 11, 15, 22, 30, 41}
+	target := 22
+
+	// slices.BinarySearch returns (index, found).
+	idx, found := slices.BinarySearch(a, target)
+	fmt.Printf("slices.BinarySearch: index=%d found=%t\n", idx, found)
+
+	// sort.Search returns the first index where the predicate is true,
+	// i.e. the first element >= target. Confirm the match yourself.
+	j := sort.Search(len(a), func(i int) bool { return a[i] >= target })
+	hit := j < len(a) && a[j] == target
+	fmt.Printf("sort.Search:         index=%d found=%t\n", j, hit)
+
+	// Both stdlib helpers agree with each other.
+	fmt.Printf("agree: %t\n", idx == j && found == hit)
+}`} />
+
+<Callout type="gotcha" title="⚠️ Sorted, and the right order">
+Binary search silently returns wrong answers on unsorted data — there's no error, just a miss. And the order must match the comparison: `slices.BinarySearch` and `sort.Search` with `>=` assume ascending order. If your slice is sorted descending, or by a custom key, you must use `slices.BinarySearchFunc` / `sort.Search` with a predicate that matches that order. Sorting once is O(n log n); if you search many times, that cost pays for itself.
+</Callout>
+
+Next: how the slice gets sorted in the first place — [sorting](/dsa/sorting/).

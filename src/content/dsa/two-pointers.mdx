@@ -1,0 +1,164 @@
+---
+title: "Two Pointers & Sliding Window"
+category: algorithms
+kind: topic
+order: 3
+difficulty: "Intermediate"
+status: ready
+intent: "Replace nested loops with two indices that move with intent — converging pointers on sorted data and a sliding window for contiguous subarray and substring problems."
+related:
+  - arrays-and-slices
+  - sorting
+  - hash-tables
+quiz:
+  - q: "On a sorted slice, two pointers find a pair summing to a target in what time?"
+    options:
+      - text: "O(n) — each pointer moves inward at most n times total"
+        correct: true
+      - text: "O(n²) — every pair must be checked"
+        correct: false
+      - text: "O(log n) — it halves the range each step"
+        correct: false
+      - text: "O(n log n) — it sorts on every step"
+        correct: false
+    explain: "lo and hi start at the ends and only ever move toward each other, so the loop runs at most n times. The slice must already be sorted for the move-which-pointer decision to be valid."
+  - q: "In the converging two-pointer pair-sum, when the current sum is too small you should:"
+    options:
+      - text: "Move the left pointer right to a larger value"
+        correct: true
+      - text: "Move the right pointer left to a smaller value"
+        correct: false
+      - text: "Move both pointers inward at once"
+        correct: false
+      - text: "Restart both pointers from the ends"
+        correct: false
+    explain: "Sorted ascending: the smallest unused increase comes from advancing lo. If the sum were too big you'd lower it by moving hi left instead."
+  - q: "What makes the sliding window for 'longest substring without repeating characters' O(n)?"
+    options:
+      - text: "Each character is visited by the right edge once and the left edge moves forward only, never back"
+        correct: true
+      - text: "It re-scans the whole window on every step, which is O(n) per character"
+        correct: false
+      - text: "It sorts the string first"
+        correct: false
+      - text: "It uses recursion to halve the input"
+        correct: false
+    explain: "Both edges only move right across the string, so each index is entered and left at most once — a total of O(n) edge moves, with O(1) map work per step."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Two friends search a sorted bookshelf for two books whose page counts add to a target. One starts at the thin end, one at the thick end. Too few pages? The thin-end friend steps up to a fatter book. Too many? The thick-end friend steps down. They walk toward each other and meet in one pass — no need to compare every pair.
+</Callout>
+
+## Converging pointers on sorted data
+
+The brute-force way to find a pair summing to a target is two nested loops — **O(n²)**. But if the slice is **sorted**, you can keep one index at each end and let the sum itself tell you which side to move:
+
+- sum **too small** → move `lo` right (toward larger values),
+- sum **too big** → move `hi` left (toward smaller values),
+- sum **equal** → found it.
+
+Because the two indices only ever step toward each other, the loop runs at most **n** times — **O(n)** time, **O(1)** extra space.
+
+<Mermaid code={`graph LR
+  A["[1, 3, 4, 6, 8, 11]  target = 10"] --> B["lo=1 hi=11 → 12 too big, hi--"]
+  B --> C["lo=1 hi=8 → 9 too small, lo++"]
+  C --> D["lo=3 hi=8 → 11 too big, hi--"]
+  D --> E["lo=3 hi=6 → 9 too small, lo++"]
+  E --> F["lo=4 hi=6 → 10 found"]`} />
+
+<Playground client:visible title="two_sum_sorted.go" code={`package main
+
+import "fmt"
+
+// twoSumSorted returns the indices of two values that add up to target,
+// or (-1, -1) if no such pair exists. The slice MUST be sorted ascending.
+// Two pointers converge from the ends in a single O(n) pass.
+func twoSumSorted(a []int, target int) (int, int) {
+	lo, hi := 0, len(a)-1
+	for lo < hi {
+		sum := a[lo] + a[hi]
+		switch {
+		case sum == target:
+			return lo, hi
+		case sum < target:
+			lo++ // need a bigger sum: move toward larger values
+		default:
+			hi-- // need a smaller sum: move toward smaller values
+		}
+	}
+	return -1, -1
+}
+
+func main() {
+	a := []int{1, 3, 4, 6, 8, 11}
+	target := 10
+	i, j := twoSumSorted(a, target)
+	if i == -1 {
+		fmt.Printf("no pair in %v sums to %d\n", a, target)
+		return
+	}
+	fmt.Printf("a[%d]=%d + a[%d]=%d = %d\n", i, a[i], j, a[j], target)
+}`} />
+
+## The sliding window
+
+When the answer is some **contiguous** run — a subarray or a substring — you rarely need to restart from scratch at each position. Instead grow a window from the right and shrink it from the left, keeping a running summary as the edges move.
+
+There are two flavours:
+
+- **Fixed window** of size `k`: slide it along, adding the entering element and subtracting the leaving one — the classic "max sum of any `k` consecutive elements" in O(n).
+- **Variable window**: the right edge expands greedily; whenever the window breaks a rule, the left edge advances until the rule holds again.
+
+The longest-substring-without-repeating-characters problem is the canonical variable window. Track the **last-seen index** of each byte; when the right edge meets a byte already inside the window, jump the left edge just past that earlier occurrence.
+
+<Mermaid code={`graph LR
+  A["a b c a b c b b"] --> B["window grows: a, ab, abc"]
+  B --> C["next a repeats → left jumps past old a"]
+  C --> D["best length seen = 3 (abc)"]`} />
+
+<Playground client:visible title="longest_unique.go" code={`package main
+
+import "fmt"
+
+// longestUnique returns the length of the longest substring of s
+// that contains no repeated byte, using a variable-size sliding window.
+// lastSeen[b] holds the most recent index at which byte b appeared.
+func longestUnique(s string) int {
+	lastSeen := make(map[byte]int)
+	best, left := 0, 0
+	for right := 0; right < len(s); right++ {
+		b := s[right]
+		// If b is already inside the current window, shrink from the left
+		// to just past its previous position. The max guard stops the
+		// window from ever moving backward.
+		if prev, ok := lastSeen[b]; ok && prev >= left {
+			left = prev + 1
+		}
+		lastSeen[b] = right
+		if length := right - left + 1; length > best {
+			best = length
+		}
+	}
+	return best
+}
+
+func main() {
+	cases := []string{"abcabcbb", "bbbbb", "pwwkew", "golang"}
+	for _, s := range cases {
+		fmt.Printf("%-10s -> %d\n", s, longestUnique(s))
+	}
+}`} />
+
+<Callout type="tip" title="🐹 Sort first, then converge">
+Converging two pointers *only* work on sorted input — that's what makes "move which side?" a valid decision. If your data isn't sorted, you have a choice: pay **O(n log n)** to [sort](/dsa/sorting/) and then sweep in O(n), or keep it unsorted and use a [hash table](/dsa/hash-tables/) for an O(n)-time, O(n)-space pass. Sorting wins when you also need ordered output or the data is already nearly sorted.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ The left edge must never move backward">
+The bug that quietly breaks a variable window is letting the left pointer jump back. In the substring example, `prev` might point to a byte that left the window long ago; without the `prev >= left` guard, `left` would lurch backward, recount characters, and inflate the answer. Always clamp the left edge so it only ever moves forward — that's also what guarantees the O(n) bound.
+</Callout>
+
+Next: when one pass isn't enough — solving a problem in terms of itself with [recursion and backtracking](/dsa/recursion-and-backtracking/).
