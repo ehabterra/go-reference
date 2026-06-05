@@ -2,12 +2,10 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
-import Card from '../../components/Card.astro';
 import { DSA_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('dsa');
 const slugs = topics.map((t) => t.id).join(',');
-const start = topics.find((t) => t.id === 'big-o');
 ---
 <BaseLayout title="Data Structures & Algorithms" description="A Go-first guide to data structures and algorithms — Big-O, arrays and slices, linked lists, hash tables, trees, graphs, sorting, searching and dynamic programming, with diagrams and runnable code.">
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>DSA</span></nav>
@@ -37,23 +35,6 @@ const start = topics.find((t) => t.id === 'big-o');
     </div>
     <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="dsa.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
   </div>
-
-  {start && (
-    <Fragment>
-      <h2 class="dp-section-head" style="border:0;" data-i18n="ui.startHere">Start here</h2>
-      <div class="dp-grid">
-        <Card
-          slug={start.id}
-          category="complexity"
-          title={start.data.title}
-          intent={start.data.intent}
-          numLabel={`START · ${start.data.difficulty}`}
-          footLabel="Read first"
-          base="/dsa"
-        />
-      </div>
-    </Fragment>
-  )}
 
   {DSA_CATEGORIES.map((c) => (
     <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="dsa" base="/dsa" />
