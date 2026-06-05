@@ -486,17 +486,28 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 /* =====================================================================
    i18n — EN / عربي toggle (prose translated, code/concepts stay English)
    ===================================================================== */
-/* Prose is swapped to Arabic in place (ui.js); it reads right-to-left with
-   slightly looser leading, while code, diagrams and tables stay LTR. */
-[data-lang="ar"] .dp-prose { direction: rtl; text-align: right; line-height: 1.9; }
-[data-lang="ar"] .dp-prose pre,
-[data-lang="ar"] .dp-prose > .dp-mermaid,
-[data-lang="ar"] .dp-prose .dp-pg,
-[data-lang="ar"] .dp-prose table { direction: ltr; text-align: left; }
-[data-lang="ar"] .dp-prose code { direction: ltr; unicode-bidi: embed; }
-[data-lang="ar"] .dp-prose ul,
-[data-lang="ar"] .dp-prose ol { padding-right: 1.4rem; padding-left: 0; }
-[data-lang="ar"] .dp-callout { border-left: 0; border-right: 4px solid var(--dp-accent); }
+/* In Arabic the whole document flips to RTL via the dir attribute (set by
+   ui.js); prose is swapped in place and reads right-to-left with slightly
+   looser leading, while code, diagrams, playgrounds and tables stay LTR. */
+[dir="rtl"] .dp-prose { line-height: 1.9; }
+
+/* code, diagrams, playgrounds and tables always read left-to-right */
+[dir="rtl"] pre,
+[dir="rtl"] .dp-mermaid,
+[dir="rtl"] .dp-pg,
+[dir="rtl"] table { direction: ltr; text-align: left; }
+[dir="rtl"] code { direction: ltr; unicode-bidi: isolate; }
+
+/* lists indent from the right; callout accent bar moves to the right edge */
+[dir="rtl"] .dp-prose ul,
+[dir="rtl"] .dp-prose ol { padding-right: 1.4rem; padding-left: 0; }
+[dir="rtl"] .dp-callout { border-left: 0; border-right: 4px solid var(--dp-accent); }
+
+/* reading bar grows from the right; pager "next" sits on the left */
+[dir="rtl"] .dp-readbar { left: auto; right: 0; }
+[dir="rtl"] .dp-pager .next { text-align: left; }
+/* keep the ⌘K search field LTR — the index is English titles/keywords */
+[dir="rtl"] .dp-cmdk__input { direction: ltr; text-align: left; }
 
 /* language toggle button */
 .dp-lang-btn {
@@ -507,6 +518,5 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 }
 .dp-lang-btn:hover { border-color: var(--dp-accent); color: var(--dp-text); }
 
-/* Arabic alignment for quiz options/prose */
-[data-lang="ar"] .dp-opt { text-align: right; }
-[data-lang="ar"] .dp-q__prompt, [data-lang="ar"] .dp-q__explain { text-align: right; }
+/* Arabic alignment for quiz option buttons (text-align doesn't inherit dir) */
+[dir="rtl"] .dp-opt { text-align: right; }

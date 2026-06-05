@@ -239,6 +239,7 @@ function initLang() {
       });
     }
     root.dataset.lang = lang;
+    root.dir = ar ? 'rtl' : 'ltr';
     if (btn) btn.textContent = ar ? 'EN' : 'عربي';
   }
 

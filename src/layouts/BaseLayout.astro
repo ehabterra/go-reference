@@ -20,11 +20,17 @@ const searchIndex = [
 ];
 ---
 <!doctype html>
-<html lang="en" data-lang="en">
+<html lang="en" data-lang="en" dir="ltr">
   <head>
     <script is:inline>
       (function () {
-        try { if (localStorage.getItem('dp-lang') === 'ar') document.documentElement.dataset.lang = 'ar'; } catch (e) {}
+        try {
+          if (localStorage.getItem('dp-lang') === 'ar') {
+            var d = document.documentElement;
+            d.dataset.lang = 'ar';
+            d.dir = 'rtl';
+          }
+        } catch (e) {}
       })();
     </script>
     <meta charset="utf-8" />
