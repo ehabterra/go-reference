@@ -13,45 +13,64 @@ related:
   - concurrency-vs-parallelism
 quiz:
   - q: "What is the 'join point' in the fork-join model?"
+    q_ar: "ما هي 'نقطة الالتقاء (join point)' في نموذج fork-join؟"
     options:
       - text: "Where the parent waits for forked goroutines to finish — typically sync.WaitGroup.Wait()"
+        text_ar: "حيث ينتظر الأب انتهاء الـ goroutines المتفرّعة — غالبًا sync.WaitGroup.Wait()"
         correct: true
       - text: "The go statement"
+        text_ar: "عبارة go"
         correct: false
       - text: "The channel buffer"
+        text_ar: "مخزن الـ channel المؤقّت"
         correct: false
       - text: "GOMAXPROCS"
+        text_ar: "GOMAXPROCS"
         correct: false
     explain: "`go` forks a branch; without a join point (Wait, a channel receive, etc.) main may exit before the goroutine runs. WaitGroup.Wait() reunites the branches."
+    explain_ar: "تُفرِّع `go` فرعًا؛ بدون نقطة التقاء (Wait أو استقبال من channel… إلخ) قد ينتهي main قبل أن يعمل الـ goroutine. تعيد WaitGroup.Wait() جمع الفروع."
   - q: "Roughly how expensive is a goroutine?"
+    q_ar: "كم تبلغ تكلفة الـ goroutine تقريبًا؟"
     options:
       - text: "A few KB of stack that grows on demand — you can have millions"
+        text_ar: "بضعة كيلوبايتات من المكدّس (stack) تنمو عند الحاجة — يمكنك تشغيل الملايين"
         correct: true
       - text: "About 1 MB each, like an OS thread"
+        text_ar: "نحو 1 ميغابايت لكلٍّ منها، مثل خيط نظام التشغيل"
         correct: false
       - text: "One OS thread per goroutine"
+        text_ar: "خيط نظام تشغيل واحد لكل goroutine"
         correct: false
       - text: "They can't be created at runtime"
+        text_ar: "لا يمكن إنشاؤها أثناء التشغيل"
         correct: false
     explain: "A goroutine starts with a ~2–4 KB stack that grows as needed, and context switches are far cheaper than OS threads — so millions are feasible."
+    explain_ar: "يبدأ الـ goroutine بمكدّس بحجم ~2–4 ك.ب ينمو حسب الحاجة، وتبديل السياق أرخص بكثير من خيوط نظام التشغيل — لذا تشغيل الملايين أمر ممكن."
   - q: "What's the danger of a goroutine with no way to stop?"
+    q_ar: "ما خطر goroutine بلا وسيلة للتوقّف؟"
     options:
       - text: "A goroutine leak — it blocks forever and is never garbage-collected"
+        text_ar: "تسريب goroutine — يبقى محجوبًا للأبد ولا يُجمَع مهملاته أبدًا"
         correct: true
       - text: "It crashes the program immediately"
+        text_ar: "يُعطِّل البرنامج فورًا"
         correct: false
       - text: "It uses a full OS thread"
+        text_ar: "يستهلك خيط نظام تشغيل كاملًا"
         correct: false
       - text: "Nothing; the GC collects blocked goroutines"
+        text_ar: "لا شيء؛ يجمع الـ GC الـ goroutines المحجوبة"
         correct: false
     explain: "Goroutines aren't GC'd while blocked. One stuck on a channel send/receive forever leaks its stack and whatever it references. Always give it a termination path (done channel or context)."
+    explain_ar: "لا تُجمَع مهملات الـ goroutines وهي محجوبة. واحد عالق على إرسال/استقبال channel للأبد يسرّب مكدّسه وكل ما يشير إليه. امنحه دائمًا مسار إنهاء (channel للـ done أو context)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 import Tr from '../../components/Tr.astro';
+import H from '../../components/H.astro';
 
-<Callout type="analogy" title="🧵 Analogy">
+<Callout type="analogy" title="🧵 Analogy" title_ar="🧵 تشبيه">
 <Tr>
 An OS thread is a full-time employee — expensive to hire, heavy to manage. A goroutine is more like a task on a shared to-do list: the Go runtime has a small pool of workers (threads) and hands them goroutines to run, parking and resuming them as they block. You can create a *million* tasks; the runtime figures out who runs them.
 <Fragment slot="ar">
@@ -60,7 +79,7 @@ An OS thread is a full-time employee — expensive to hire, heavy to manage. A g
 </Tr>
 </Callout>
 
-## Starting a goroutine
+<H en="Starting a goroutine" ar="تشغيل goroutine" />
 
 <Tr>
 Prefix any call with `go` and it runs concurrently:
@@ -74,7 +93,7 @@ go sayHello()            // a named function
 go func() { work() }()   // an anonymous function
 ```
 
-## The fork-join model
+<H en="The fork-join model" ar="نموذج fork-join" />
 
 <Tr>
 The `go` statement **forks** a new branch of execution. To be sure it actually ran (and finished), you need a **join point** — most often `sync.WaitGroup`. Without one, `main` can return before the goroutine ever runs.
@@ -121,7 +140,7 @@ func main() {
 	fmt.Println("all workers finished")
 }`} />
 
-## They're cheap
+<H en="They're cheap" ar="إنها رخيصة" />
 
 <Tr>
 - **~2–4 KB** initial stack (vs ~1 MB for an OS thread), and it **grows on demand**.
@@ -134,9 +153,9 @@ func main() {
 </Fragment>
 </Tr>
 
-## Two gotchas
+<H en="Two gotchas" ar="مَزلقان شائعان" />
 
-<Callout type="go" title="🐹 The loop-variable capture (fixed in Go 1.22)">
+<Callout type="go" title="🐹 The loop-variable capture (fixed in Go 1.22)" title_ar="🐹 التقاط متغيّر الحلقة (أُصلِح في Go 1.22)">
 <Tr>
 Before Go 1.22, a goroutine in a `for` loop captured the **shared** loop variable, so they often all saw the final value:
 <Fragment slot="ar">
@@ -158,7 +177,7 @@ Go 1.22 made each iteration get its own variable, so this is fixed in modern Go.
 </Tr>
 </Callout>
 
-<Callout type="gotcha" title="⚠️ Every goroutine needs an exit">
+<Callout type="gotcha" title="⚠️ Every goroutine needs an exit" title_ar="⚠️ كل goroutine يحتاج مخرجًا">
 <Tr>
 Goroutines are **not** garbage-collected while blocked. A goroutine waiting forever on a channel that never receives a value is a **leak** — it holds its stack and everything it captured. The rule: every goroutine you start must have a guaranteed path to termination, usually a `done` channel or a [`context`](/concurrency/context/) you `select` on. See [Or-done](/patterns/or-done-channel/) and [Context & Cancellation](/patterns/context-cancellation/).
 <Fragment slot="ar">

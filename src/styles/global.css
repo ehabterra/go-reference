@@ -517,3 +517,29 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
   transition: border-color .2s, color .2s;
 }
 .dp-lang-btn:hover { border-color: var(--dp-accent); color: var(--dp-text); }
+
+/* inline bilingual spans for headings, callout titles, and quiz text
+   (only one language shows; keep it inline so emoji/number stay on the line) */
+.dp-callout__title .tr-ar,
+.dp-q__prompt .tr-ar,
+.dp-q__explain .tr-ar,
+.dp-opt .tr-ar,
+.dp-quiz__head h2 .tr-ar,
+.dp-prose h2 .tr-ar,
+.dp-prose h3 .tr-ar { display: none; }
+[data-lang="ar"] .dp-callout__title .tr-en,
+[data-lang="ar"] .dp-q__prompt .tr-en,
+[data-lang="ar"] .dp-q__explain .tr-en,
+[data-lang="ar"] .dp-opt .tr-en,
+[data-lang="ar"] .dp-quiz__head h2 .tr-en,
+[data-lang="ar"] .dp-prose h2 .tr-en,
+[data-lang="ar"] .dp-prose h3 .tr-en { display: none; }
+[data-lang="ar"] .dp-callout__title .tr-ar,
+[data-lang="ar"] .dp-q__prompt .tr-ar,
+[data-lang="ar"] .dp-q__explain .tr-ar,
+[data-lang="ar"] .dp-opt .tr-ar,
+[data-lang="ar"] .dp-quiz__head h2 .tr-ar,
+[data-lang="ar"] .dp-prose h2 .tr-ar,
+[data-lang="ar"] .dp-prose h3 .tr-ar { display: inline; }
+[data-lang="ar"] .dp-opt { text-align: right; }
+[data-lang="ar"] .dp-q__prompt, [data-lang="ar"] .dp-q__explain { text-align: right; }

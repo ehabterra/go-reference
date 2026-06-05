@@ -88,12 +88,15 @@ function initToc() {
   }
   const items = [];
   heads.forEach((h) => {
-    if (!h.id) h.id = slugify(h.textContent || '');
+    // innerText reflects only the visible language (bilingual headings)
+    const label = (h.innerText || h.textContent || '').trim();
+    if (!label) return; // skip an empty (fully-hidden) heading
+    if (!h.id) h.id = slugify(label);
     const li = document.createElement('li');
     li.className = h.tagName === 'H3' ? 'lvl-3' : 'lvl-2';
     const a = document.createElement('a');
     a.href = '#' + h.id;
-    a.textContent = h.textContent;
+    a.textContent = label;
     li.appendChild(a);
     tocList.appendChild(li);
     items.push({ link: a, el: h });

@@ -36,13 +36,16 @@ const refSchema = z.object({
     .array(
       z.object({
         q: z.string(),
+        q_ar: z.string().optional(),
         options: z.array(
           z.object({
             text: z.string(),
+            text_ar: z.string().optional(),
             correct: z.boolean().default(false),
           }),
         ),
         explain: z.string().optional(),
+        explain_ar: z.string().optional(),
       }),
     )
     .default([]),

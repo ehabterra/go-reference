@@ -1,20 +1,35 @@
 ---
-interface QuizOption { text: string; correct: boolean; }
-interface QuizItem { q: string; options: QuizOption[]; explain?: string; }
+interface QuizOption { text: string; text_ar?: string; correct: boolean; }
+interface QuizItem { q: string; q_ar?: string; options: QuizOption[]; explain?: string; explain_ar?: string; }
 const { quiz } = Astro.props as { quiz: QuizItem[] };
 ---
 <div class="dp-quiz" data-dp-quiz>
   <div class="dp-quiz__head">
-    <h2 id="quiz">Check your understanding</h2>
+    <h2 id="quiz">
+      <span class="tr-en">Check your understanding</span>
+      <span class="tr-ar" lang="ar" dir="rtl">اختبر فهمك</span>
+    </h2>
     <span class="dp-quiz__score" data-dp-score>Score: 0 / {quiz.length}</span>
   </div>
   {quiz.map((q, i) => (
     <div class="dp-q">
-      <p class="dp-q__prompt">{i + 1}. {q.q}</p>
+      <p class="dp-q__prompt">
+        {i + 1}.
+        <span class="tr-en">{q.q}</span>
+        {q.q_ar && <span class="tr-ar" lang="ar" dir="rtl">{q.q_ar}</span>}
+      </p>
       {q.options.map((o) => (
-        <button class="dp-opt" data-correct={o.correct ? 'true' : 'false'}>{o.text}</button>
+        <button class="dp-opt" data-correct={o.correct ? 'true' : 'false'}>
+          <span class="tr-en">{o.text}</span>
+          {o.text_ar && <span class="tr-ar" lang="ar" dir="rtl">{o.text_ar}</span>}
+        </button>
       ))}
-      {q.explain && <p class="dp-q__explain">{q.explain}</p>}
+      {q.explain && (
+        <p class="dp-q__explain">
+          <span class="tr-en">{q.explain}</span>
+          {q.explain_ar && <span class="tr-ar" lang="ar" dir="rtl">{q.explain_ar}</span>}
+        </p>
+      )}
     </div>
   ))}
 </div>
