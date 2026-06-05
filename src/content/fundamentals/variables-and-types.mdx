@@ -1,0 +1,131 @@
+---
+title: "Variables & Types"
+category: basics
+kind: topic
+order: 1
+difficulty: "Start here"
+status: ready
+intent: "How Go names and types values — var and :=, constants and iota, the basic types, guaranteed zero values, and why every conversion is explicit."
+related:
+  - control-flow
+  - functions
+  - pointers
+quiz:
+  - q: "What is the zero value of a string in Go?"
+    options:
+      - text: "An empty string \"\" — never nil"
+        correct: true
+      - text: "nil"
+        correct: false
+      - text: "A space \" \""
+        correct: false
+      - text: "It's undefined until assigned"
+        correct: false
+    explain: "Every type has a well-defined zero value: 0 for numbers, false for bool, \"\" for string, and nil for pointers, slices, maps, channels and interfaces. A declared-but-unassigned variable is never garbage."
+  - q: "Can you assign an int to a float64 variable directly, like `var f float64 = myInt`?"
+    options:
+      - text: "No — Go has no implicit numeric conversion; you must write float64(myInt)"
+        correct: true
+      - text: "Yes, Go converts automatically"
+        correct: false
+      - text: "Only if the int fits in a float64"
+        correct: false
+      - text: "Only inside a function"
+        correct: false
+    explain: "Go never converts between numeric types implicitly — mixing them is a compile error. Convert explicitly with T(x). (Untyped constants are the one exception: they adapt to context.)"
+  - q: "What does `:=` do that `var` doesn't?"
+    options:
+      - text: "Declares and initializes in one step, inferring the type — but only inside a function"
+        correct: true
+      - text: "Declares a constant"
+        correct: false
+      - text: "Works at package level too"
+        correct: false
+      - text: "Makes the variable immutable"
+        correct: false
+    explain: "Short declaration `x := expr` infers the type from the value and only works inside functions. At package scope you must use `var` (or `const`)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+A variable is a labeled box with a fixed *shape*: an `int` box only holds whole numbers, a `string` box only holds text. Unlike some languages, Go never leaves a box empty-and-dangerous — declare one and it starts with a sensible default (the **zero value**), so there's no "uninitialized garbage."
+</Callout>
+
+## Declaring values
+
+Three ways, depending on context:
+
+```go
+var count int = 10   // explicit type and value
+var name = "Go"      // type inferred from the value
+score := 95          // short form — declares + infers, functions only
+const Pi = 3.14159   // a constant: fixed at compile time
+```
+
+`:=` is the one you'll use most inside functions; `var` also works at **package scope** (where `:=` is not allowed).
+
+## Every type has a zero value
+
+Declare without assigning and Go fills in a guaranteed default — no `undefined`, no random memory:
+
+| Type | Zero value |
+|---|---|
+| `int`, `float64`, … | `0` |
+| `bool` | `false` |
+| `string` | `""` (empty) |
+| `*T`, slice, map, channel, interface, func | `nil` |
+
+## The basic types
+
+<Mermaid code={`graph TD
+  T["Go basic types"] --> B["bool"]
+  T --> S["string (immutable UTF-8)"]
+  T --> N["numeric"]
+  N --> I["int, int8…int64, uint…, uintptr"]
+  N --> F["float32, float64"]
+  N --> O["byte = uint8, rune = int32, complex"]`} />
+
+Prefer `int` for counts and indices, `float64` for real numbers, and `string` for text. `byte` and `rune` are aliases you'll meet again with [strings](/fundamentals/strings-and-runes/).
+
+## Conversions are always explicit
+
+Go won't silently mix numeric types — you convert with `T(x)`. Constants are the exception: an **untyped constant** adapts to whatever context needs it.
+
+<Playground client:visible title="types.go" code={`package main
+
+import "fmt"
+
+type Color int // a named type built on int
+
+const (
+	Red   Color = iota // iota counts up: 0
+	Green             // 1
+	Blue              // 2
+)
+
+func main() {
+	// zero values — declared, not assigned
+	var i int
+	var f float64
+	var s string
+	var p *int
+	fmt.Printf("zero values: i=%d f=%g s=%q p=%v\n", i, f, s, p)
+
+	// short declaration infers the type
+	x := 42      // int
+	y := 3.14    // float64
+
+	// no implicit int -> float64: convert explicitly
+	sum := float64(x) + y
+	fmt.Printf("sum = %.2f\n", sum)
+
+	fmt.Println("colors:", Red, Green, Blue) // 0 1 2
+}`} />
+
+<Callout type="gotcha" title="⚠️ Constants, iota, and unused variables">
+**Untyped constants** like `const Pi = 3.14` have no fixed type until used, so `Pi * float64(r)` just works — handy, unlike variables. **`iota`** auto-increments within a `const` block, the idiomatic way to make enums. And Go is strict: a declared-but-unused local variable (or import) is a **compile error**, not a warning — delete it or use `_`.
+</Callout>
+
+Next: making decisions and looping — [control flow](/fundamentals/control-flow/).

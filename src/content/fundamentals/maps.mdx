@@ -1,0 +1,158 @@
+---
+title: "Maps"
+category: composite
+kind: topic
+order: 7
+difficulty: "Beginner"
+status: ready
+intent: "Go's built-in hash table — make and literals, set/get, the comma-ok test, delete, ranging in random order, sets, and maps of slices."
+related:
+  - slices
+  - structs
+  - hash-tables
+quiz:
+  - q: "What does `v, ok := m[key]` give you when the key is absent?"
+    options:
+      - text: "v is the value type's zero value and ok is false"
+        correct: true
+      - text: "It panics"
+        correct: false
+      - text: "v is nil and ok is true"
+        correct: false
+      - text: "An error value"
+        correct: false
+    explain: "Reading a missing key never panics — it returns the value type's zero value. The two-result \"comma-ok\" form (`v, ok := m[k]`) tells you whether the key was actually present, which you can't tell from the value alone (the stored value might itself be the zero value)."
+  - q: "What order does `for k, v := range m` visit a map's entries in?"
+    options:
+      - text: "Randomized — the order is unspecified and intentionally varies between runs"
+        correct: true
+      - text: "Insertion order"
+        correct: false
+      - text: "Sorted by key"
+        correct: false
+      - text: "Always the same fixed order"
+        correct: false
+    explain: "Go deliberately randomizes map iteration order so you never accidentally depend on it. For deterministic output, collect the keys into a slice, sort it, then iterate the sorted keys."
+  - q: "Why is `map[string]struct{}` a common idiom for a set?"
+    options:
+      - text: "The empty struct uses zero storage, so you pay only for keys — membership is `_, ok := set[x]`"
+        correct: true
+      - text: "It's the only type allowed as a map value"
+        correct: false
+      - text: "struct{} makes lookups faster than other value types"
+        correct: false
+      - text: "It automatically removes duplicates from slices"
+        correct: false
+    explain: "A set only needs to record presence, not a value. `struct{}` occupies zero bytes, so `map[T]struct{}` stores keys with no per-entry value overhead. Check membership with the comma-ok form. (Using `map[T]bool` works too, just with a wasted byte per entry.)"
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+A map is a dictionary: you look something up by its **key** (the headword) and instantly get its **value** (the definition) — no scanning page by page. The keys are unordered, each appears once, and finding one takes about the same time whether the book has ten entries or ten million.
+</Callout>
+
+## Making a map and reading it safely
+
+Create a map with `make` or a literal; index it with `[key]` to set and get:
+
+```go
+ages := make(map[string]int) // empty, ready to use
+ages["Ada"] = 36             // set
+fmt.Println(ages["Ada"])     // get -> 36
+
+scores := map[string]int{    // literal with initial entries
+	"go":   95,
+	"rust": 90,
+}
+```
+
+Reading a **missing** key never panics — it returns the value type's zero value. To tell "absent" from "present but zero," use the two-result **comma-ok** form, and remove entries with `delete`:
+
+```go
+v, ok := scores["python"] // v == 0, ok == false
+if ok { /* key was present */ }
+delete(scores, "rust")    // safe even if the key is absent
+n := len(scores)          // number of entries
+```
+
+<Mermaid code={`graph LR
+  K["key"] --> H["hash(key)"]
+  H --> B["bucket"]
+  B --> V["value"]
+  M["m[missing]"] --> Z["zero value, ok = false"]`} />
+
+A map's value is found by hashing the key into a bucket. For how that hashing, bucketing, and resizing actually work — and the cost model — see the DSA track's [hash tables](/dsa/hash-tables/).
+
+## Ranging, sets, and maps of slices
+
+`range` over a map yields key and value in **randomized** order — never rely on it. For stable output, sort the keys first. A map whose values are zero-size `struct{}` is the idiomatic **set**, and a `map[K][]V` groups many values under one key:
+
+<Playground client:visible title="wordcount.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+func main() {
+	text := "the cat sat on the mat the cat ran"
+	counts := map[string]int{}
+	for _, word := range strings.Fields(text) {
+		counts[word]++ // missing key reads as 0, then increments
+	}
+
+	// Map order is random, so sort the keys for deterministic output.
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		fmt.Printf("%s: %d\n", k, counts[k])
+	}
+}`} />
+
+<Playground client:visible title="sets-and-groups.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func main() {
+	// A set: map[T]struct{} stores keys with zero-size values.
+	seen := map[string]struct{}{}
+	for _, w := range []string{"a", "b", "a", "c", "b"} {
+		seen[w] = struct{}{}
+	}
+	if _, ok := seen["a"]; ok {
+		fmt.Println("a is in the set")
+	}
+	fmt.Println("unique count:", len(seen))
+
+	// A map of slices groups values under a shared key.
+	byLen := map[int][]string{}
+	for _, w := range []string{"go", "rust", "c", "ada", "java"} {
+		n := len(w)
+		byLen[n] = append(byLen[n], w) // append works even on a nil slice
+	}
+
+	lengths := make([]int, 0, len(byLen))
+	for n := range byLen {
+		lengths = append(lengths, n)
+	}
+	sort.Ints(lengths)
+	for _, n := range lengths {
+		fmt.Printf("len %d: %v\n", n, byLen[n])
+	}
+}`} />
+
+<Callout type="gotcha" title="⚠️ You can't take the address of a map element">
+A map value isn't addressable, so `&m[k]` is a compile error and `m[k].Field = x` won't compile when the value is a struct — the map hands back a *copy*. To update a struct in a map, read it out, change the copy, and write it back: `v := m[k]; v.Field = x; m[k] = v`. (Or store pointers: `map[K]*T`.) Also: a `nil` map can be *read* but **panics on write** — always `make` it first.
+</Callout>
+
+Next: text up close, bytes and runes and UTF-8 — [strings & runes](/fundamentals/strings-and-runes/).

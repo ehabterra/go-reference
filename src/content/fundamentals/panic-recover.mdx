@@ -1,0 +1,137 @@
+---
+title: "Panic, Recover & Defer"
+category: idioms
+kind: topic
+order: 15
+difficulty: "Intermediate"
+status: ready
+intent: "defer schedules cleanup, panic unwinds the stack running those defers, and recover — only inside a defer — catches a panic and turns it back into control."
+related:
+  - errors
+  - control-flow
+  - functions
+quiz:
+  - q: "When are a deferred call's arguments evaluated?"
+    options:
+      - text: "Immediately, when the `defer` statement runs — not when the function returns"
+        correct: true
+      - text: "When the deferred call actually fires, at return time"
+        correct: false
+      - text: "Twice — once at defer and once at return"
+        correct: false
+      - text: "Never; defer takes no arguments"
+        correct: false
+    explain: "Arguments to a deferred call are evaluated the moment `defer` executes. The call itself runs later (LIFO order) when the function returns, but the captured argument values are already fixed."
+  - q: "Where does `recover()` actually stop a panic?"
+    options:
+      - text: "Only when called directly inside a deferred function"
+        correct: true
+      - text: "Anywhere in the function body"
+        correct: false
+      - text: "In any function on the call stack at any time"
+        correct: false
+      - text: "Inside the `panic()` call itself"
+        correct: false
+    explain: "`recover()` only has an effect when called from within a deferred function during a panic. Called anywhere else it returns nil and does nothing. That deferred call stops the unwinding and resumes normal flow."
+  - q: "Which situation is an appropriate use of `panic`?"
+    options:
+      - text: "A truly unrecoverable programmer bug — e.g. an impossible state or a failed required init"
+        correct: true
+      - text: "A file that wasn't found"
+        correct: false
+      - text: "Invalid user input in a web form"
+        correct: false
+      - text: "Any time a function returns an error"
+        correct: false
+    explain: "Panic is for bugs and unrecoverable conditions, not ordinary failures. Expected problems (bad input, missing files, network errors) are returned as `error` values. Reserve panic for 'this should never happen'."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🪂 Analogy">
+Think of `defer` as packing a parachute the moment you board: you set up the cleanup early so it *always* deploys on the way down, however the flight ends. A `panic` is pulling the ejector seat — everything unwinds fast, but each packed parachute (`defer`) still opens. And `recover`, tucked inside a defer, is the one person who can grab the controls and land the plane instead of crashing.
+</Callout>
+
+## defer: cleanup that always runs
+
+A `defer` schedules a call for when the surrounding **function returns**, no matter how it returns. Deferred calls run in **LIFO** order (last deferred, first to run), and crucially their **arguments are evaluated at defer time**, not when the call finally fires:
+
+<Playground client:visible title="defer.go" code={`package main
+
+import "fmt"
+
+func main() {
+	// LIFO: this prints 3, 2, 1 — reverse of the defer order.
+	for i := 1; i <= 3; i++ {
+		defer fmt.Println("deferred", i)
+	}
+
+	// Arguments are captured NOW, at defer time.
+	x := "first"
+	defer fmt.Println("snapshot:", x) // captures "first"
+	x = "changed"
+
+	fmt.Println("body done, value is", x)
+}`} />
+
+The classic use is pairing acquire/release right next to each other: `f, _ := os.Open(name); defer f.Close()`.
+
+## panic unwinds, recover catches
+
+A `panic` stops normal execution and starts **unwinding** the stack — but it runs every pending `defer` on the way up. If a deferred function calls `recover()`, the unwinding **stops** there, `recover` returns the panic value, and the program continues normally from that function's caller.
+
+<Mermaid code={`graph TD
+  A["normal call"] --> B["panic(v)"]
+  B --> C["unwind: run deferred funcs (LIFO)"]
+  C --> D{"a defer calls recover()?"}
+  D -->|"yes"| E["panic stops; return value = v"]
+  D -->|"no"| F["keep unwinding"]
+  F --> G["reach top: program crashes"]`} />
+
+`recover()` only works **inside a deferred function**. Anywhere else it just returns `nil`. The most useful pattern is to recover at a **boundary** — turning a panic into an ordinary returned error so the rest of the program (a server, a worker pool) keeps running:
+
+<Playground client:visible title="recover.go" code={`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// safeDivide turns a panic into a normal error at the boundary.
+// The named return 'err' lets the deferred recover assign to it.
+func safeDivide(a, b int) (result int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered: %v", r)
+		}
+	}()
+	return a / b, nil // b == 0 triggers a runtime panic
+}
+
+func main() {
+	if r, err := safeDivide(10, 2); err == nil {
+		fmt.Println("10 / 2 =", r)
+	}
+
+	// This would panic; recover converts it to an error instead.
+	if _, err := safeDivide(1, 0); err != nil {
+		fmt.Println("handled:", err)
+	}
+
+	// Program survives the panic and keeps going.
+	fmt.Println("still running:", errors.Is(nil, nil))
+}`} />
+
+## When (not) to panic
+
+Reach for `panic` only when continuing makes no sense:
+
+- **Yes:** an impossible/unreachable state, a corrupt invariant, a required dependency that failed to initialize at startup (`mustConnect`).
+- **No:** expected failures — bad user input, a missing file, a network timeout. Those are **values**: return an `error` and let the caller decide.
+
+<Callout type="gotcha" title="⚠️ Don't use panic/recover as exceptions">
+Go is deliberately not an exception language. Using `panic`/`recover` for ordinary control flow makes code surprising and hard to follow. Keep panics rare and recover them at a single boundary (a request handler, a goroutine entry point) so one bad request can't take down the whole process. For everything else, return an `error` — see [errors](/fundamentals/errors/).
+</Callout>
+
+Next: organizing code into reusable units you can import and version — [packages & modules](/fundamentals/packages-and-modules/).

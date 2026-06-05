@@ -1,0 +1,161 @@
+---
+title: "Control Flow"
+category: basics
+kind: topic
+order: 2
+difficulty: "Beginner"
+status: ready
+intent: "Branching and looping the Go way — if with an init statement, the single for loop in all its forms, and a switch with no fall-through."
+related:
+  - variables-and-types
+  - functions
+  - slices
+quiz:
+  - q: "How many looping keywords does Go have?"
+    options:
+      - text: "One — `for` does everything (while, infinite, range, C-style)"
+        correct: true
+      - text: "Three — for, while, and do-while"
+        correct: false
+      - text: "Two — for and while"
+        correct: false
+      - text: "Four"
+        correct: false
+    explain: "Go has exactly one loop keyword, `for`. Drop the clauses for a while-loop (`for cond {}`), drop everything for an infinite loop (`for {}`), or use `for range` to iterate."
+  - q: "What happens after a matching `case` in a Go `switch`?"
+    options:
+      - text: "It stops — there's no automatic fall-through to the next case"
+        correct: true
+      - text: "It falls through to the next case like C"
+        correct: false
+      - text: "It loops back to the top"
+        correct: false
+      - text: "It panics unless you break"
+        correct: false
+    explain: "Go switches break automatically after the matching case — no `break` needed. If you actually want to continue into the next case, use the explicit `fallthrough` keyword."
+  - q: "What's special about the variable in `if v := f(); v > 0 {`?"
+    options:
+      - text: "v is scoped to the if/else — it doesn't leak into the surrounding function"
+        correct: true
+      - text: "v is global"
+        correct: false
+      - text: "v must be a bool"
+        correct: false
+      - text: "It's a syntax error"
+        correct: false
+    explain: "The optional init statement declares variables scoped to the if and its else branches — perfect for the `if err := do(); err != nil {` pattern, keeping err out of the wider scope."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚦 Analogy">
+Most languages hand you a drawer full of looping tools — `while`, `do-while`, `for`, `foreach`. Go gives you one screwdriver, `for`, that fits every screw. Fewer keywords, fewer decisions, and code that always reads the same way.
+</Callout>
+
+## if — with an optional init
+
+`if` needs no parentheses, and it can run a short statement first whose variables are scoped to the branch:
+
+```go
+if score > 90 {
+	grade = "A"
+} else if score > 80 {
+	grade = "B"
+}
+
+// the idiomatic Go pattern: handle the error right where it happens
+if err := save(data); err != nil {
+	return err // err exists only inside this if/else
+}
+```
+
+## for — the only loop
+
+<Mermaid code={`graph LR
+  F["for"] --> A["for i := 0; i < n; i++  ·  C-style"]
+  F --> B["for cond  ·  while"]
+  F --> C["for  ·  infinite (break to exit)"]
+  F --> D["for i, v := range xs  ·  iterate"]`} />
+
+One keyword, four shapes:
+
+<Playground client:visible title="loops.go" code={`package main
+
+import "fmt"
+
+func main() {
+	// 1. classic three-clause
+	sum := 0
+	for i := 1; i <= 5; i++ {
+		sum += i
+	}
+	fmt.Println("sum 1..5 =", sum)
+
+	// 2. condition-only (a "while")
+	n := 8
+	steps := 0
+	for n > 1 {
+		n /= 2
+		steps++
+	}
+	fmt.Println("halvings:", steps)
+
+	// 3. range over a slice — index and value
+	for i, name := range []string{"go", "rust", "zig"} {
+		fmt.Printf("%d: %s\n", i, name)
+	}
+
+	// 4. infinite loop with break
+	count := 0
+	for {
+		count++
+		if count == 3 {
+			break
+		}
+	}
+	fmt.Println("broke at", count)
+}`} />
+
+Use `continue` to skip to the next iteration, and a **labeled** `break`/`continue` (`break outer`) to control nested loops.
+
+## switch — clean multi-way branching
+
+No `break`, no fall-through by default, and cases can be any expression:
+
+<Playground client:visible title="switch.go" code={`package main
+
+import "fmt"
+
+func classify(n int) string {
+	switch {
+	case n < 0:
+		return "negative"
+	case n == 0:
+		return "zero"
+	default:
+		return "positive"
+	}
+}
+
+func main() {
+	for _, n := range []int{-3, 0, 7} {
+		fmt.Printf("%d is %s\n", n, classify(n))
+	}
+
+	// switch on a value, with multiple matches per case
+	switch day := "Sat"; day {
+	case "Sat", "Sun":
+		fmt.Println("weekend")
+	default:
+		fmt.Println("weekday")
+	}
+}`} />
+
+A bare `switch {}` (no value) is just a cleaner `if/else if` chain. A `switch` on a value compares against each case; group several with commas.
+
+<Callout type="gotcha" title="⚠️ defer runs on the way out">
+`defer` schedules a call to run when the **function returns**, no matter how — perfect for cleanup like `defer f.Close()` right after opening. Deferred calls run in **LIFO** order, and their arguments are evaluated *when the defer statement runs*, not when the call fires. You'll lean on it constantly with [errors](/fundamentals/errors/) and [panic/recover](/fundamentals/panic-recover/).
+</Callout>
+
+Next: packaging logic into reusable units — [functions](/fundamentals/functions/).

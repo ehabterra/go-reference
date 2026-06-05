@@ -1,0 +1,146 @@
+---
+title: "Methods"
+category: types-methods
+kind: topic
+order: 9
+difficulty: "Intermediate"
+status: ready
+intent: "Functions with a receiver — value vs pointer receivers, method sets and interface satisfaction, methods on any named type, and method values."
+related:
+  - interfaces
+  - structs
+  - pointers
+quiz:
+  - q: "When should the receiver be a pointer rather than a value?"
+    options:
+      - text: "When the method must mutate the receiver, or the type is large and you want to avoid copying"
+        correct: true
+      - text: "Always — value receivers are deprecated"
+        correct: false
+      - text: "Only for interface types"
+        correct: false
+      - text: "Only when the method returns an error"
+        correct: false
+    explain: "A value receiver gets a copy, so writes don't reach the original. Use a pointer receiver to mutate state, or to skip copying a big struct. Keep receiver kind consistent across a type's methods."
+  - q: "A type T has a method `func (t *T) M()`. Which value's method set includes M?"
+    options:
+      - text: "Only *T — the pointer. T's method set does not include pointer-receiver methods"
+        correct: true
+      - text: "Both T and *T equally"
+        correct: false
+      - text: "Only T — the value"
+        correct: false
+      - text: "Neither, until you call it"
+        correct: false
+    explain: "Pointer-receiver methods belong to the method set of *T only. So a *T can satisfy an interface needing M, but a plain T value cannot — this is the usual cause of \"does not implement\" errors."
+  - q: "Can you attach a method to `type Celsius float64`?"
+    options:
+      - text: "Yes — methods can be defined on any named type whose definition is in the same package"
+        correct: true
+      - text: "No — methods only work on structs"
+        correct: false
+      - text: "No — only on types from the standard library"
+        correct: false
+      - text: "Only if Celsius wraps a struct"
+        correct: false
+    explain: "Methods attach to named types, not just structs. `func (c Celsius) Fahrenheit() float64` is perfectly valid. You can't add methods to types from other packages, though — define a local named type first."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔧 Analogy">
+A method is a function that already knows *which thing* it acts on. Instead of `area(rect)`, you write `rect.Area()` — the rectangle is handed in silently as the **receiver**. Same machine as a [function](/fundamentals/functions/), but bolted onto a type so the data and its behavior travel together.
+</Callout>
+
+## A method is a function with a receiver
+
+The only syntactic difference between a function and a method is the receiver — the parameter in parentheses *before* the name:
+
+```go
+type User struct{ Name string }
+
+// (u User) is the receiver — User.Greet attaches to the type
+func (u User) Greet() string {
+	return "Hi, " + u.Name
+}
+```
+
+Methods aren't limited to structs. They attach to **any named type** defined in your package — even one built on a primitive:
+
+```go
+type Celsius float64
+
+func (c Celsius) Fahrenheit() float64 {
+	return float64(c)*9/5 + 32
+}
+```
+
+## Value vs pointer receivers
+
+A **value receiver** gets a copy, so it can't change the original. A **pointer receiver** gets the address, so it can mutate in place — and it avoids copying a large struct on every call.
+
+<Mermaid code={`graph TD
+  CALL["c.Method()"] --> VR["value receiver (c T)"]
+  CALL --> PR["pointer receiver (c *T)"]
+  VR --> COPY["gets a COPY — mutations are lost"]
+  PR --> ORIG["gets the ADDRESS — mutations stick"]`} />
+
+The rule of thumb: **pointer receiver to mutate or for big structs; value receiver for small, immutable-feeling types.** Pick one kind per type and stay consistent.
+
+<Playground client:visible title="methods.go" code={`package main
+
+import "fmt"
+
+type Counter struct {
+	count int
+}
+
+// value receiver: operates on a COPY — the original is untouched
+func (c Counter) IncValue() {
+	c.count++
+}
+
+// pointer receiver: operates on the ORIGINAL — mutation sticks
+func (c *Counter) IncPointer() {
+	c.count++
+}
+
+func (c Counter) String() string {
+	return fmt.Sprintf("count=%d", c.count)
+}
+
+func main() {
+	c := Counter{}
+
+	c.IncValue()
+	fmt.Println("after IncValue:  ", c) // count=0 — copy was thrown away
+
+	c.IncPointer() // Go auto-takes &c here
+	c.IncPointer()
+	fmt.Println("after IncPointer:", c) // count=2 — real changes
+}`} />
+
+## Method sets and interface satisfaction
+
+Each type has a **method set** — the methods you may call on it. This is what decides whether a type satisfies an [interface](/fundamentals/interfaces/):
+
+- The method set of `T` contains only its **value-receiver** methods.
+- The method set of `*T` contains **both** value- and pointer-receiver methods.
+
+So if `M` has a pointer receiver, only `*T` satisfies an interface requiring `M` — a plain `T` value does not. (When you *call* a pointer method on an addressable variable, Go inserts the `&` for you, which hides this until an interface is involved.)
+
+## Method values and expressions
+
+A method can be pulled out as a value. `c.IncPointer` is a **method value** — a `func()` bound to `c`. `Counter.String` is a **method expression** — a `func(Counter) string` that takes the receiver explicitly:
+
+```go
+greet := user.Greet      // method value, bound to user
+f := Counter.String      // method expression: f(c) == c.String()
+```
+
+<Callout type="gotcha" title="🐹 Mixing receiver kinds bites at interface time">
+Code like `c.IncPointer()` works on a normal variable because Go auto-takes its address. But the moment you store a *value* `T` in an interface that needs a pointer-receiver method, satisfaction fails — the value isn't addressable. Standard advice: **be consistent.** If any method needs a pointer receiver, give them all pointer receivers, and pass `*T` around.
+</Callout>
+
+Next: how method sets let unrelated types share behavior — [interfaces](/fundamentals/interfaces/).

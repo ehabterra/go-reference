@@ -1,0 +1,149 @@
+---
+title: "Packages & Modules"
+category: idioms
+kind: topic
+order: 16
+difficulty: "Beginner"
+status: ready
+intent: "How Go code is organized — packages per directory, Capitalized exports, init order, and modules (go.mod / go.sum) that pin versioned dependencies."
+related:
+  - variables-and-types
+  - errors
+  - reflection
+quiz:
+  - q: "How does Go decide whether an identifier is exported from its package?"
+    options:
+      - text: "By case — a Capitalized name is exported; a lowercase name is package-private"
+        correct: true
+      - text: "With an `export` keyword"
+        correct: false
+      - text: "Everything is exported by default"
+        correct: false
+      - text: "Whatever is listed in go.mod"
+        correct: false
+    explain: "Visibility is purely lexical: an identifier starting with an uppercase letter is exported (visible to importers); lowercase is unexported and only reachable within the same package. No keywords involved."
+  - q: "What is the role of `go.mod`?"
+    options:
+      - text: "It declares the module path, the Go version, and the required dependencies with their versions"
+        correct: true
+      - text: "It lists every source file in the project"
+        correct: false
+      - text: "It stores compiled binaries"
+        correct: false
+      - text: "It is optional and ignored by the toolchain"
+        correct: false
+    explain: "`go.mod` defines the module: its import path, the language version, and `require` lines pinning each dependency. `go.sum` then records cryptographic checksums so builds are verifiable and reproducible."
+  - q: "What can import a package under an `internal/` directory?"
+    options:
+      - text: "Only code rooted at internal/'s parent directory — it's private to that subtree"
+        correct: true
+      - text: "Anyone who knows the import path"
+        correct: false
+      - text: "Only the standard library"
+        correct: false
+      - text: "Nothing; internal/ packages can't be imported at all"
+        correct: false
+    explain: "The `internal/` rule is enforced by the toolchain: packages inside `.../internal/...` are importable only by code rooted at the directory that contains `internal/`. It's how you keep APIs private across packages."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏢 Analogy">
+A **package** is a room: everything inside shares the space freely, but only what you put by the door (a Capitalized name) is visible from the hallway. A **module** is the whole building — it has an address (the module path), a blueprint listing which other buildings it depends on (`go.mod`), and a signed inventory proving nothing was tampered with (`go.sum`).
+</Callout>
+
+## Packages: one directory, two visibilities
+
+Every `.go` file opens with a `package` clause, and **all files in one directory belong to the same package**. Visibility is decided by the *case* of an identifier — there is no `public`/`private` keyword:
+
+```go
+package store
+
+// Exported: Capitalized, visible to importers.
+func Get(id int) (Item, error) { /* ... */ }
+
+// Unexported: lowercase, private to package store.
+func validate(id int) error { /* ... */ }
+```
+
+You bring in other packages by their **import path**, then use them via the package name:
+
+```go
+import (
+	"fmt"          // standard library
+	"strings"
+	"example.com/app/store" // a package within your module
+)
+```
+
+This case rule is the whole of Go's encapsulation: expose a small Capitalized surface, keep helpers lowercase.
+
+## Modules: go.mod, go.sum, and versions
+
+A **module** is a tree of packages versioned together, rooted at a `go.mod` file. The module path is the import prefix for every package it contains:
+
+<Mermaid code={`graph TD
+  M["module example.com/app  ·  go.mod"] --> P1["package main  ·  /"]
+  M --> P2["package store  ·  /store"]
+  M --> P3["package store (internal)  ·  /internal/auth"]
+  P2 --> F1["item.go"]
+  P2 --> F2["query.go"]`} />
+
+A minimal `go.mod` declares the path, the Go version, and dependencies:
+
+```go
+module example.com/app
+
+go 1.25
+
+require (
+	github.com/google/uuid v1.6.0
+)
+```
+
+Dependencies use **semantic versioning** (`vMAJOR.MINOR.PATCH`). Day to day you run:
+
+- `go get example.com/lib@v1.2.3` — add or upgrade a dependency.
+- `go mod tidy` — add missing requirements and drop unused ones.
+
+`go.sum` records a checksum for every module version, so a build either matches what you verified or fails — reproducible and tamper-evident.
+
+## init() and a runnable taste
+
+A package may define one or more `init()` functions; they run **automatically** after package-level variables are initialized and **before** `main`, in the order shown below. Here exported vs unexported and `init` ordering all live inside `package main` so it runs as-is:
+
+<Playground client:visible title="packages.go" code={`package main
+
+import "fmt"
+
+// Package-level variable, initialized before any init().
+var stage = step("var init")
+
+func step(s string) string {
+	fmt.Println("1:", s)
+	return s
+}
+
+// init runs automatically after vars, before main.
+func init() {
+	fmt.Println("2: init() runs")
+}
+
+// Exported-style name (Capitalized) vs unexported helper.
+func Greeting(name string) string { return "hello, " + name }
+func shout(s string) string       { return s + "!" }
+
+func main() {
+	fmt.Println("3: main() runs")
+	fmt.Println("4:", shout(Greeting("gopher")))
+	_ = stage
+}`} />
+
+The output is ordered `1 → 2 → 3 → 4`: variable initializers, then `init()`, then `main`. Within `package main`, `Greeting` (exported style) and `shout` (unexported) are both reachable; across packages, only `Greeting` would be.
+
+<Callout type="gotcha" title="🐹 internal/ is a real boundary">
+A directory named `internal/` is enforced by the compiler: packages under `.../internal/...` can be imported **only** by code rooted at `internal/`'s parent. Use it to share helpers across your own packages without exposing them as public API. And remember: one package per directory, and the directory name usually (not always) matches the package name — but it's the `package` clause, not the folder, that's authoritative.
+</Callout>
+
+Next: inspecting types and values at runtime — [reflection](/fundamentals/reflection/).

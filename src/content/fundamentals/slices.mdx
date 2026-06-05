@@ -1,0 +1,136 @@
+---
+title: "Slices"
+category: composite
+kind: topic
+order: 6
+difficulty: "Beginner"
+status: ready
+intent: "Go's go-to list type — literals and make, len vs cap, append and growth, the s[a:b] window, nil vs empty, ranging, and 2-D slices."
+related:
+  - structs
+  - maps
+  - arrays-and-slices
+quiz:
+  - q: "What does `append` return, and why must you keep its result?"
+    options:
+      - text: "A slice that may point at a new, larger backing array — so you assign it back: s = append(s, x)"
+        correct: true
+      - text: "Nothing; it always grows the slice in place"
+        correct: false
+      - text: "A copy of the whole array every time"
+        correct: false
+      - text: "The appended element"
+        correct: false
+    explain: "When a slice runs out of capacity, append allocates a bigger backing array and copies the elements over, so it returns a possibly-different slice header. Always write `s = append(s, x)` or you may lose the result."
+  - q: "What's the difference between a nil slice and an empty slice (`[]int{}`)?"
+    options:
+      - text: "Almost none in practice — both have length 0, range over nothing, and accept append; only `== nil` and JSON differ"
+        correct: true
+      - text: "A nil slice panics if you append to it"
+        correct: false
+      - text: "An empty slice has length 1"
+        correct: false
+      - text: "You can't range over a nil slice"
+        correct: false
+    explain: "A nil slice and an empty slice both have len 0 and you can append to and range over both safely. The only observable differences: a nil slice compares `== nil`, and it marshals to JSON null while `[]int{}` marshals to []. Prefer nil as the empty default."
+  - q: "After `b := a[1:3]`, what is the relationship between `a` and `b`?"
+    options:
+      - text: "They share the same backing array — writing b[0] can change a's element"
+        correct: true
+      - text: "b is an independent copy of those elements"
+        correct: false
+      - text: "b is a deep copy including nested data"
+        correct: false
+      - text: "a and b are unrelated"
+        correct: false
+    explain: "Slicing creates a new window over the *same* backing array, not a copy. Mutating an element through one slice is visible through the other where they overlap. Use copy() or append to a fresh slice when you need independence."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🪟 Analogy">
+A slice is a **window** onto a row of boxes (the backing array). The window knows where it starts, how many boxes it currently shows (`len`), and how many it *could* show before needing a bigger row (`cap`). Slide or resize the window and you're still looking at the same boxes — until you grow past the edge and Go quietly rents a longer row.
+</Callout>
+
+## Making and growing slices
+
+Three common ways to get one — a literal, the empty default, or `make` with an explicit length and capacity:
+
+```go
+nums := []int{10, 20, 30}    // literal, len 3, cap 3
+var empty []int              // nil slice: len 0, cap 0, ready to append
+buf := make([]int, 0, 8)     // len 0, but room for 8 before regrowing
+```
+
+`len(s)` is how many elements you have; `cap(s)` is how many fit before the backing array must grow. `append` adds elements and **returns** the (possibly relocated) slice, so you always assign it back:
+
+```go
+s := []int{1, 2}
+s = append(s, 3)        // [1 2 3]
+s = append(s, 4, 5)     // append several at once
+s = append(s, other...) // spread another slice in
+```
+
+## Slicing: a window over a backing array
+
+`s[a:b]` makes a new slice covering indices `a` up to **but not including** `b`. It's a view, not a copy — both slices share the same underlying array, so a write through one is seen by the other where they overlap:
+
+<Mermaid code={`graph LR
+  ARR["backing array: 10 20 30 40 50"] --> A["a = s[0:5]  len 5"]
+  ARR --> B["b = s[1:3]  len 2 (shares 20,30)"]`} />
+
+A slice is really a small three-word header — a **pointer** to the backing array plus `len` and `cap`. For the exact memory layout, the growth strategy (roughly doubling), and the aliasing pitfalls in depth, see the DSA track's [arrays & slices](/dsa/arrays-and-slices/). Here we stay at the language level.
+
+<Playground client:visible title="slices.go" code={`package main
+
+import "fmt"
+
+func main() {
+	s := make([]int, 0, 2)
+	fmt.Printf("start: len=%d cap=%d %v\n", len(s), cap(s), s)
+
+	for i := 1; i <= 4; i++ {
+		s = append(s, i*10) // watch cap jump as it grows
+		fmt.Printf("after append %d: len=%d cap=%d %v\n", i, len(s), cap(s), s)
+	}
+
+	// A slice of a slice shares the same backing array.
+	window := s[1:3]
+	fmt.Println("window:", window) // [20 30]
+	window[0] = 99                 // mutate through the window...
+	fmt.Println("s now:", s)       // ...visible in s: [10 99 30 40]
+}`} />
+
+## Ranging and 2-D slices
+
+`range` gives you index and value; use the blank identifier `_` to drop either. A slice of slices builds a grid — each inner slice is independent and can have its own length (a "jagged" 2-D shape):
+
+<Playground client:visible title="grid.go" code={`package main
+
+import "fmt"
+
+func main() {
+	names := []string{"Ada", "Linus", "Grace"}
+	for i, name := range names {
+		fmt.Printf("%d: %s\n", i, name)
+	}
+
+	// 2-D slice: a slice of []int rows.
+	grid := make([][]int, 3)
+	for r := range grid {
+		grid[r] = make([]int, 3)
+		for c := range grid[r] {
+			grid[r][c] = r*3 + c
+		}
+	}
+	for _, row := range grid {
+		fmt.Println(row)
+	}
+}`} />
+
+<Callout type="gotcha" title="⚠️ append can alias — or surprise you">
+Because slices share a backing array, `append`ing to a sub-slice can overwrite elements of the parent **if there's spare capacity** — and once `append` reallocates, the two stop sharing. The result depends on capacity, which is easy to get wrong. When you need an independent copy, allocate and `copy()`, or append into a fresh `nil` slice. The full aliasing rules live in [arrays & slices](/dsa/arrays-and-slices/).
+</Callout>
+
+Next: key-value lookups in (amortized) constant time — [maps](/fundamentals/maps/).

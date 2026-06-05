@@ -92,4 +92,32 @@ export const DSA_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Go-fundamentals categories (the journey on /fundamentals/). */
+export const FUNDAMENTALS_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'basics',
+    title: 'Basics & Syntax',
+    blurb:
+      'The ground floor — variables and zero values, the one loop, functions with multiple returns, and pointers without the footguns.',
+  },
+  {
+    key: 'composite',
+    title: 'Composite Types',
+    blurb:
+      'How Go groups data — structs, slices over a backing array, maps, and strings as UTF-8 bytes and runes.',
+  },
+  {
+    key: 'types-methods',
+    title: 'Methods & Interfaces',
+    blurb:
+      "Go's take on polymorphism — methods on any type, implicitly-satisfied interfaces, struct embedding, and generics.",
+  },
+  {
+    key: 'idioms',
+    title: 'Errors & Idioms',
+    blurb:
+      'The patterns that make code idiomatic — explicit errors and wrapping, defer/panic/recover, and packages and modules.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

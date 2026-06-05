@@ -1,0 +1,141 @@
+---
+title: "Strings & Runes"
+category: composite
+kind: topic
+order: 8
+difficulty: "Beginner"
+status: ready
+intent: "Strings are immutable UTF-8 bytes — why len counts bytes not characters, why indexing gives a byte, and how runes, []byte, and strings.Builder fit together."
+related:
+  - slices
+  - variables-and-types
+  - control-flow
+quiz:
+  - q: "For the string \"世界\", what does `len(s)` return?"
+    options:
+      - text: "6 — len counts bytes, and each of these characters is 3 bytes in UTF-8"
+        correct: true
+      - text: "2 — one per character"
+        correct: false
+      - text: "4"
+        correct: false
+      - text: "It depends on the terminal"
+        correct: false
+    explain: "A Go string is a sequence of bytes, and `len` returns the byte count. Each CJK character here encodes to 3 UTF-8 bytes, so len is 6 even though there are only 2 characters. To count characters, count runes with utf8.RuneCountInString."
+  - q: "What does indexing a string, like `s[0]`, give you?"
+    options:
+      - text: "A single byte (type byte / uint8), not a character"
+        correct: true
+      - text: "The first rune"
+        correct: false
+      - text: "A one-character string"
+        correct: false
+      - text: "An int code point"
+        correct: false
+    explain: "`s[i]` returns the byte at position i, of type byte (alias for uint8). For multi-byte characters that's only one fragment. To get whole characters, `range` the string (which yields runes) or convert to []rune."
+  - q: "When you `for i, r := range s` over a string, what are i and r?"
+    options:
+      - text: "i is the byte offset where the character starts; r is the rune (int32 code point)"
+        correct: true
+      - text: "i is the character index 0,1,2…; r is a byte"
+        correct: false
+      - text: "Both are bytes"
+        correct: false
+      - text: "i is the rune and r is its width"
+        correct: false
+    explain: "Ranging a string decodes UTF-8 for you: each step gives the starting *byte offset* of a character and the character itself as a rune (int32). That's why the index can jump by more than 1 across multi-byte characters."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧵 Analogy">
+A string is a sealed strip of **bytes** — like film: the strip never changes (it's immutable), and what looks like one "picture" (a character) might span several frames (bytes). Reading frame-by-frame gives you raw bytes; reading picture-by-picture (with `range`) decodes UTF-8 and hands you whole characters, called **runes**.
+</Callout>
+
+## Bytes vs characters
+
+A Go string is an immutable sequence of bytes that, by convention, holds **UTF-8** text. Two consequences trip up newcomers:
+
+- `len(s)` is the number of **bytes**, not characters.
+- `s[i]` is the **byte** at offset `i` (type `byte`, an alias for `uint8`) — for a multi-byte character it's just one fragment.
+
+For pure ASCII the two notions coincide, but the moment text contains accents or non-Latin scripts they diverge:
+
+<Mermaid code={`graph LR
+  S["string: He + world (世界)"] --> BY["bytes: len counts these"]
+  S --> RU["runes: whole characters"]
+  BY -. "ASCII = 1 byte" .-> RU
+  BY -. "世 = 3 bytes" .-> RU`} />
+
+Because strings are immutable, you can't assign `s[i] = 'x'`. To edit text, convert to a `[]byte` or `[]rune`, change that, and convert back.
+
+## Runes, conversions, and ranging
+
+A **rune** is an `int32` holding one Unicode code point; a **byte** is a `uint8`. Two conversions matter:
+
+- `[]byte(s)` — the raw UTF-8 bytes (cheap, exact bytes).
+- `[]rune(s)` — one element per character, so `len([]rune(s))` is the character count.
+
+Ranging a string decodes UTF-8 as it goes: each step yields the **byte offset** where a character starts and the character as a **rune**:
+
+<Playground client:visible title="runes.go" code={`package main
+
+import (
+	"fmt"
+	"unicode/utf8"
+)
+
+func main() {
+	s := "Héllo, 世界"
+
+	// len is BYTES; rune count is CHARACTERS — they differ here.
+	fmt.Println("byte len:   ", len(s))
+	fmt.Println("rune count: ", utf8.RuneCountInString(s))
+
+	// Indexing gives a single byte, not a character.
+	fmt.Printf("s[0] = %d (%c)\n", s[0], s[0])
+
+	// range decodes UTF-8: i is the byte offset, r is the rune.
+	for i, r := range s {
+		fmt.Printf("offset %d: %c (U+%04X)\n", i, r, r)
+	}
+}`} />
+
+Notice the offset jumps by more than 1 across `é` (2 bytes) and the CJK characters (3 bytes each) — proof that one character is not one byte.
+
+## Building strings efficiently
+
+Strings are immutable, so `a + b` in a loop allocates a fresh string every time. For repeated concatenation use `strings.Builder`, which writes into a growable buffer and produces the final string once. The `strings`, `unicode`, and `unicode/utf8` packages cover most text work:
+
+<Playground client:visible title="builder.go" code={`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	words := []string{"go", "is", "fun"}
+
+	var b strings.Builder
+	for i, w := range words {
+		if i > 0 {
+			b.WriteByte(' ') // write bytes/strings/runes into the buffer
+		}
+		b.WriteString(strings.ToUpper(w))
+	}
+	sentence := b.String() // materialize the result once
+	fmt.Println(sentence)  // GO IS FUN
+
+	// A few handy strings helpers:
+	fmt.Println(strings.Contains(sentence, "FUN"))   // true
+	fmt.Println(strings.Split("a,b,c", ","))          // [a b c]
+	fmt.Println(strings.ReplaceAll("ababa", "a", "_")) // _b_b_
+}`} />
+
+<Callout type="gotcha" title="⚠️ Slicing a string slices bytes, not characters">
+`s[a:b]` cuts on **byte** boundaries. If `a` or `b` lands in the middle of a multi-byte character, the substring is invalid UTF-8 (you'll see a replacement char `�`). When you need to slice by characters, convert to `[]rune` first, or use the `unicode/utf8` package to find safe boundaries. Also: a string slice still shares the original bytes — but since strings are immutable, that sharing is always safe to read. See [slices](/fundamentals/slices/) for the analogous (mutable) view semantics.
+</Callout>
+
+Next: giving your types behavior — [methods](/fundamentals/methods/).

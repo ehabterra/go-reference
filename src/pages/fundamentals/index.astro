@@ -1,0 +1,52 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CategorySection from '../../components/CategorySection.astro';
+import { FUNDAMENTALS_CATEGORIES } from '../../lib/consts';
+
+const topics = await getCollection('fundamentals');
+const slugs = topics.filter((t) => t.data.kind === 'topic').map((t) => t.id).join(',');
+---
+<BaseLayout title="Go Fundamentals" description="The Go language itself, Go-first — variables and types, control flow, functions, pointers, structs, slices and maps, methods, interfaces, generics and idiomatic error handling, with diagrams and runnable code.">
+  <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Fundamentals</span></nav>
+
+  <header class="dp-hero">
+    <p class="dp-hero__eyebrow" data-i18n="fun.eyebrow">Start here if you're new to Go</p>
+    <h1 data-i18n="fun.h1">The Go Language, from the ground up</h1>
+    <p class="dp-hero__lede" data-i18n-html="fun.lede">
+      Everything the rest of this site assumes you know — the syntax, the type system, and the idioms that make
+      Go <em>Go</em>. From <code>zero values</code> and the one loop to interfaces, generics and wrapped errors,
+      each page pairs a clear mental model with idiomatic code you can <strong>run right here</strong>.
+    </p>
+    <div class="dp-hero__cta">
+      <a class="dp-btn dp-btn--primary" href="/fundamentals/variables-and-types/" data-i18n="ui.startJourney">Start the journey →</a>
+      <a class="dp-btn dp-btn--ghost" href="#types-methods" data-i18n="fun.cta.jump">Jump to interfaces</a>
+    </div>
+  </header>
+
+  <div class="dp-overall">
+    <div class="dp-overall__top">
+      <strong data-i18n="fun.progressTitle">Your fundamentals progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset data-i18n="ui.reset">Reset</button>
+    </div>
+    <div class="dp-progress" data-dp-progress data-slugs={slugs}>
+      <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
+      <span class="dp-progress__label"></span>
+    </div>
+    <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="fun.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
+  </div>
+
+  {FUNDAMENTALS_CATEGORIES.map((c) => (
+    <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="fundamentals" base="/fundamentals" />
+  ))}
+
+  <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
+    <p class="dp-callout__title" data-i18n="fun.go.title">🐹 Go's whole personality in one line</p>
+    <p data-i18n="fun.go.body">
+      Composition over inheritance, interfaces satisfied implicitly, errors as ordinary values, and a tiny
+      orthogonal feature set you can hold in your head. Learn these idioms and the
+      <a href="/patterns/">patterns</a>, <a href="/concurrency/">concurrency</a> and
+      <a href="/dsa/">DSA</a> tracks all click into place.
+    </p>
+  </div>
+</BaseLayout>

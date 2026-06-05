@@ -1,0 +1,145 @@
+---
+title: "Struct & Interface Embedding"
+category: types-methods
+kind: topic
+order: 11
+difficulty: "Intermediate"
+status: ready
+intent: "Composition over inheritance — promoted fields and methods, embedding structs and interfaces, overriding, and the classic embedded mutex pattern."
+related:
+  - structs
+  - interfaces
+  - methods
+quiz:
+  - q: "What does embedding a type into a struct give you?"
+    options:
+      - text: "Promotion — the outer struct gains the embedded type's exported fields and methods as if they were its own"
+        correct: true
+      - text: "Inheritance with virtual method dispatch"
+        correct: false
+      - text: "A private copy that can't be accessed"
+        correct: false
+      - text: "Nothing until you call a constructor"
+        correct: false
+    explain: "Embedding (a field with no name, just a type) promotes the inner type's fields and methods to the outer type. It's composition with convenient forwarding — not classical inheritance, since there's no virtual dispatch."
+  - q: "How do you \"override\" a promoted method?"
+    options:
+      - text: "Define a method with the same name on the outer type — it shadows the promoted one"
+        correct: true
+      - text: "Use the `override` keyword"
+        correct: false
+      - text: "You can't; promoted methods are final"
+        correct: false
+      - text: "Re-embed the type a second time"
+        correct: false
+    explain: "A method on the outer type with the same name shadows the embedded one. You can still call the inner version explicitly via the embedded field name, e.g. `o.Inner.Method()`, to wrap rather than fully replace it."
+  - q: "Why embed `sync.Mutex` into a struct?"
+    options:
+      - text: "So the struct gains Lock and Unlock directly, keeping the lock next to the data it protects"
+        correct: true
+      - text: "To make the struct automatically thread-safe with no Lock calls"
+        correct: false
+      - text: "To copy the struct safely"
+        correct: false
+      - text: "It's required for all structs"
+        correct: false
+    explain: "Embedding sync.Mutex promotes Lock/Unlock onto the struct, so you write `s.Lock()`. It documents that the mutex guards this struct's fields. Note: such a struct must not be copied after first use."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧩 Analogy">
+Embedding is hiring a specialist and putting their desk *inside* your office. Visitors ask you a question; you forward the ones you don't handle straight to the specialist without a word. Go calls this **promotion** — the embedded type's skills become yours, but it's still composition, not a family tree.
+</Callout>
+
+## Promotion: fields and methods come along
+
+Write a field with **no name — just a type** — and you've embedded it. The outer struct gets the inner one's fields and methods as if they were declared directly:
+
+```go
+type Engine struct{ Power int }
+
+func (e Engine) Start() string { return "vroom" }
+
+type Car struct {
+	Engine // embedded — no field name
+	Brand  string
+}
+
+// c.Power and c.Start() now work, promoted from Engine
+```
+
+<Mermaid code={`graph TD
+  CAR["Car"] --> EMB["Engine (embedded)"]
+  CAR --> BRAND["Brand string"]
+  EMB --> P["Power int  → c.Power"]
+  EMB --> S["Start()     → c.Start()"]`} />
+
+This is Go's headline answer to reuse: **composition over inheritance.** There's no class hierarchy and no virtual dispatch — just forwarding.
+
+## Overriding a promoted method
+
+Define a method of the same name on the outer type and it **shadows** the promoted one. You can still reach the original through the embedded field's name to wrap it:
+
+<Playground client:visible title="embedding.go" code={`package main
+
+import "fmt"
+
+type Engine struct {
+	Power int
+}
+
+func (e Engine) Start() string {
+	return fmt.Sprintf("engine starts (%d hp)", e.Power)
+}
+
+type Car struct {
+	Engine // embedded: Power and Start() are promoted
+	Brand  string
+}
+
+// Override: a Start on Car shadows Engine.Start...
+func (c Car) Start() string {
+	// ...but we can still call the embedded version explicitly.
+	return c.Brand + ": " + c.Engine.Start()
+}
+
+func main() {
+	c := Car{
+		Engine: Engine{Power: 120},
+		Brand:  "Gopher",
+	}
+
+	fmt.Println("Power:", c.Power) // 120 — promoted field
+	fmt.Println(c.Start())         // Gopher: engine starts (120 hp)
+	fmt.Println(c.Engine.Start())  // engine starts (120 hp) — inner directly
+}`} />
+
+## Embedding interfaces — and the standard-library combos
+
+Interfaces embed too. `io.ReadWriter` is just `Reader` plus `Writer`, glued by embedding. You can also embed an interface into a struct to **decorate** an implementation: forward everything by default, override the one method you care about.
+
+The two patterns you'll meet constantly:
+
+- **Embedded `sync.Mutex`** — promotes `Lock`/`Unlock` so they sit right next to the data they protect: `s.Lock()`.
+- **Embedded `io` interfaces** — wrap a `Reader` or `Writer` to add logging, buffering, or counting while passing the rest through untouched.
+
+```go
+type SafeCounter struct {
+	sync.Mutex // promoted Lock/Unlock — guards n
+	n int
+}
+
+func (c *SafeCounter) Inc() {
+	c.Lock()
+	defer c.Unlock()
+	c.n++
+}
+```
+
+<Callout type="gotcha" title="🐹 Promotion is not inheritance">
+The embedded type doesn't know it's embedded. If `Engine.Start` called another `Engine` method, it would call **Engine's** version, never `Car`'s override — there's no virtual dispatch reaching back up. Also: a struct embedding a `sync.Mutex` (or anything stateful) **must not be copied** after use, since the copy duplicates the lock. Use a pointer receiver and pass `*T`.
+</Callout>
+
+Next: writing one algorithm that works across many types — [generics](/fundamentals/generics/).

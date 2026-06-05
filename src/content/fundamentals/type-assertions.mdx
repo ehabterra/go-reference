@@ -1,0 +1,119 @@
+---
+title: "Type Assertions & Switches"
+category: types-methods
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "Recovering concrete types from an interface — x.(T), the comma-ok form, the type switch, working with any, and when to reach for reflection."
+related:
+  - interfaces
+  - reflection
+  - errors
+quiz:
+  - q: "What does the comma-ok form `v, ok := x.(int)` do when x does not hold an int?"
+    options:
+      - text: "Sets ok to false and v to the zero value, without panicking"
+        correct: true
+      - text: "Panics immediately"
+        correct: false
+      - text: "Returns nil for both"
+        correct: false
+      - text: "Converts x to an int"
+        correct: false
+    explain: "The single-result form `x.(int)` panics on a wrong type. The two-result comma-ok form is safe: ok reports success and v is the zero value when it fails. Use comma-ok whenever the type isn't guaranteed."
+  - q: "What is a type switch used for?"
+    options:
+      - text: "Branching on the dynamic type held by an interface value"
+        correct: true
+      - text: "Converting between numeric types"
+        correct: false
+      - text: "Switching on a value's contents like a normal switch"
+        correct: false
+      - text: "Choosing a goroutine to run"
+        correct: false
+    explain: "`switch v := x.(type) { case int: ...; case string: ... }` inspects the concrete type inside an interface and binds v to it in each case, typed appropriately. It's the idiomatic way to handle a value of several possible types."
+  - q: "When should you prefer reflection over a type assertion or type switch?"
+    options:
+      - text: "Rarely — only when the set of types is open-ended or unknown at compile time"
+        correct: true
+      - text: "Always — reflection is faster"
+        correct: false
+      - text: "Whenever you use the any type"
+        correct: false
+      - text: "Never — reflection is forbidden"
+        correct: false
+    explain: "Type assertions and switches are simpler, faster, and type-checked, so prefer them when you know the candidate types. Reflection (the reflect package) is for genuinely dynamic cases like generic serializers, where the types aren't known in advance."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+An [interface](/fundamentals/interfaces/) value is a sealed box labeled only with what it can *do*. A **type assertion** is asking "is the thing inside actually a Cat?" — open it and you either get the Cat or, if you ask politely with comma-ok, a "nope." It's how you get the concrete value back out when you need more than the interface promises.
+</Callout>
+
+## Asserting a single type
+
+`x.(T)` claims the interface value `x` holds a `T` and hands it back. In its one-result form it **panics** if you're wrong, so it's only safe when the type is guaranteed. The **comma-ok** form is the safe default:
+
+```go
+var x any = "hello"
+
+s := x.(string)      // ok here, but panics if x weren't a string
+s, ok := x.(string)  // comma-ok: ok=true, s="hello"
+n, ok := x.(int)     // ok=false, n=0 — no panic
+```
+
+<Mermaid code={`graph TD
+  X["x any"] --> A["x.(T)"]
+  A -->|holds T| OK["value of type T, ok=true"]
+  A -->|other type| BAD["single form: PANIC / comma-ok: zero, false"]`} />
+
+## The type switch
+
+When a value could be one of several types, a **type switch** branches on the concrete type and binds a correctly-typed variable in each case:
+
+<Playground client:visible title="type-switch.go" code={`package main
+
+import "fmt"
+
+// describe inspects the dynamic type inside each any value.
+func describe(x any) string {
+	switch v := x.(type) {
+	case nil:
+		return "nil"
+	case int:
+		return fmt.Sprintf("int: %d (doubled %d)", v, v*2)
+	case string:
+		return fmt.Sprintf("string: %q (len %d)", v, len(v))
+	case bool:
+		return fmt.Sprintf("bool: %t", v)
+	case []int:
+		return fmt.Sprintf("[]int of length %d", len(v))
+	default:
+		// %T prints the concrete type name
+		return fmt.Sprintf("other: %T", v)
+	}
+}
+
+func main() {
+	values := []any{42, "go", true, []int{1, 2, 3}, 3.14, nil}
+	for _, val := range values {
+		fmt.Println(describe(val))
+	}
+}`} />
+
+In `switch v := x.(type)`, `v` has the specific type of each matched `case` — an `int` in the `int` case, a `string` in the `string` case — so you can use it directly.
+
+## Working with `any` and the road to reflection
+
+Type assertions are the natural companion to **`any`**: code that accepts `any` (a JSON decoder, a logger, a cache) stores values opaquely, then uses an assertion or switch to act on the real type. A real-world cousin is checking whether an error wraps a specific type — `errors.As` does exactly this kind of assertion under the hood (see [errors](/fundamentals/errors/)).
+
+When the candidate types are **known**, prefer assertions and switches — they're fast and compile-time checked. When the types are genuinely **open-ended** (a serializer that walks any struct), step up to runtime inspection with the `reflect` package — see [reflection](/fundamentals/reflection/).
+
+<Callout type="gotcha" title="🐹 Assert the type, not the value">
+Two traps. First, the single-result `x.(T)` **panics** on the wrong type — always use comma-ok unless you're certain. Second, you assert against the *dynamic* type, not method-by-method: `x.(io.Writer)` is also valid and asks "does the value satisfy `io.Writer`?", which is handy for optional behaviors. And remember a `nil` interface matches the `case nil` arm — but a non-nil interface holding a typed nil does not.
+</Callout>
+
+Next: turning failure into ordinary values — [errors](/fundamentals/errors/).

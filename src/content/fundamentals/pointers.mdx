@@ -1,0 +1,113 @@
+---
+title: "Pointers"
+category: basics
+kind: topic
+order: 4
+difficulty: "Beginner"
+status: ready
+intent: "Addresses without the footguns — & and *, value vs reference semantics, nil, when a function needs a pointer to mutate, and why Go has no pointer arithmetic."
+related:
+  - functions
+  - structs
+  - variables-and-types
+quiz:
+  - q: "Go passes all arguments by value. So how can a function modify the caller's variable?"
+    options:
+      - text: "By taking a pointer — the address is copied, but it still points at the original"
+        correct: true
+      - text: "It can't, ever"
+        correct: false
+      - text: "By declaring the parameter `ref`"
+        correct: false
+      - text: "Only for global variables"
+        correct: false
+    explain: "Everything is copied on a call, including pointers. Copying a *int still gives you the same address, so *p = 5 writes through to the original. That's how you mutate a caller's value."
+  - q: "What is the zero value of a pointer, and what happens if you dereference it?"
+    options:
+      - text: "nil — dereferencing it panics with a nil pointer dereference"
+        correct: true
+      - text: "0 — dereferencing returns 0"
+        correct: false
+      - text: "An empty struct"
+        correct: false
+      - text: "It points to random memory"
+        correct: false
+    explain: "An unassigned pointer is nil. Reading or writing through it (*p) panics at runtime. Always ensure a pointer is non-nil before dereferencing."
+  - q: "Can you do pointer arithmetic like `p++` in Go?"
+    options:
+      - text: "No — Go deliberately omits pointer arithmetic for memory safety (it lives in the unsafe package)"
+        correct: true
+      - text: "Yes, just like C"
+        correct: false
+      - text: "Only on slices"
+        correct: false
+      - text: "Only with integers"
+        correct: false
+    explain: "Go has pointers but no pointer arithmetic in normal code — you can't walk a pointer past its value. This keeps memory safe; the escape hatch is the rarely-needed unsafe package."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏠 Analogy">
+A value is a house; a pointer is the house's *address* written on a slip of paper. Hand someone a photocopy of the house (a value) and their renovations don't touch yours. Hand them the address (a pointer) and they can walk over and repaint the real thing. Go always copies the slip of paper — but the address on it still leads home.
+</Callout>
+
+## & takes an address, * follows it
+
+`&x` is "the address of x"; `*p` is "the value p points at" (dereferencing):
+
+<Mermaid code={`graph LR
+  X["x = 10  @0x40c138"] -->|"p := &x"| P["p  (*int)  → 0x40c138"]
+  P -->|"*p = 20"| X2["x is now 20"]`} />
+
+```go
+x := 10
+p := &x      // p holds the address of x; its type is *int
+fmt.Println(*p) // 10  — read through the pointer
+*p = 20         // write through the pointer
+fmt.Println(x)  // 20  — x changed
+```
+
+## Pass by value — and how to mutate anyway
+
+Go copies every argument. To let a function change your variable, pass its **address**:
+
+<Playground client:visible title="pointers.go" code={`package main
+
+import "fmt"
+
+// takes a copy — the caller's x is untouched
+func addOneValue(n int) { n++ }
+
+// takes the address — writes through to the caller's x
+func addOnePointer(n *int) { *n++ }
+
+func main() {
+	x := 5
+	addOneValue(x)
+	fmt.Println("after value:  ", x) // 5 — unchanged
+
+	addOnePointer(&x)
+	fmt.Println("after pointer:", x) // 6 — changed
+
+	var p *int            // zero value is nil
+	fmt.Println("nil ptr:", p == nil) // true
+	// *p = 1             // would panic: nil pointer dereference
+}`} />
+
+## When do you actually need one?
+
+<Callout type="tip" title="✅ Reach for a pointer when…">
+- **A function must modify** the caller's value (or a method must mutate its receiver — see [methods](/fundamentals/methods/)).
+- **Copying is expensive** — a large [struct](/fundamentals/structs/) is cheaper to pass by pointer than by value.
+- **nil is a meaningful state** — "no value yet," distinct from the zero value.
+
+Otherwise, prefer plain values — they're simpler and avoid aliasing surprises. Note: slices, maps and channels are already reference-like, so you rarely take a pointer *to* them. `new(T)` allocates a zeroed `T` and returns a `*T`.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ No pointer arithmetic — and that's a feature">
+Unlike C, you can't do `p++` to walk through memory; Go pointers only point *at* a value, never *between* values. Combined with garbage collection and bounds-checked slices, that's most of why Go is memory-safe. The compiler's **escape analysis** even decides whether a value lives on the stack or heap for you — taking `&x` doesn't force a heap allocation.
+</Callout>
+
+Next: grouping fields into one type — [structs](/fundamentals/structs/).

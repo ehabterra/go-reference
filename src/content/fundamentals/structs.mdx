@@ -1,0 +1,146 @@
+---
+title: "Structs"
+category: composite
+kind: topic
+order: 5
+difficulty: "Beginner"
+status: ready
+intent: "Grouping related fields into one named type — literals, the zero value, nesting, embedding, value comparison with ==, and struct tags."
+related:
+  - pointers
+  - methods
+  - slices
+quiz:
+  - q: "What is the zero value of a struct you declare but don't initialize, like `var p Point`?"
+    options:
+      - text: "A struct whose every field holds its own zero value — never nil"
+        correct: true
+      - text: "nil"
+        correct: false
+      - text: "An error — structs must be initialized"
+        correct: false
+      - text: "Undefined memory"
+        correct: false
+    explain: "A struct value is never nil. Declaring `var p Point` gives a usable struct whose fields are each set to their type's zero value (0, \"\", false, nil, …). Only a *pointer* to a struct can be nil."
+  - q: "When can two struct values be compared with `==`?"
+    options:
+      - text: "When all of their fields are themselves comparable types"
+        correct: true
+      - text: "Always — every struct supports =="
+        correct: false
+      - text: "Never; you must compare field by field"
+        correct: false
+      - text: "Only if they have a `==` method"
+        correct: false
+    explain: "Structs are comparable with `==` exactly when every field is comparable. Two structs are equal if all their fields are equal. A struct containing a slice, map, or function is *not* comparable and using `==` is a compile error."
+  - q: "What does the `json:\"name\"` part of a struct field tag do on its own?"
+    options:
+      - text: "Nothing at runtime by itself — it's metadata that packages like encoding/json read via reflection"
+        correct: true
+      - text: "Renames the field everywhere in your code"
+        correct: false
+      - text: "Makes the field private"
+        correct: false
+      - text: "Validates that the value is a name"
+        correct: false
+    explain: "A struct tag is just a string attached to a field. It has no effect until some package reads it with reflection — for example `encoding/json` uses the `json:\"...\"` tag to decide the JSON key for that field."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗂️ Analogy">
+A struct is a labeled form: one printed sheet with named blanks — *Name*, *Age*, *Email* — that you fill in and carry around as a single thing. Go has no classes; a struct is simply the **shape** of grouped data, and behavior gets attached later as [methods](/fundamentals/methods/).
+</Callout>
+
+## Defining and building a struct
+
+You define a struct type once, then create values from it:
+
+```go
+type Point struct {
+	X int
+	Y int
+}
+```
+
+There are several ways to make a value, and one way to read its parts — the dot:
+
+```go
+p := Point{X: 1, Y: 2} // keyed literal (preferred — order-independent, safe)
+q := Point{3, 4}       // positional literal — must list every field in order
+var z Point            // zero value: X and Y are both 0
+p.X = 10               // field access with the dot
+```
+
+Prefer the **keyed** form: it survives a field being added or reordered, and it lets you set only the fields you care about (the rest stay at their zero value).
+
+## Zero value, comparison, and tags
+
+Declare a struct without initializing it and you still get a fully usable value — every field is set to its own zero value, so there's no "uninitialized garbage." Only a *pointer* to a struct can be `nil`.
+
+Structs compare with `==` field-by-field, as long as **every field is itself comparable**:
+
+<Mermaid code={`graph TD
+  S["struct value"] --> C{"all fields comparable?"}
+  C -->|yes| OK["== works: equal iff every field equal"]
+  C -->|"no (has slice/map/func)"| ERR["== is a compile error"]`} />
+
+Fields can carry a back-tick **tag** — metadata that does nothing on its own, but that packages like `encoding/json` read by reflection to control encoding (here, the JSON key names):
+
+```go
+type User struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
+}
+```
+
+## Nesting and embedding
+
+A field can itself be a struct (nesting), or a struct can be **embedded** by writing just its type name — the embedded fields are promoted so you can reach them directly:
+
+<Playground client:visible title="structs.go" code={`package main
+
+import "fmt"
+
+type Address struct {
+	City    string
+	Country string
+}
+
+type Person struct {
+	Name    string
+	Age     int
+	Address Address // a nested struct field
+}
+
+func main() {
+	p := Person{
+		Name: "Ada",
+		Age:  36,
+		Address: Address{
+			City:    "London",
+			Country: "UK",
+		},
+	}
+
+	p.Address.City = "Cambridge" // reach into the nested struct
+	fmt.Println(p.Name, "lives in", p.Address.City)
+
+	// %+v prints field names with their values — great for debugging.
+	fmt.Printf("%+v\n", p)
+
+	// Comparison: == is true only when every field matches.
+	q := p
+	fmt.Println("p == q:", p == q) // true (a struct is copied by value)
+	q.Age = 37
+	fmt.Println("p == q:", p == q) // false
+}`} />
+
+The struct is copied **by value**: `q := p` makes an independent copy, so changing `q.Age` does not touch `p`. When you want a function to mutate the original instead, pass a [pointer](/fundamentals/pointers/).
+
+<Callout type="tip" title="🐹 Structs hold data; methods give them behavior">
+A struct on its own is just grouped fields. You add behavior by attaching **methods** — functions with a receiver, like `func (p Point) Distance() float64`. That receiver can be a value (a copy) or a pointer (to mutate the original). Structs are also the building blocks you'll put inside [slices](/fundamentals/slices/) and maps. Next up: [methods](/fundamentals/methods/).
+</Callout>
+
+Next: a growable, ordered collection — [slices](/fundamentals/slices/).

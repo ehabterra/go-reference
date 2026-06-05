@@ -1,0 +1,152 @@
+---
+title: "Interfaces"
+category: types-methods
+kind: topic
+order: 10
+difficulty: "Intermediate"
+status: ready
+intent: "Implicit satisfaction, polymorphism through small interfaces, the empty interface any, composition, and the nil-interface trap."
+related:
+  - methods
+  - embedding
+  - type-assertions
+quiz:
+  - q: "How does a type declare that it implements an interface in Go?"
+    options:
+      - text: "It doesn't — satisfaction is implicit; having the right methods is enough"
+        correct: true
+      - text: "With an `implements` keyword"
+        correct: false
+      - text: "By embedding the interface"
+        correct: false
+      - text: "By registering it at startup"
+        correct: false
+    explain: "Go uses structural typing: any type with the required method set satisfies the interface automatically, with no declaration. This lets you satisfy interfaces you didn't know existed, including ones from other packages."
+  - q: "What is the idiomatic Go guidance for interfaces at API boundaries?"
+    options:
+      - text: "Accept interfaces, return structs — be liberal in inputs, concrete in outputs"
+        correct: true
+      - text: "Return interfaces, accept structs"
+        correct: false
+      - text: "Always return `any`"
+        correct: false
+      - text: "Define one giant interface per package"
+        correct: false
+    explain: "Accepting an interface lets callers pass anything that fits; returning a concrete type gives them all its methods and fields. Small interfaces (often one method, like io.Writer) compose best."
+  - q: "An interface variable holds a *nil pointer* of a concrete type. Is the interface == nil?"
+    options:
+      - text: "No — the interface holds a (type, value) pair, so the type is non-nil even though the value is nil"
+        correct: true
+      - text: "Yes — a nil pointer makes the interface nil"
+        correct: false
+      - text: "Only for pointer-receiver methods"
+        correct: false
+      - text: "It panics on comparison"
+        correct: false
+    explain: "An interface is nil only when BOTH its type and value are nil. A nil *T stored in an interface gives it a concrete type, so `iface != nil`. This is a classic bug, especially when returning a typed nil error."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔌 Analogy">
+An interface is a wall socket. It promises a *shape* — two prongs and a voltage — not a brand. Any appliance that fits plugs in. Go never asks a type "do you declare yourself a Plug?"; it just checks "do you have the right prongs?" That check is the type's [method set](/fundamentals/methods/).
+</Callout>
+
+## Implicit satisfaction
+
+An interface is just a **set of method signatures**. A type satisfies it by *having those methods* — there is no `implements` keyword and no explicit link:
+
+```go
+type Stringer interface {
+	String() string
+}
+
+type Point struct{ X, Y int }
+
+// Point now satisfies Stringer — automatically, no declaration
+func (p Point) String() string {
+	return fmt.Sprintf("(%d, %d)", p.X, p.Y)
+}
+```
+
+This **structural typing** means you can satisfy interfaces you've never heard of, including `fmt.Stringer` and `io.Writer` from the standard library.
+
+## Polymorphism through an interface parameter
+
+Write a function over the interface, and every implementer flows through the same code:
+
+<Mermaid code={`graph TD
+  SHAPE["Shape interface { Area() float64 }"]
+  CIRCLE["Circle"] -->|satisfies| SHAPE
+  RECT["Rectangle"] -->|satisfies| SHAPE
+  SHAPE --> FN["totalArea(shapes []Shape)"]`} />
+
+<Playground client:visible title="interfaces.go" code={`package main
+
+import (
+	"fmt"
+	"math"
+)
+
+// A small interface: one method.
+type Shape interface {
+	Area() float64
+}
+
+type Circle struct{ R float64 }
+
+func (c Circle) Area() float64 { return math.Pi * c.R * c.R }
+
+type Rectangle struct{ W, H float64 }
+
+func (r Rectangle) Area() float64 { return r.W * r.H }
+
+// One function, any Shape. No type switches needed.
+func totalArea(shapes []Shape) float64 {
+	var sum float64
+	for _, s := range shapes {
+		sum += s.Area()
+	}
+	return sum
+}
+
+func main() {
+	shapes := []Shape{
+		Circle{R: 2},
+		Rectangle{W: 3, H: 4},
+	}
+	fmt.Printf("total area: %.2f\n", totalArea(shapes)) // 24.57
+}`} />
+
+## The empty interface, small interfaces, and composition
+
+The empty interface `interface{}` — spelled **`any`** since Go 1.18 — has no methods, so *every* type satisfies it. It's the escape hatch for "value of unknown type" (you'll recover the real type with [type assertions](/fundamentals/type-assertions/)).
+
+Idiomatic Go favors **small** interfaces. The most powerful ones have a single method — `io.Writer`, `io.Reader`, `fmt.Stringer`. You compose them by embedding:
+
+```go
+// io.ReadWriter is literally two small interfaces glued together
+type ReadWriter interface {
+	Reader
+	Writer
+}
+```
+
+And remember the boundary rule: **accept interfaces, return structs.** Take the smallest interface you actually need; hand back a concrete type so callers keep its full surface.
+
+## The nil-interface trap
+
+<Callout type="gotcha" title="⚠️ A typed nil is not a nil interface">
+An interface value is a **(type, value) pair**. It equals `nil` only when *both* halves are nil. Store a nil `*T` in an interface and the type slot is filled — so the interface is **not** nil:
+
+```go
+var p *MyError = nil
+var err error = p   // err holds (*MyError, nil)
+fmt.Println(err == nil) // false! — the famous typed-nil bug
+```
+
+This bites hardest when a function declares `var err *MyError` and returns it as `error`: callers see a non-nil error even on success. Fix: return the interface type directly, or `return nil` explicitly.
+</Callout>
+
+Next: how types reuse behavior by embedding others — [struct & interface embedding](/fundamentals/embedding/).

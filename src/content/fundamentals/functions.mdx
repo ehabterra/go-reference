@@ -1,0 +1,138 @@
+---
+title: "Functions"
+category: basics
+kind: topic
+order: 3
+difficulty: "Beginner"
+status: ready
+intent: "Functions as first-class values — multiple and named return values, variadic parameters, closures that capture state, and the (result, error) convention."
+related:
+  - control-flow
+  - pointers
+  - errors
+quiz:
+  - q: "What is Go's idiomatic way to report whether a function succeeded?"
+    options:
+      - text: "Return an extra error value: `func f() (T, error)`"
+        correct: true
+      - text: "Throw an exception"
+        correct: false
+      - text: "Return -1 or nil"
+        correct: false
+      - text: "Set a global error variable"
+        correct: false
+    explain: "Go functions return errors as ordinary values, conventionally the last return value. The caller checks `if err != nil`. There are no exceptions for normal error handling."
+  - q: "What does a closure capture?"
+    options:
+      - text: "The variables from its surrounding scope — by reference, so it sees later changes"
+        correct: true
+      - text: "A copy of the entire program state"
+        correct: false
+      - text: "Nothing; closures can't access outer variables"
+        correct: false
+      - text: "Only constants"
+        correct: false
+    explain: "A closure is a function value that captures variables from where it was defined, by reference. It keeps them alive and sees their updates — the basis of stateful function values."
+  - q: "What does `...int` mean in `func sum(nums ...int)`?"
+    options:
+      - text: "Variadic — sum accepts any number of int arguments, received as a slice"
+        correct: true
+      - text: "A pointer to an int"
+        correct: false
+      - text: "Exactly three ints"
+        correct: false
+      - text: "An optional single int"
+        correct: false
+    explain: "A trailing `...T` parameter is variadic: callers pass zero or more T values, and inside the function `nums` is a `[]int`. Spread an existing slice with `sum(xs...)`."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔧 Analogy">
+A function is a labeled machine: inputs go in, outputs come out. In Go that machine is also a **value** — you can store it in a variable, pass it to another function, and return it. That one idea (functions as first-class values) quietly powers callbacks, middleware, and most of the [Strategy](/patterns/strategy/) pattern.
+</Callout>
+
+## Multiple and named returns
+
+Go functions can return several values — most famously a result paired with an error:
+
+```go
+func divide(a, b float64) (float64, error) {
+	if b == 0 {
+		return 0, fmt.Errorf("divide by zero")
+	}
+	return a / b, nil
+}
+```
+
+Returns can be **named**, which documents them and enables a bare `return`:
+
+<Mermaid code={`graph LR
+  IN["a, b float64"] --> FN["divide"]
+  FN --> OUT1["float64 (quotient)"]
+  FN --> OUT2["error (nil on success)"]`} />
+
+## Variadic parameters and first-class values
+
+<Playground client:visible title="functions.go" code={`package main
+
+import "fmt"
+
+// variadic: zero or more ints, received as a []int
+func sum(nums ...int) int {
+	total := 0
+	for _, n := range nums {
+		total += n
+	}
+	return total
+}
+
+// functions are values: apply takes one as a parameter
+func apply(xs []int, f func(int) int) []int {
+	out := make([]int, len(xs))
+	for i, x := range xs {
+		out[i] = f(x)
+	}
+	return out
+}
+
+func main() {
+	fmt.Println(sum(1, 2, 3))      // 6
+	nums := []int{4, 5, 6}
+	fmt.Println(sum(nums...))      // spread a slice -> 15
+
+	double := func(x int) int { return x * 2 } // a function literal
+	fmt.Println(apply(nums, double))           // [8 10 12]
+}`} />
+
+## Closures capture state
+
+A function literal can close over variables from its surrounding scope and keep them alive between calls — a tiny, private piece of state:
+
+<Playground client:visible title="closure.go" code={`package main
+
+import "fmt"
+
+// counter returns a function that remembers its own count.
+func counter() func() int {
+	n := 0          // captured by the returned closure
+	return func() int {
+		n++         // mutates the captured variable
+		return n
+	}
+}
+
+func main() {
+	next := counter()
+	fmt.Println(next(), next(), next()) // 1 2 3
+
+	other := counter() // independent state
+	fmt.Println(other())                // 1
+}`} />
+
+<Callout type="gotcha" title="🐹 Methods are functions with a receiver">
+A **method** is just a function with a special *receiver* argument — `func (u User) Name() string`. That's how Go does behavior on types without classes. Functions also pair with `defer` (schedule cleanup), and any function can return early as soon as it hits an error. Next stop: [methods](/fundamentals/methods/) and [interfaces](/fundamentals/interfaces/).
+</Callout>
+
+Next: values, addresses, and the difference between them — [pointers](/fundamentals/pointers/).

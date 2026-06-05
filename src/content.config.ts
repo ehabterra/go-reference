@@ -22,6 +22,11 @@ const refSchema = z.object({
     'linear',
     'trees-graphs',
     'algorithms',
+    // go-fundamentals categories
+    'basics',
+    'composite',
+    'types-methods',
+    'idioms',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -67,4 +72,9 @@ const dsa = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa };
+const fundamentals = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/fundamentals' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals };
