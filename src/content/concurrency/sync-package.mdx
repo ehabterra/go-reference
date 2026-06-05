@@ -132,5 +132,5 @@ c.L.Unlock()
 </Callout>
 
 <Callout type="tip" title="✅ Go's guidance">
-"Use channels when possible; use the sync primitives when they're clearly simpler." Mutexes aren't a code smell — for protecting a type's own fields they're often the cleanest, fastest choice. Match the tool to the job, not to dogma.
+Go's own guidance is to prefer channels when they fit the problem, and reach for the `sync` primitives when they're clearly simpler. Mutexes aren't a code smell — for protecting a type's own fields they're often the cleanest, fastest choice. Match the tool to the job, not to dogma.
 </Callout>

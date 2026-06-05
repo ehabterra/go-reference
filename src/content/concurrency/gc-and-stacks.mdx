@@ -55,7 +55,7 @@ Old garbage collectors shut the whole building to sweep — everyone stops worki
 
 ## The concurrent garbage collector
 
-Go's GC is a **concurrent, tri-color mark-sweep** collector. The crucial word is *concurrent*: it marks live objects while your goroutines keep running, using a **write barrier** to track pointers that change mid-cycle. Only two short **stop-the-world** phases remain, each typically **tens of microseconds** — the reason Go suits low-latency services.
+Go's GC is a **concurrent, tri-color mark-sweep** collector. The crucial word is *concurrent*: it marks live objects while your goroutines keep running, using a **write barrier** to track pointers that change mid-cycle. Only two short **stop-the-world** phases remain, typically **well under a millisecond** (often tens of microseconds) — the reason Go suits low-latency services.
 
 Two knobs:
 

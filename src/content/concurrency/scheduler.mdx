@@ -108,7 +108,7 @@ func main() {
 }`} />
 
 <Callout type="go" title="🐹 You almost never set GOMAXPROCS — except in containers">
-The default (one P per CPU) is right for almost everything; manually pinning it usually hurts. The famous exception is **containers**: Go reads the host's CPU count, not your cgroup CPU limit, so a 2-CPU-limited pod on a 64-core node spins up 64 Ps and thrashes. Set `GOMAXPROCS` to the limit (or use `go.uber.org/automaxprocs`). Go 1.25+ is becoming cgroup-aware here.
+The default (one P per CPU) is right for almost everything; manually pinning it usually hurts. The classic pitfall is **containers**: before **Go 1.25**, the runtime read the host's CPU count, not your cgroup CPU limit — so a 2-CPU-limited pod on a 64-core node spun up 64 Ps and thrashed. **Go 1.25 fixed this by default**: on Linux the runtime now caps `GOMAXPROCS` at the cgroup CPU limit (and never below 2). On older versions, set `GOMAXPROCS` yourself or use `go.uber.org/automaxprocs`.
 </Callout>
 
 <Callout type="tip" title="✅ Treat goroutines as cheap, threads as precious">

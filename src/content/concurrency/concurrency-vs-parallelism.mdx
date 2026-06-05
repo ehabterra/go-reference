@@ -6,6 +6,7 @@ order: 1
 difficulty: "Start here"
 status: ready
 intent: "What concurrency actually is, why it is not parallelism, and the CSP model Go is built on."
+intent_ar: "ما هو التزامن (concurrency) فعلًا، ولماذا لا يساوي التوازي (parallelism)، ونموذج CSP الذي بُنيت عليه Go."
 related:
   - race-conditions
   - goroutines
@@ -48,19 +49,36 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Tr from '../../components/Tr.astro';
 
 <Callout type="analogy" title="☕ Analogy">
+<Tr>
 One barista taking an order, then starting the espresso, then steaming milk, then taking the next order is **concurrent** — juggling several tasks, switching between them, one person. Add a second barista working alongside and you have **parallelism** — two tasks happening at the same instant. Concurrency is how you organize the work; parallelism is how many hands do it.
+<Fragment slot="ar">
+بائع قهوة واحد يأخذ طلبًا، ثم يبدأ الإسبريسو، ثم يبخّر الحليب، ثم يأخذ الطلب التالي — هذا **تزامن (concurrent)**: شخص واحد يوازن بين عدّة مهام ويتنقّل بينها. أضِف بائعًا ثانيًا يعمل بجانبه فيصبح لديك **توازٍ (parallelism)**: مهمتان تحدثان في اللحظة نفسها. التزامن هو كيف تنظّم العمل، والتوازي هو عدد الأيدي التي تنجزه.
+</Fragment>
+</Tr>
 </Callout>
 
 ## The core distinction
 
-> **"Concurrency is a property of the code; parallelism is a property of the running program."** — Rob Pike
+> **"Concurrency is a property of the code; parallelism is a property of the running program."** — Katherine Cox-Buday, *Concurrency in Go* (O'Reilly, 2017), p. 23
 
+<Tr>
 - **Concurrency** is *structure*: composing independent activities that *could* run in any order or overlap.
 - **Parallelism** is *execution*: those activities actually running at the same instant on multiple cores.
+<Fragment slot="ar">
+- **التزامن (concurrency)** هو *البنية*: تركيب أنشطة مستقلّة *يمكن* أن تعمل بأي ترتيب أو تتداخل.
+- **التوازي (parallelism)** هو *التنفيذ*: تشغيل تلك الأنشطة فعليًا في اللحظة نفسها على عدّة أنوية (cores).
+</Fragment>
+</Tr>
 
+<Tr>
 Concurrent code on a single core is **interleaved**, not parallel — the runtime rapidly switches between tasks. Give it more cores (via `GOMAXPROCS`) and the same concurrent code becomes parallel, with no rewrite.
+<Fragment slot="ar">
+الكود المتزامن على نواة واحدة يكون **متشابكًا (interleaved)** لا متوازيًا — إذ يبدّل الـ runtime بين المهام بسرعة. أعطِه أنوية أكثر (عبر `GOMAXPROCS`) فيصبح الكود المتزامن نفسه متوازيًا، دون إعادة كتابة.
+</Fragment>
+</Tr>
 
 <Mermaid code={`graph LR
   subgraph S1["Concurrent · 1 core (interleaved)"]
@@ -73,15 +91,30 @@ Concurrent code on a single core is **interleaved**, not parallel — the runtim
 
 ## CSP — the model Go chose
 
+<Tr>
 Most languages stop their concurrency abstraction at **OS threads** and shared memory guarded by locks. Go reaches back to Tony Hoare's 1978 **Communicating Sequential Processes**: model your program as independent processes that **communicate over channels** rather than share memory.
+<Fragment slot="ar">
+معظم اللغات تتوقّف بتجريد التزامن عند **خيوط نظام التشغيل (OS threads)** والذاكرة المشتركة المحميّة بالأقفال (locks). أما Go فتعود إلى ورقة Tony Hoare عام 1978 **Communicating Sequential Processes (CSP)**: انمذِج برنامجك كعمليات مستقلّة **تتواصل عبر channels** بدلًا من مشاركة الذاكرة.
+</Fragment>
+</Tr>
 
 <Callout type="go" title="🐹 The Go proverb">
+<Tr>
 **"Don't communicate by sharing memory; share memory by communicating."** Go gives you two new primitives below the OS thread — **goroutines** (cheap concurrent functions) and **channels** (typed communication) — so you can model concurrency at the level of your *problem*, not at the level of thread management.
+<Fragment slot="ar">
+**"لا تتواصل بمشاركة الذاكرة؛ بل شارِك الذاكرة بالتواصل."** تمنحك Go بدائيّتين جديدتين تحت مستوى خيط نظام التشغيل — **goroutines** (دوال متزامنة رخيصة) و**channels** (تواصل بأنواع محدّدة) — لتنمذِج التزامن على مستوى *مشكلتك*، لا على مستوى إدارة الخيوط.
+</Fragment>
+</Tr>
 </Callout>
 
 ## Channels or mutexes?
 
+<Tr>
 Both coordinate goroutines; pick by intent:
+<Fragment slot="ar">
+كلاهما ينسّق بين الـ goroutines؛ اختر حسب القصد:
+</Fragment>
+</Tr>
 
 | Scenario | Use |
 |---|---|
@@ -92,7 +125,12 @@ Both coordinate goroutines; pick by intent:
 
 ## See concurrency in action
 
+<Tr>
 Three goroutines run concurrently; the runtime interleaves them, so the order is **not** deterministic. Edit and **Run** (run it twice — the order can change):
+<Fragment slot="ar">
+ثلاثة goroutines تعمل بشكل متزامن؛ يتداخلها الـ runtime، فالترتيب **غير** حتمي. حرّر الكود ثم اضغط **Run** (شغّله مرّتين — قد يتغيّر الترتيب):
+</Fragment>
+</Tr>
 
 <Playground client:visible title="concurrency.go" code={`package main
 
@@ -115,7 +153,17 @@ func main() {
 }`} />
 
 <Callout type="gotcha" title="⚠️ More goroutines ≠ faster">
+<Tr>
 Concurrency is a *design tool*, not automatically a speedup. **Amdahl's Law** says your maximum speedup is capped by the part that must stay sequential, and goroutines add scheduling and communication overhead. Reach for concurrency to model independent work and to overlap I/O — not as a reflex to make everything "parallel."
+<Fragment slot="ar">
+التزامن *أداة تصميم* وليس تسريعًا تلقائيًا. ينصّ **Amdahl's Law** على أن أقصى تسريع تحصل عليه محدود بالجزء الذي يجب أن يبقى تسلسليًا، كما تضيف الـ goroutines كلفة جدولة وتواصل. استعمل التزامن لنمذجة العمل المستقل ولتداخل عمليات الـ I/O — لا كردّ فعل لجعل كل شيء "متوازيًا".
+</Fragment>
+</Tr>
 </Callout>
 
+<Tr>
 Next up: the failure modes that make concurrency hard — starting with [race conditions](/concurrency/race-conditions/).
+<Fragment slot="ar">
+التالي: أنماط الفشل التي تجعل التزامن صعبًا — بدءًا من [race conditions](/concurrency/race-conditions/).
+</Fragment>
+</Tr>
