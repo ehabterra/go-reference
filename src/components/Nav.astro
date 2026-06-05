@@ -1,16 +1,28 @@
 ---
 import { REPO_URL } from '../lib/consts';
 ---
-<header class="dp-nav">
+<header class="dp-nav" id="dp-nav">
   <div class="dp-container dp-nav__inner">
     <a class="dp-brand" href="/">
       <span class="dp-brand__mark">{'{}'}</span>
       <span>The Go Reference</span>
     </a>
-    <nav class="dp-nav__links">
-      <a href="/patterns/" class="hide-sm">Design Patterns</a>
-      <a href="/concurrency/" class="hide-sm">Concurrency</a>
+
+    <nav class="dp-nav__links" id="dp-nav-links">
+      <a href="/patterns/">Design Patterns</a>
+      <a href="/concurrency/">Concurrency</a>
       <a href={REPO_URL} target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
+
+    <div class="dp-nav__actions">
+      <button class="dp-search-btn" data-dp-search aria-label="Search (Cmd K)">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <span class="dp-search-btn__label">Search</span>
+        <kbd>⌘K</kbd>
+      </button>
+      <button class="dp-menu-btn" data-dp-menu aria-label="Menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="17" x2="20" y2="17"></line></svg>
+      </button>
+    </div>
   </div>
 </header>
