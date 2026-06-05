@@ -4,7 +4,6 @@ interface Props {
   category: string;
   title: string;
   intent: string;
-  intent_ar?: string;
   order?: number;
   difficulty?: string;
   status?: string;
@@ -12,15 +11,12 @@ interface Props {
   footLabel?: string;
   base?: string;
 }
-const { slug, category, title, intent, intent_ar, order, difficulty, status, numLabel, footLabel, base = '/patterns' } = Astro.props;
+const { slug, category, title, intent, order, difficulty, status, numLabel, footLabel, base = '/patterns' } = Astro.props;
 ---
 <a class="dp-card" data-cat={category} data-slug={slug} href={`${base}/${slug}/`}>
   <span class="dp-card__num">{numLabel ?? `${order} · ${difficulty}`}</span>
   <span class="dp-card__title">{title}</span>
-  <p class="dp-card__intent">
-    <span class="tri-en">{intent}</span>
-    {intent_ar && <span class="tri-ar" lang="ar" dir="rtl">{intent_ar}</span>}
-  </p>
+  <p class="dp-card__intent" data-i18n-html={`intent.${slug}`}>{intent}</p>
   <span class="dp-card__foot">
     <span>{footLabel ?? (status === 'ready' ? '✦ Complete' : 'Draft')}</span>
     <span class="dp-card__check" aria-hidden="true">✓</span>

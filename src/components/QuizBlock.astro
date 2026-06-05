@@ -15,19 +15,22 @@ const { quiz } = Astro.props as { quiz: QuizItem[] };
     <div class="dp-q">
       <p class="dp-q__prompt">
         {i + 1}.
-        <span class="tr-en">{q.q}</span>
-        {q.q_ar && <span class="tr-ar" lang="ar" dir="rtl">{q.q_ar}</span>}
+        {q.q_ar ? (
+          <Fragment><span class="tr-en">{q.q}</span><span class="tr-ar" lang="ar" dir="rtl">{q.q_ar}</span></Fragment>
+        ) : <span>{q.q}</span>}
       </p>
       {q.options.map((o) => (
         <button class="dp-opt" data-correct={o.correct ? 'true' : 'false'}>
-          <span class="tr-en">{o.text}</span>
-          {o.text_ar && <span class="tr-ar" lang="ar" dir="rtl">{o.text_ar}</span>}
+          {o.text_ar ? (
+            <Fragment><span class="tr-en">{o.text}</span><span class="tr-ar" lang="ar" dir="rtl">{o.text_ar}</span></Fragment>
+          ) : <span>{o.text}</span>}
         </button>
       ))}
       {q.explain && (
         <p class="dp-q__explain">
-          <span class="tr-en">{q.explain}</span>
-          {q.explain_ar && <span class="tr-ar" lang="ar" dir="rtl">{q.explain_ar}</span>}
+          {q.explain_ar ? (
+            <Fragment><span class="tr-en">{q.explain}</span><span class="tr-ar" lang="ar" dir="rtl">{q.explain_ar}</span></Fragment>
+          ) : <span>{q.explain}</span>}
         </p>
       )}
     </div>

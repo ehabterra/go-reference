@@ -1,5 +1,5 @@
 ---
-const { data: d } = Astro.props;
+const { data: d, slug } = Astro.props;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const catLabel = cap(d.category.replace(/-/g, ' '));
 const eyebrow =
@@ -12,12 +12,7 @@ const eyebrow =
 <header class="dp-hero">
   <p class="dp-hero__eyebrow">{eyebrow}{d.difficulty ? ` · ${d.difficulty}` : ''}</p>
   <h1>{d.title}</h1>
-  {d.intent && (
-    <p class="dp-hero__lede">
-      <span class="tr-en">{d.intent}</span>
-      {d.intent_ar && <span class="tr-ar" lang="ar" dir="rtl">{d.intent_ar}</span>}
-    </p>
-  )}
+  {d.intent && <p class="dp-hero__lede" data-i18n-html={`intent.${slug}`}>{d.intent}</p>}
   {d.aka && <p class="dp-kicker" style="margin-top:.9rem">Also known as — {d.aka}</p>}
   <div class="dp-badges" style="margin-top:1.1rem">
     <span class="dp-badge" data-cat={d.category}><span class="dp-dot"></span>{catLabel}</span>
