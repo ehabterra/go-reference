@@ -1,0 +1,127 @@
+---
+title: "Concurrency Cheat-Sheet"
+category: practice
+kind: guide
+order: 15
+difficulty: "Reference"
+status: ready
+intent: "A one-page map of Go concurrency — the channel axioms, select idioms, the sync toolbox, the composable patterns, and the gotchas. Built for revision and interview prep."
+related:
+  - concurrency-vs-parallelism
+  - channels
+  - sync-package
+quiz:
+  - q: "What happens when you send on a closed channel?"
+    options:
+      - text: "It panics"
+        correct: true
+      - text: "It blocks forever"
+        correct: false
+      - text: "The value is silently dropped"
+        correct: false
+      - text: "It returns an error"
+        correct: false
+    explain: "Sending on a closed channel panics; so does closing it twice. Receiving from a closed channel is fine — it yields the zero value with ok=false, immediately."
+  - q: "You're transferring ownership of data from one goroutine to another. Channel or mutex?"
+    options:
+      - text: "Channel — 'share memory by communicating'"
+        correct: true
+      - text: "Mutex — it's faster"
+        correct: false
+      - text: "Neither; use a global variable"
+        correct: false
+      - text: "Always a sync.Once"
+        correct: false
+    explain: "Channels are for transferring ownership and coordinating; mutexes are for guarding a struct's internal state. Pick by intent, not by speed."
+  - q: "What does a receive on a nil channel do?"
+    options:
+      - text: "Blocks forever — useful to disable a case in select"
+        correct: true
+      - text: "Panics"
+        correct: false
+      - text: "Returns the zero value immediately"
+        correct: false
+      - text: "Closes the channel"
+        correct: false
+    explain: "Send and receive on a nil channel both block forever. Setting a channel variable to nil to take its select case out of play is a real, idiomatic technique."
+---
+import Callout from '../../components/Callout.astro';
+
+Everything that matters about Go concurrency on one page. Each row links to the full topic; skim to refresh, then dive in.
+
+<Callout type="intent" title="🎯 The two proverbs">
+**"Don't communicate by sharing memory; share memory by communicating."** And **"concurrency is not parallelism"** — concurrency is how you *structure* independent work; parallelism is it actually running at once. Almost everything below follows from taking those seriously. See [Concurrency vs Parallelism](/concurrency/concurrency-vs-parallelism/).
+</Callout>
+
+## Channel axioms — what each operation does
+
+| Operation | nil channel | open, ready | open, not ready | closed |
+|---|---|---|---|---|
+| **receive** `<-ch` | block forever | returns a value | block | zero value, `ok=false`, now |
+| **send** `ch <-` | block forever | sends | block | **panic** |
+| **close** `close(ch)` | **panic** | closes | closes | **panic** |
+
+Rules of thumb: the **sender** owns and closes the channel; closing signals "no more values"; a `for range ch` drains until close. Buffered channels decouple sender and receiver up to the buffer size. See [Channels](/concurrency/channels/).
+
+## select — pick a ready case
+
+| Idiom | Shape |
+|---|---|
+| Timeout | `select { case v := <-ch: …; case <-time.After(d): … }` |
+| Non-blocking | `select { case v := <-ch: …; default: … }` |
+| Cancellation | `select { case <-ctx.Done(): return ctx.Err(); case … }` |
+| Disable a case | set its channel variable to `nil` (blocks forever) |
+
+A `select` blocks until one case is ready; if several are, it picks one **at random** (prevents starvation). See [select](/concurrency/select/).
+
+## The sync toolbox
+
+| Tool | Use it for |
+|---|---|
+| [`Mutex`](/concurrency/sync-package/) | exclusive access to shared state |
+| [`RWMutex`](/concurrency/sync-package/) | many readers, occasional writer |
+| [`WaitGroup`](/concurrency/sync-package/) | wait for N goroutines to finish |
+| [`Once`](/concurrency/sync-package/) | exactly-once initialization |
+| [`Cond`](/concurrency/sync-package/) | wait/signal on a condition (rare) |
+| [`Pool`](/concurrency/sync-package/) | reuse short-lived allocations |
+| [`atomic`](/concurrency/atomic/) | lock-free counters and flags |
+
+## Composable patterns
+
+| Pattern | Use it for |
+|---|---|
+| [Pipeline](/patterns/pipeline/) | stream data through channel-connected stages |
+| [Fan-out / Fan-in](/patterns/fan-in-fan-out/) | parallelize a stage, then merge results |
+| [Worker Pool](/patterns/worker-pool/) | bound concurrency with N workers |
+| [Semaphore](/patterns/semaphore/) | cap how many run at once (buffered `chan struct{}`) |
+| [Context & Cancellation](/patterns/context-cancellation/) | propagate cancel, deadline, request values |
+| [errgroup](/patterns/errgroup/) | concurrent tasks: wait + first error + cancel |
+| [Or-done](/patterns/or-done-channel/) | range a stream that stops cleanly on cancel |
+| [Pub/Sub](/patterns/pub-sub/) | broadcast to dynamic subscribers |
+
+## Decision shortcuts — "I need to…"
+
+<Callout type="tip" title="✅ Channel or mutex, and which tool">
+- **…transfer ownership of data between goroutines** → [channel](/concurrency/channels/)
+- **…guard a struct's internal fields** → [`Mutex`](/concurrency/sync-package/)
+- **…wait for a group to finish** → [`WaitGroup`](/concurrency/sync-package/)
+- **…run concurrent tasks that can fail** → [errgroup](/patterns/errgroup/)
+- **…cap how many run at once** → [Semaphore](/patterns/semaphore/) / [Worker Pool](/patterns/worker-pool/)
+- **…cancel a whole tree of goroutines** → [`context`](/patterns/context-cancellation/)
+- **…init exactly once** → [`sync.Once`](/concurrency/sync-package/)
+- **…a fast counter without a lock** → [`atomic`](/concurrency/atomic/)
+</Callout>
+
+## Gotchas that bite
+
+<Callout type="gotcha" title="⚠️ Keep these in muscle memory">
+- **Send on a closed channel panics**; closing twice panics; receive on closed returns the zero value immediately.
+- **A nil channel blocks forever** — handy to disable a `select` case, surprising otherwise.
+- **Every goroutine needs an exit** — one blocked forever is a [leak](/concurrency/goroutines/); give it a `done`/`ctx`.
+- **`WaitGroup.Add` before you launch** the goroutine, and `Done` in a `defer`.
+- **A plain `map` isn't safe for concurrent writes** — guard it or use `sync.Map`; run the [race detector](/concurrency/race-conditions/) with `-race`.
+- **Don't copy a `Mutex`/`WaitGroup`** — pass the struct by pointer.
+- **Loop-variable capture** in `go func(){…}` was fixed in Go 1.22; on older versions, pass it as an argument.
+</Callout>
+
+## Test yourself

@@ -2,10 +2,12 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
+import Card from '../../components/Card.astro';
 import { CONCURRENCY_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('concurrency');
-const slugs = topics.map((t) => t.id).join(',');
+const slugs = topics.filter((t) => t.data.kind === 'topic').map((t) => t.id).join(',');
+const cheat = topics.find((t) => t.id === 'quick-reference');
 ---
 <BaseLayout title="Concurrency" description="A deep, Go-first guide to concurrency — races, goroutines, channels, select, sync, the memory model, context and the scheduler.">
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Concurrency</span></nav>
@@ -49,6 +51,23 @@ const slugs = topics.map((t) => t.id).join(',');
     collection="patterns"
     base="/patterns"
   />
+
+  {cheat && (
+    <Fragment>
+      <h2 class="dp-section-head" style="border:0;" data-i18n="con.revise">Revise</h2>
+      <div class="dp-grid">
+        <Card
+          slug={cheat.id}
+          category="practice"
+          title={cheat.data.title}
+          intent={cheat.data.intent}
+          numLabel={`REFERENCE · ${cheat.data.difficulty}`}
+          footLabel="One-page recap"
+          base="/concurrency"
+        />
+      </div>
+    </Fragment>
+  )}
 
   <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
     <p class="dp-callout__title" data-i18n="con.go.title">🐹 The two Go proverbs to keep in mind</p>

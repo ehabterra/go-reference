@@ -8,7 +8,7 @@ const dsa = await getCollection('dsa');
 
 const gofCount = patterns.filter((p) => p.data.gof).length;
 const concPatternCount = patterns.filter((p) => p.data.category === 'concurrency').length;
-const concTopicCount = concurrency.length;
+const concTopicCount = concurrency.filter((p) => p.data.kind === 'topic').length;
 const dsaCount = dsa.filter((p) => p.data.kind === 'topic').length;
 
 // unified progress across every page in the reference
