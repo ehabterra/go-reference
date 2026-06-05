@@ -1,0 +1,110 @@
+---
+title: "Garbage Collector & Stacks"
+category: runtime
+kind: topic
+order: 14
+difficulty: "Advanced"
+status: ready
+intent: "Why goroutines are so cheap and pauses so short — the concurrent garbage collector, growing/shrinking stacks, and escape analysis."
+related:
+  - scheduler
+  - goroutines
+  - memory-model
+quiz:
+  - q: "What makes Go's GC pauses so short (tens of microseconds)?"
+    options:
+      - text: "It's concurrent — it marks alongside your goroutines, with only tiny stop-the-world phases"
+        correct: true
+      - text: "It never runs"
+        correct: false
+      - text: "It runs only at program exit"
+        correct: false
+      - text: "It uses reference counting"
+        correct: false
+    explain: "Go uses a concurrent tri-color mark-sweep collector with a write barrier, so most marking happens while your code runs; the stop-the-world phases are sub-millisecond."
+  - q: "How big is a goroutine's stack, and what happens when it's not enough?"
+    options:
+      - text: "It starts ~2 KB and grows by copying to a larger stack on demand (and can shrink)"
+        correct: true
+      - text: "Fixed at 1 MB like an OS thread"
+        correct: false
+      - text: "It never grows; deep recursion overflows immediately"
+        correct: false
+      - text: "It shares one stack with all goroutines"
+        correct: false
+    explain: "Small, growable stacks are why millions of goroutines fit in memory — the runtime copies the stack to a bigger segment when it's about to overflow."
+  - q: "What does escape analysis decide?"
+    options:
+      - text: "Whether a value can live on the stack (free) or must be heap-allocated (GC-managed)"
+        correct: true
+      - text: "Which goroutine runs next"
+        correct: false
+      - text: "When to start the GC"
+        correct: false
+      - text: "How big the channel buffer is"
+        correct: false
+    explain: "If the compiler proves a value doesn't outlive the function, it stays on the stack — no allocation, no GC. If it 'escapes', it goes on the heap. See it with `go build -gcflags=-m`."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧹 Analogy">
+Old garbage collectors shut the whole building to sweep — everyone stops working (a long stop-the-world pause). Go's GC is a cleaning crew that works **alongside** you, only briefly asking everyone to freeze for a moment. And each goroutine's desk (stack) is expandable: it starts tiny and the runtime swaps in a bigger desk the instant you need more room.
+</Callout>
+
+## The concurrent garbage collector
+
+Go's GC is a **concurrent, tri-color mark-sweep** collector. The crucial word is *concurrent*: it marks live objects while your goroutines keep running, using a **write barrier** to track pointers that change mid-cycle. Only two short **stop-the-world** phases remain, each typically **tens of microseconds** — the reason Go suits low-latency services.
+
+Two knobs:
+
+- **`GOGC`** (default 100) — run GC when the heap has grown 100% since the last cycle. Higher = less frequent GC, more memory.
+- **`GOMEMLIMIT`** (Go 1.19+) — a soft memory ceiling; the GC works harder as you approach it, great for containers.
+
+## Growing stacks
+
+A goroutine starts with a **~2 KB** stack (vs ~1 MB for an OS thread). When it's about to overflow, the runtime allocates a larger stack, **copies** the frames over, and fixes up pointers — and shrinks it back later when it can. That's the secret behind running **millions** of goroutines.
+
+<Mermaid code={`graph LR
+  S1["new goroutine<br/>~2 KB stack"] -->|deeper calls| S2["copy to<br/>~4 KB"]
+  S2 -->|deeper still| S3["copy to<br/>~8 KB …"]
+  S3 -.shrinks when idle.-> S1`} />
+
+## Escape analysis — stack is free, heap is not
+
+The compiler decides where each value lives. If it can prove a value doesn't outlive its function, it stays on the **stack** — zero allocation, zero GC. If the value "escapes" (returned by pointer, captured by a goroutine, stored in an interface), it goes on the **heap** and the GC manages it.
+
+```bash
+go build -gcflags=-m ./...   # prints "escapes to heap" / "does not escape"
+```
+
+## Watch the GC work
+
+<Playground client:visible title="memstats.go" code={`package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+func main() {
+	// allocate a few MiB of immediate garbage
+	for i := 0; i < 8; i++ {
+		_ = make([]byte, 1<<20) // 1 MiB, unreferenced → collectable
+	}
+	runtime.GC() // force a cycle for the demo
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Printf("HeapAlloc:    %d KB\n", m.HeapAlloc/1024)
+	fmt.Printf("TotalAlloc:   %d KB (cumulative)\n", m.TotalAlloc/1024)
+	fmt.Printf("NumGC:        %d cycles\n", m.NumGC)
+	fmt.Printf("GCCPUFraction:%.4f\n", m.GCCPUFraction)
+}`} />
+
+<Callout type="go" title="🐹 Reduce allocations before you tune the GC">
+The biggest GC win is usually **allocating less**: reuse buffers (a [`sync.Pool`](/concurrency/sync-package/)), preallocate slices with a capacity, and keep values on the stack. Profile with `go test -bench . -benchmem` and `pprof` before reaching for `GOGC`/`GOMEMLIMIT`. Tuning knobs without measuring usually just moves the problem.
+</Callout>
+
+That's the runtime that makes everything in this track cheap — goroutines you can spawn by the million, scheduled across cores, with a collector that mostly stays out of your way. Back to the [Concurrency overview](/concurrency/).

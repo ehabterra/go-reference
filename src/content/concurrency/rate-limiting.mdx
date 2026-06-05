@@ -1,0 +1,116 @@
+---
+title: "Rate Limiting"
+category: coordination
+kind: topic
+order: 11
+difficulty: "Intermediate"
+status: ready
+intent: "Control how fast work happens — the token-bucket algorithm, golang.org/x/time/rate, and a channel-based limiter."
+related:
+  - context
+  - select
+  - error-handling
+when_use:
+  - "Respecting a downstream API's request limit so you don't get throttled or banned."
+  - "Protecting your own service or database from overload."
+  - "Smoothing bursty traffic into a steady rate."
+when_avoid:
+  - "The work is already naturally bounded (e.g. a fixed worker pool may be enough)."
+  - "You need backpressure, not rate — a bounded channel or semaphore may fit better."
+quiz:
+  - q: "What does the token-bucket algorithm allow that a fixed interval doesn't?"
+    options:
+      - text: "Short bursts — up to the bucket size — while still capping the long-run average rate"
+        correct: true
+      - text: "Unlimited throughput"
+        correct: false
+      - text: "Slower processing"
+        correct: false
+      - text: "Ordered delivery"
+        correct: false
+    explain: "Tokens refill at rate r; each event spends one. A burst can drain up to `burst` tokens at once, but the sustained rate still averages r."
+  - q: "What's the idiomatic Go package for rate limiting?"
+    options:
+      - text: "golang.org/x/time/rate (rate.Limiter)"
+        correct: true
+      - text: "sync/ratelimit"
+        correct: false
+      - text: "net/http/rate"
+        correct: false
+      - text: "time.RateLimiter"
+        correct: false
+    explain: "golang.org/x/time/rate provides a token-bucket Limiter with Wait(ctx), Allow() and Reserve()."
+  - q: "Which Limiter method blocks until a token is available?"
+    options:
+      - text: "Wait(ctx)"
+        correct: true
+      - text: "Allow()"
+        correct: false
+      - text: "Reserve()"
+        correct: false
+      - text: "Limit()"
+        correct: false
+    explain: "Wait(ctx) blocks (respecting cancellation) until a token frees up. Allow() returns immediately true/false; Reserve() tells you how long to wait."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🪙 Analogy">
+A token bucket is an arcade with a coin machine that drips a new token every so often, up to a small stack. Each game costs a token. If you've saved a few (the bucket), you can play a quick burst back-to-back; once they're gone, you play only as fast as new tokens drip. Average pace is capped; small bursts are allowed.
+</Callout>
+
+## The token bucket
+
+The standard algorithm: a bucket holds up to **burst** tokens and refills at **rate** `r` per second. Each unit of work removes one token; if the bucket is empty, work waits (or is rejected).
+
+<Mermaid code={`graph LR
+  FILL["refill: r tokens/sec"] --> B(("bucket<br/>≤ burst"))
+  B -->|spend 1| W["do work"]
+  B -->|empty| WAIT["wait / reject"]`} />
+
+## Using golang.org/x/time/rate
+
+The idiomatic limiter. `Wait` blocks (honoring `context`) until a token is ready. With `burst = 2`, the first two go immediately, then it settles to 5/sec. **Run** it:
+
+<Playground client:visible title="rate.go" code={`package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"golang.org/x/time/rate"
+)
+
+func main() {
+	// 5 events per second, with a burst of 2
+	lim := rate.NewLimiter(5, 2)
+	ctx := context.Background()
+	start := time.Now()
+
+	for i := 1; i <= 6; i++ {
+		_ = lim.Wait(ctx) // blocks until a token is available
+		fmt.Printf("request %d at %v\n", i, time.Since(start).Round(10*time.Millisecond))
+	}
+}`} />
+
+`Allow()` (non-blocking: process or drop) and `Reserve()` (tells you the delay) cover the other two strategies.
+
+## A channel-based limiter
+
+When you don't want the dependency, a `time.Ticker` feeding a token channel is the bones of the same idea:
+
+```go
+limiter := time.Tick(200 * time.Millisecond) // 5/sec
+for req := range requests {
+	<-limiter        // wait for the next tick
+	go handle(req)
+}
+```
+
+Add a buffered channel pre-filled with tokens and you get burst support too.
+
+<Callout type="go" title="🐹 Limit per *client*, and combine with context">
+A single global limiter throttles everyone together; for fairness, keep a `map[clientID]*rate.Limiter` (evict idle ones). Always pass a `context` to `Wait` so a cancelled request doesn't sit blocked on a token. And distinguish **rate limiting** (how fast) from **concurrency limiting** — capping how many run at once is a [Worker Pool](/patterns/worker-pool/) or [Semaphore](/patterns/semaphore/).
+</Callout>

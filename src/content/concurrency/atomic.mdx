@@ -1,0 +1,128 @@
+---
+title: "sync/atomic"
+category: building-blocks
+kind: topic
+order: 8
+difficulty: "Intermediate"
+status: ready
+intent: "Lock-free reads and writes of a single value — when atomics beat a mutex, the typed atomic.X helpers, and compare-and-swap."
+related:
+  - sync-package
+  - race-conditions
+  - memory-model
+when_use:
+  - "A single value shared across goroutines — a counter, a flag, a swappable pointer."
+  - "A hot path where mutex overhead shows up in profiles."
+  - "Building lock-free algorithms with compare-and-swap."
+when_avoid:
+  - "You need to keep several values consistent together — that's a mutex's job."
+  - "The logic is more than one read/modify/write — atomics protect one variable, not an invariant."
+quiz:
+  - q: "What does atomic give you that a plain variable doesn't?"
+    options:
+      - text: "An indivisible read-modify-write on a single value, with no lock"
+        correct: true
+      - text: "Protection for an entire struct"
+        correct: false
+      - text: "Automatic retries"
+        correct: false
+      - text: "Ordered logging"
+        correct: false
+    explain: "atomic operations (Add, Load, Store, Swap, CompareAndSwap) on one value are indivisible and lock-free — but they only guard that single value."
+  - q: "Which should you prefer in modern Go (1.19+)?"
+    options:
+      - text: "The typed atomics — atomic.Int64, atomic.Bool, atomic.Pointer[T]"
+        correct: true
+      - text: "The free functions like atomic.AddInt64 on a raw int64"
+        correct: false
+      - text: "A global mutex around every access"
+        correct: false
+      - text: "The volatile keyword"
+        correct: false
+    explain: "The typed atomics (atomic.Int64, atomic.Bool, atomic.Pointer[T]) make it impossible to accidentally mix atomic and non-atomic access, and they handle alignment for you. Go has no volatile keyword."
+  - q: "When is CompareAndSwap (CAS) the right tool?"
+    options:
+      - text: "Lock-free update loops — change the value only if it hasn't changed since you read it"
+        correct: true
+      - text: "Sorting a slice"
+        correct: false
+      - text: "Reading a value once"
+        correct: false
+      - text: "Closing a channel"
+        correct: false
+    explain: "CAS sets new only if the current value still equals old; on failure you re-read and retry. It's the building block of lock-free counters, stacks and flags."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎟️ Analogy">
+A mutex locks the whole room so one person edits the ledger at a time. An atomic counter is a turnstile: each person pushes through and the count ticks up indivisibly — no room to lock, no door to wait at. Great for *one* number; useless if you need several things to change together.
+</Callout>
+
+## One value, no lock
+
+`sync/atomic` performs indivisible operations on a single value. The racy counter from [Race Conditions](/concurrency/race-conditions/) becomes correct — and lock-free. Prefer the **typed atomics** (Go 1.19+); they prevent mixing atomic and plain access. **Run** it:
+
+<Playground client:visible title="atomic.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+func main() {
+	var counter atomic.Int64 // typed atomic — always accessed atomically
+	var wg sync.WaitGroup
+
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			counter.Add(1) // indivisible, lock-free increment
+		}()
+	}
+
+	wg.Wait()
+	fmt.Println("counter =", counter.Load()) // always 1000
+}`} />
+
+## The operations
+
+| Operation | What it does |
+|---|---|
+| `Load()` | read the current value atomically |
+| `Store(v)` | write a value atomically |
+| `Add(n)` | atomic increment/decrement (returns the new value) |
+| `Swap(v)` | set new, return old, atomically |
+| `CompareAndSwap(old, new)` | set new **only if** current == old; returns whether it swapped |
+
+Beyond integers: `atomic.Bool` for flags, `atomic.Pointer[T]` for swapping whole values (config reloads), and the older `atomic.Value` for arbitrary types.
+
+## Compare-and-swap — lock-free updates
+
+CAS is the heart of lock-free algorithms: read, compute, and commit only if nobody changed the value underneath you — otherwise retry.
+
+<Mermaid code={`graph LR
+  R["read old"] --> C{"CAS(old, new)?"}
+  C -->|swapped| D["done"]
+  C -->|value changed| R`} />
+
+```go
+// Atomically take the max, lock-free
+for {
+	old := best.Load()
+	if candidate <= old || best.CompareAndSwap(old, candidate) {
+		break
+	}
+}
+```
+
+<Callout type="gotcha" title="⚠️ Atomics guard one variable — not an invariant">
+The moment correctness depends on **two** values agreeing (e.g. a slice's length and its backing data, or "balance and last-transaction"), atomics can't help — you need a `Mutex` so the pair changes together. Also: never mix atomic and non-atomic access to the same variable, and on 32-bit platforms misaligned 64-bit fields panic (the typed atomics avoid this for you).
+</Callout>
+
+<Callout type="go" title="🐹 Atomic vs mutex — a rule of thumb">
+One counter or flag on a hot path → **atomic**. A handful of fields that must stay consistent → **mutex**. Don't reach for atomics to shave nanoseconds off code that isn't hot; measure first with `-race` and `pprof`.
+</Callout>

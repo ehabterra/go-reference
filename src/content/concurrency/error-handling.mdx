@@ -1,0 +1,125 @@
+---
+title: "Errors Across Goroutines"
+category: coordination
+kind: topic
+order: 12
+difficulty: "Intermediate"
+status: ready
+intent: "A goroutine can't just return an error to its caller — how to propagate failures with the Result pattern, errgroup, and well-formed errors."
+related:
+  - context
+  - channels
+  - rate-limiting
+quiz:
+  - q: "Why can't a goroutine just `return err` to its parent?"
+    options:
+      - text: "It runs independently — there's no caller to return to; the error must travel over a channel or be collected"
+        correct: true
+      - text: "Because Go forbids returning errors from goroutines"
+        correct: false
+      - text: "Because errors aren't values in Go"
+        correct: false
+      - text: "It can, and the parent receives it automatically"
+        correct: false
+    explain: "`go f()` discards f's return values. To get an error out, send it on a channel (often bundled with the result) or use a helper like errgroup."
+  - q: "What does errgroup add over a plain WaitGroup?"
+    options:
+      - text: "It captures the first error and (with WithContext) cancels the other goroutines"
+        correct: true
+      - text: "It makes goroutines faster"
+        correct: false
+      - text: "It retries failed goroutines"
+        correct: false
+      - text: "It logs automatically"
+        correct: false
+    explain: "errgroup.Group.Go takes a func() error; Wait returns the first non-nil error, and WithContext cancels siblings on the first failure."
+  - q: "How do you wrap an error so callers can still inspect the cause?"
+    options:
+      - text: "fmt.Errorf(\"...: %w\", err), then errors.Is / errors.As to unwrap"
+        correct: true
+      - text: "errors.New(err.Error())"
+        correct: false
+      - text: "Convert it to a string and concatenate"
+        correct: false
+      - text: "panic(err)"
+        correct: false
+    explain: "The %w verb wraps an error so errors.Is/As can match the underlying cause. errors.Join (Go 1.20) combines several errors into one."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛰️ Analogy">
+A goroutine is a field agent who can't shout back across the building. To report a failure it has to send a message back through a channel — and a good message says *what* failed, *where*, and *whether to retry* — not just "something went wrong."
+</Callout>
+
+## The problem: `go f()` swallows the return
+
+Launching `go doWork()` throws away whatever `doWork` returns, error included. You need an explicit path for the error to travel home. Two idioms cover almost everything.
+
+## The Result pattern
+
+Bundle the value and its error in one struct and send it on a channel. The consumer decides what to do with each. **Run** it:
+
+<Playground client:visible title="results.go" code={`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// Result carries either a body or an error — never decide for the caller.
+type Result struct {
+	URL  string
+	Body string
+	Err  error
+}
+
+func fetchAll(urls []string) <-chan Result {
+	out := make(chan Result)
+	go func() {
+		defer close(out)
+		for _, u := range urls {
+			if u == "bad" {
+				out <- Result{URL: u, Err: errors.New("connection refused")}
+				continue
+			}
+			out <- Result{URL: u, Body: "200 OK"}
+		}
+	}()
+	return out
+}
+
+func main() {
+	for r := range fetchAll([]string{"a", "bad", "c"}) {
+		if r.Err != nil {
+			fmt.Printf("%-3s → error: %v\n", r.URL, r.Err)
+			continue
+		}
+		fmt.Printf("%-3s → %s\n", r.URL, r.Body)
+	}
+}`} />
+
+The key discipline: the goroutine **reports** the error and lets the main goroutine **decide** (retry, skip, abort). It never logs-and-swallows on its own.
+
+## errgroup — wait, first error, cancel the rest
+
+When you fan work out and any task may fail, [`golang.org/x/sync/errgroup`](/patterns/errgroup/) is the tool: `g.Go(func() error {…})`, and `g.Wait()` returns the first error while a shared `context` cancels the siblings.
+
+<Mermaid code={`graph TD
+  G["errgroup.WithContext"] --> A["g.Go: task A"]
+  G --> B["g.Go: task B (fails)"]
+  G --> C["g.Go: task C"]
+  B -. "first error → cancel ctx" .-> A
+  B -. cancel ctx .-> C
+  G --> W["g.Wait() → returns B's error"]`} />
+
+## What a good error carries
+
+<Callout type="go" title="🐹 Wrap, don't stringify">
+Use `fmt.Errorf(\"fetch %s: %w\", url, err)` to **wrap** — the `%w` keeps the cause inspectable via `errors.Is` (sentinel match) and `errors.As` (type match). Need *all* the failures, not just the first? `errors.Join(err1, err2)` (Go 1.20) combines them. A good error tells you **what** happened, **where**, whether it's **retriable**, and a message safe to show a user — separate from the internal detail.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A panic in a goroutine kills the whole program">
+`recover` only works in the **same** goroutine that panicked — a parent can't recover a child's panic. If a goroutine runs untrusted or risky code, defer a `recover` *inside* it and turn the panic into an error you send home. Otherwise one goroutine's panic takes down the entire process.
+</Callout>

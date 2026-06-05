@@ -1,0 +1,116 @@
+---
+title: "The Go Scheduler"
+category: runtime
+kind: topic
+order: 13
+difficulty: "Advanced"
+status: ready
+intent: "How millions of goroutines run on a handful of threads — the M:N model (G, M, P), work-stealing, GOMAXPROCS and preemption."
+related:
+  - goroutines
+  - gc-and-stacks
+  - concurrency-vs-parallelism
+quiz:
+  - q: "What do G, M and P stand for in the scheduler?"
+    options:
+      - text: "G = goroutine, M = OS thread (machine), P = processor (logical CPU with a run queue)"
+        correct: true
+      - text: "G = global, M = memory, P = pointer"
+        correct: false
+      - text: "G = GC, M = mutex, P = pipe"
+        correct: false
+      - text: "They are just internal counters"
+        correct: false
+    explain: "The runtime multiplexes M goroutines (G) onto N OS threads (M), coordinated by Ps — each P owns a run queue and you have GOMAXPROCS of them."
+  - q: "What is work-stealing?"
+    options:
+      - text: "An idle P takes runnable goroutines from another P's run queue (or the global queue)"
+        correct: true
+      - text: "A goroutine taking a lock from another"
+        correct: false
+      - text: "The GC reclaiming memory"
+        correct: false
+      - text: "Threads sharing a stack"
+        correct: false
+    explain: "To keep all Ps busy, an idle P steals half of another P's queue. This balances load without central coordination."
+  - q: "What does GOMAXPROCS control?"
+    options:
+      - text: "The number of Ps — i.e. how many goroutines can execute Go code in parallel"
+        correct: true
+      - text: "The total number of goroutines allowed"
+        correct: false
+      - text: "The size of each goroutine's stack"
+        correct: false
+      - text: "The GC frequency"
+        correct: false
+    explain: "GOMAXPROCS is the count of Ps, capping true parallelism. It defaults to runtime.NumCPU(). You can have millions of goroutines but only GOMAXPROCS run at once."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="👩‍🍳 Analogy">
+A kitchen has a few **stations** (P), a pool of **cooks** (M), and a stream of **orders** (G). A cook works one station, pulling orders from that station's ticket rail. If a cook's rail empties, they grab tickets from a busier station (work-stealing). If a cook has to step away to the walk-in freezer (a blocking syscall), another cook takes over the station so it never sits idle.
+</Callout>
+
+## The M:N model
+
+Most languages map one goroutine-equivalent to one OS thread. Go multiplexes **many goroutines onto few threads** — an *M:N* scheduler — with three actors:
+
+- **G — goroutine:** your concurrent function and its tiny stack.
+- **M — machine:** an OS thread that actually executes code.
+- **P — processor:** a logical CPU that owns a **run queue** of goroutines. To run Go code, an M must hold a P.
+
+You have **`GOMAXPROCS`** Ps (default = number of CPUs). That's the cap on true parallelism.
+
+<Mermaid code={`graph TD
+  subgraph P1["P — run queue"]
+    G1["G"] --- G2["G"] --- G3["G"]
+  end
+  subgraph P2["P — run queue"]
+    G4["G"] --- G5["G"]
+  end
+  M1["M (OS thread)"] --> P1
+  M2["M (OS thread)"] --> P2
+  P2 -. "steals work" .-> P1`} />
+
+## Work-stealing keeps cores busy
+
+When a P's run queue empties, it doesn't go idle — it **steals** half the goroutines from another P (or pulls from the global queue). This balances load with no central scheduler bottleneck.
+
+## Blocking and preemption
+
+- **Blocking syscalls:** when a G makes a blocking syscall, its M parks with it, and the P is handed to another M so the remaining goroutines keep running. This is why blocking I/O doesn't freeze your program.
+- **Preemption:** early Go could only switch goroutines at function calls, so a tight loop with no calls could hog a P. Since **Go 1.14**, the runtime preempts goroutines **asynchronously** (via signals), so even `for {}` can be interrupted.
+
+## Peek at the runtime
+
+<Playground client:visible title="scheduler.go" code={`package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+)
+
+func main() {
+	fmt.Println("NumCPU:    ", runtime.NumCPU())
+	fmt.Println("GOMAXPROCS:", runtime.GOMAXPROCS(0)) // 0 = read, don't change
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100_000; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done() }() // 100k goroutines on a few threads
+	}
+	fmt.Println("live goroutines (incl. main):", runtime.NumGoroutine())
+	wg.Wait()
+	fmt.Println("done — they all ran on", runtime.GOMAXPROCS(0), "Ps")
+}`} />
+
+<Callout type="go" title="🐹 You almost never set GOMAXPROCS — except in containers">
+The default (one P per CPU) is right for almost everything; manually pinning it usually hurts. The famous exception is **containers**: Go reads the host's CPU count, not your cgroup CPU limit, so a 2-CPU-limited pod on a 64-core node spins up 64 Ps and thrashes. Set `GOMAXPROCS` to the limit (or use `go.uber.org/automaxprocs`). Go 1.25+ is becoming cgroup-aware here.
+</Callout>
+
+<Callout type="tip" title="✅ Treat goroutines as cheap, threads as precious">
+Goroutines are nearly free (see [Goroutines](/concurrency/goroutines/)). OS threads are not — the runtime grows the M pool when goroutines block in syscalls, and a flood of blocking calls can spawn many threads. Keep blocking work bounded (a [worker pool](/patterns/worker-pool/)) so the thread count stays sane.
+</Callout>
