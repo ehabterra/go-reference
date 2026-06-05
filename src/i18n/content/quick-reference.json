@@ -27,7 +27,6 @@
   "<strong>الـ <code>map</code> العادية ليست آمنة للكتابة المتزامنة</strong> — احمِها أو استخدم <code>sync.Map</code>؛ وشغّل <a href=\"/concurrency/race-conditions/\">race detector</a> بـ <code>-race</code>.",
   "<strong>لا تنسخ <code>Mutex</code>/<code>WaitGroup</code></strong> — مرّر الـ struct عبر مؤشّر.",
   "<strong>التقاط متغيّر الحلقة</strong> في <code>go func(){…}</code> أُصلِح في Go 1.22؛ على الإصدارات الأقدم، مرّره كوسيط.",
-  "اختبر نفسك",
   "مواضيع ذات صلة",
   "<span>اختبر فهمك</span>",
   " 1.\n<span>ماذا يحدث عند الإرسال على channel مغلق؟</span> ",

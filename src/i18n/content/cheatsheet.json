@@ -32,7 +32,6 @@
   "<strong>Template Method / Bridge</strong> ← تضمين struct + حقل واجهة",
   "<strong>Factory</strong> ← دالة <code>NewX()</code> بسيطة",
   "الدرس المستفاد من <a href=\"/patterns/foundations/\">Foundations</a>: في Go، كثير من الأنماط ليست طقوسًا تبنيها — بل هي الشكل الطبيعي الذي تدفعك إليه اللغة أصلًا.",
-  "اختبر نفسك",
   "أنماط ذات صلة",
   "اختبر فهمك",
   " 1.\n<span>تغليف http.Handler لإضافة التسجيل، ثم المصادقة، ثم gzip — مع احتفاظ كلٍّ منها بالواجهة نفسها — أي نمط هذا؟</span> ",
