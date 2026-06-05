@@ -13,34 +13,34 @@ const start = topics.find((t) => t.id === 'concurrency-vs-parallelism');
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Concurrency</span></nav>
 
   <header class="dp-hero">
-    <p class="dp-hero__eyebrow">A deep, Go-first guide</p>
-    <h1>Go Concurrency, demystified</h1>
-    <p class="dp-hero__lede">
+    <p class="dp-hero__eyebrow" data-i18n="con.eyebrow">A deep, Go-first guide</p>
+    <h1 data-i18n="con.h1">Go Concurrency, demystified</h1>
+    <p class="dp-hero__lede" data-i18n-html="con.lede">
       From the failure modes you must design against to the runtime that schedules it all — goroutines,
       channels, <code>select</code>, the <code>sync</code> package, the memory model, context, and the M:N
       scheduler. Grounded in <em>Concurrency in Go</em>, with diagrams and runnable code on every page.
     </p>
     <div class="dp-hero__cta">
-      <a class="dp-btn dp-btn--primary" href="/concurrency/concurrency-vs-parallelism/">Start the journey →</a>
-      <a class="dp-btn dp-btn--ghost" href="#building-blocks">Jump to the building blocks</a>
+      <a class="dp-btn dp-btn--primary" href="/concurrency/concurrency-vs-parallelism/" data-i18n="ui.startJourney">Start the journey →</a>
+      <a class="dp-btn dp-btn--ghost" href="#building-blocks" data-i18n="con.cta.jump">Jump to the building blocks</a>
     </div>
   </header>
 
   <div class="dp-overall">
     <div class="dp-overall__top">
-      <strong>Your concurrency progress</strong>
-      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset>Reset</button>
+      <strong data-i18n="con.progressTitle">Your concurrency progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset data-i18n="ui.reset">Reset</button>
     </div>
     <div class="dp-progress" data-dp-progress data-slugs={slugs}>
       <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
       <span class="dp-progress__label"></span>
     </div>
-    <p class="dp-kicker" style="margin:.7rem 0 0;">Mark a topic “learned” on its page and watch the bars fill.</p>
+    <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="con.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
   </div>
 
   {start && (
     <Fragment>
-      <h2 class="dp-section-head" style="border:0;">Start here</h2>
+      <h2 class="dp-section-head" style="border:0;" data-i18n="ui.startHere">Start here</h2>
       <div class="dp-grid">
         <Card
           slug={start.id}
@@ -63,13 +63,15 @@ const start = topics.find((t) => t.id === 'concurrency-vs-parallelism');
     cat="concurrency"
     title="Concurrency Patterns"
     blurb="The composable recipes built from these primitives — pipelines, worker pools, fan-out/in, errgroup and safe cancellation. (Part of the Design Patterns track.)"
+    titleKey="con.patterns.title"
+    blurbKey="con.patterns.blurb"
     collection="patterns"
     base="/patterns"
   />
 
   <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
-    <p class="dp-callout__title">🐹 The two Go proverbs to keep in mind</p>
-    <p>
+    <p class="dp-callout__title" data-i18n="con.go.title">🐹 The two Go proverbs to keep in mind</p>
+    <p data-i18n="con.go.body">
       “Don't communicate by sharing memory; share memory by communicating.” And: “Concurrency is not
       parallelism.” Almost everything here is a consequence of taking those two seriously.
     </p>

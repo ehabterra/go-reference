@@ -6,10 +6,14 @@ interface Props {
   cat: string;
   title: string;
   blurb: string;
+  titleKey?: string;
+  blurbKey?: string;
   collection?: 'patterns' | 'concurrency';
   base?: string;
 }
 const { cat, title, blurb, collection = 'patterns', base = '/patterns' } = Astro.props;
+const titleKey = Astro.props.titleKey ?? `cat.${cat}.title`;
+const blurbKey = Astro.props.blurbKey ?? `cat.${cat}.blurb`;
 
 const all = await getCollection(collection);
 const items = all
@@ -19,8 +23,8 @@ const slugs = items.map((p) => p.id).join(',');
 ---
 <section class="dp-cat" id={cat}>
   <div class="dp-section-head">
-    <h2><span class="dp-badge" data-cat={cat}><span class="dp-dot"></span>{title}</span></h2>
-    <p>{blurb}</p>
+    <h2><span class="dp-badge" data-cat={cat}><span class="dp-dot"></span><span data-i18n={titleKey}>{title}</span></span></h2>
+    <p data-i18n-html={blurbKey}>{blurb}</p>
     {items.length > 0 && (
       <div class="dp-progress" data-dp-progress data-slugs={slugs} style="margin-top:.9rem;max-width:440px;">
         <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
@@ -29,7 +33,7 @@ const slugs = items.map((p) => p.id).join(',');
     )}
   </div>
   {items.length === 0 ? (
-    <p class="dp-kicker" style="margin-top:-.4rem;">🚧 Coming soon.</p>
+    <p class="dp-kicker" style="margin-top:-.4rem;" data-i18n="cat.soon">🚧 Coming soon.</p>
   ) : (
     <div class="dp-grid">
       {items.map((p) => (
@@ -38,7 +42,6 @@ const slugs = items.map((p) => p.id).join(',');
           category={p.data.category}
           title={p.data.title}
           intent={p.data.intent}
-          intent_ar={p.data.intent_ar}
           order={p.data.order}
           difficulty={p.data.difficulty}
           status={p.data.status}
