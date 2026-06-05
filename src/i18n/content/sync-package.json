@@ -19,7 +19,7 @@
   "تنقل ملكية البيانات أو تنسّق pipeline — استخدم channels.",
   "تُغرى ببناء إشارات معقّدة باستخدام Cond — عادةً يكون channel أوضح.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>متى ينبغي أن تفضّل Mutex على channel؟</span> ",
   " <span>لحماية الحالة الداخلية لـ struct بقسم حرج صغير</span> ",
   " <span>لنقل ملكية البيانات بين goroutines</span> ",

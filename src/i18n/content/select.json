@@ -12,7 +12,7 @@
   "<strong>استخدام <code>time.After</code> في حلقة ساخنة يسرّب timers</strong> — كل استدعاء يخصص timer يبقى حياً حتى يطلق. في حلقة <code>for { select … }</code> ضيّقة، أنشئ <code>time.NewTimer</code> واحداً واستخدم <code>Reset</code> عليه، أو وجّه الإلغاء عبر <code>context</code>. وتذكّر: <strong>إن channel ذا القيمة <code>nil</code> يحجب إلى الأبد</strong>، لذا فإن تعيين متغير channel إلى <code>nil</code> <em>يعطّل</em> الـ case الخاصة به في <code>select</code> — وهي حيلة مفيدة لإيقاف فرع ما بمجرد انتهائه.",
   "هذا التركيب — الاستقبال والمهلة والإلغاء — هو المحرك وراء كل نمط تزامن: <a href=\"/patterns/pipeline/\">Pipeline</a> و<a href=\"/patterns/fan-in-fan-out/\">Fan-in/out</a> و<a href=\"/patterns/or-done-channel/\">Or-done</a> و<a href=\"/patterns/context-cancellation/\">Context</a>.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>إذا كانت عدة cases في select جاهزة في الوقت نفسه، أيها يُنفّذ؟</span> ",
   " <span>يُختار أحدها عشوائياً بشكل منتظم</span> ",
   " <span>أول واحدة مكتوبة</span> ",

@@ -18,7 +18,7 @@
   " <span>✅ عامِل الـ goroutines كأنها رخيصة، والخيوط كأنها ثمينة</span> ",
   "الـ goroutines شبه مجانية (انظر <a href=\"/concurrency/goroutines/\">Goroutines</a>). أما خيوط نظام التشغيل فلا — يوسّع الـ runtime مجموعة الـ M عندما تُحجَب الـ goroutines في أنداء النظام، ويمكن لطوفان من النداءات الحاجبة أن يفرّخ خيوطًا كثيرة. أبقِ العمل الحاجب مقيّدًا (<a href=\"/patterns/worker-pool/\">worker pool</a>) كي يبقى عدد الخيوط معقولًا.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>ما الذي ترمز إليه G وM وP في المجدوِل (scheduler)؟</span> ",
   " <span>G = goroutine، M = خيط نظام تشغيل (machine)، P = معالج (processor) (وحدة معالجة منطقية بطابور تشغيل / run queue)</span> ",
   " <span>G = global، M = memory، P = pointer</span> ",

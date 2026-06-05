@@ -15,7 +15,7 @@
   " <span>🐹 نادراً ما تستشهد بنموذج الذاكرة — بل تطيعه</span> ",
   "في الممارسة العملية لا تفكّر في happens-before مباشرةً؛ بل تلجأ إلى <a href=\"/concurrency/channels/\">channel</a>، أو بدائية <a href=\"/concurrency/sync-package/\"><code>sync</code></a>، أو <a href=\"/concurrency/atomic/\">atomic</a> — وكلٌّ منها <em>هو</em> حافة happens-before — وتشغّل <code>go test -race</code>. نموذج الذاكرة هو السبب الكامن وراءها جميعاً.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>ماذا تضمن علاقة 'happens-before'؟</span> ",
   " <span>أن القراءة مضمونة أن ترى نتيجة كتابة سابقة</span> ",
   " <span>أن الكود يعمل أسرع</span> ",

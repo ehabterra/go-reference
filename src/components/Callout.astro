@@ -2,17 +2,12 @@
 interface Props {
   type?: 'intent' | 'analogy' | 'problem' | 'go' | 'gotcha' | 'tip';
   title?: string;
-  title_ar?: string;
 }
-const { type = 'intent', title, title_ar } = Astro.props;
+const { type = 'intent', title } = Astro.props;
 ---
 <div class={`dp-callout dp-callout--${type}`}>
   {title && (
-    <p class="dp-callout__title">
-      {title_ar ? (
-        <Fragment><span class="tr-en">{title}</span><span class="tr-ar" lang="ar" dir="rtl">{title_ar}</span></Fragment>
-      ) : <span>{title}</span>}
-    </p>
+    <p class="dp-callout__title"><span>{title}</span></p>
   )}
   <slot />
 </div>

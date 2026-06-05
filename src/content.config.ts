@@ -24,7 +24,6 @@ const refSchema = z.object({
   gof: z.boolean().default(false),
   status: z.enum(['stub', 'ready']).default('stub'),
   intent: z.string(),
-  intent_ar: z.string().optional(),
   nutshell: z.string().optional(),
   aka: z.string().optional(),
   source: z.string().optional(),
@@ -36,16 +35,13 @@ const refSchema = z.object({
     .array(
       z.object({
         q: z.string(),
-        q_ar: z.string().optional(),
         options: z.array(
           z.object({
             text: z.string(),
-            text_ar: z.string().optional(),
             correct: z.boolean().default(false),
           }),
         ),
         explain: z.string().optional(),
-        explain_ar: z.string().optional(),
       }),
     )
     .default([]),

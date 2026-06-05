@@ -19,7 +19,7 @@
   " <span>🐹 بدون buffer للمزامنة، ومع buffer للإنتاجية</span> ",
   "الجأ إلى channel <strong>بدون buffer</strong> حين تريد ضمانًا بأن المستقبِل تلقّى القيمة (موعد لقاء/rendezvous). وأضف <strong>buffer</strong> لفصل منتِج متقطّع عن مستهلك ثابت — لكن الـ buffer يُخفي ضغط الرجوع (back-pressure) فقط حتى يمتلئ؛ ولا يزيله. وعند الشك، ابدأ بدون buffer.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>ماذا تحصل عليه حين تقرأ من channel مغلق؟</span> ",
   " <span>القيمة الصفرية وok=false، فورًا، بلا حجب</span> ",
   " <span>panic</span> ",

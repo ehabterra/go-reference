@@ -1,37 +1,26 @@
 ---
-interface QuizOption { text: string; text_ar?: string; correct: boolean; }
-interface QuizItem { q: string; q_ar?: string; options: QuizOption[]; explain?: string; explain_ar?: string; }
+interface QuizOption { text: string; correct: boolean; }
+interface QuizItem { q: string; options: QuizOption[]; explain?: string; }
 const { quiz } = Astro.props as { quiz: QuizItem[] };
 ---
 <div class="dp-quiz" data-dp-quiz>
   <div class="dp-quiz__head">
-    <h2 id="quiz">
-      <span class="tr-en">Check your understanding</span>
-      <span class="tr-ar" lang="ar" dir="rtl">اختبر فهمك</span>
-    </h2>
+    <h2 id="quiz"><span>Check your understanding</span></h2>
     <span class="dp-quiz__score" data-dp-score>Score: 0 / {quiz.length}</span>
   </div>
   {quiz.map((q, i) => (
     <div class="dp-q">
       <p class="dp-q__prompt">
         {i + 1}.
-        {q.q_ar ? (
-          <Fragment><span class="tr-en">{q.q}</span><span class="tr-ar" lang="ar" dir="rtl">{q.q_ar}</span></Fragment>
-        ) : <span>{q.q}</span>}
+        <span>{q.q}</span>
       </p>
       {q.options.map((o) => (
         <button class="dp-opt" data-correct={o.correct ? 'true' : 'false'}>
-          {o.text_ar ? (
-            <Fragment><span class="tr-en">{o.text}</span><span class="tr-ar" lang="ar" dir="rtl">{o.text_ar}</span></Fragment>
-          ) : <span>{o.text}</span>}
+          <span>{o.text}</span>
         </button>
       ))}
       {q.explain && (
-        <p class="dp-q__explain">
-          {q.explain_ar ? (
-            <Fragment><span class="tr-en">{q.explain}</span><span class="tr-ar" lang="ar" dir="rtl">{q.explain_ar}</span></Fragment>
-          ) : <span>{q.explain}</span>}
-        </p>
+        <p class="dp-q__explain"><span>{q.explain}</span></p>
       )}
     </div>
   ))}

@@ -15,7 +15,7 @@
   "أكبر مكسب من GC يكون عادةً في <strong>التخصيص بقدر أقل</strong>: أعد استخدام المخازن المؤقتة (<a href=\"/concurrency/sync-package/\"><code>sync.Pool</code></a>)، وخصّص الشرائح (slices) مسبقاً بسعة محددة، وأبقِ القيم على المكدّس (stack). حلّل الأداء باستخدام <code>go test -bench . -benchmem</code> و<code>pprof</code> قبل اللجوء إلى <code>GOGC</code>/<code>GOMEMLIMIT</code>. فضبط المفاتيح دون قياس عادةً ما ينقل المشكلة فحسب.",
   "هذا هو runtime الذي يجعل كل شيء في هذا المسار رخيصاً — goroutines يمكنك إنشاؤها بالملايين، مجدولة عبر النوى، مع جامع للمهملات يبقى في معظم الأحيان بعيداً عن طريقك. عُد إلى <a href=\"/concurrency/\">نظرة عامة على التزامن</a>.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>ما الذي يجعل توقفات GC في Go قصيرة جداً (بضع عشرات من الميكروثانية)؟</span> ",
   " <span>إنه متزامن — يضع العلامات إلى جانب goroutines، مع مراحل stop-the-world صغيرة جداً فقط</span> ",
   " <span>إنه لا يعمل أبداً</span> ",

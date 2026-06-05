@@ -1,7 +1,0 @@
----
-/* Inline bilingual text for UI strings (headings, labels, blurbs).
-   Shows the active language inline. Usage: <T en="Search" ar="بحث" /> */
-interface Props { en: string; ar: string; }
-const { en, ar } = Astro.props;
----
-<span class="tri-en">{en}</span><span class="tri-ar" lang="ar" dir="rtl">{ar}</span>

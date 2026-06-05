@@ -486,14 +486,9 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 /* =====================================================================
    i18n — EN / عربي toggle (prose translated, code/concepts stay English)
    ===================================================================== */
-.tr-ar { display: none; }
-[data-lang="ar"] .tr-en { display: none; }
-[data-lang="ar"] .tr-ar { display: block; }
-.tr-ar { line-height: 1.95; }
-.tr-ar, [lang="ar"] { font-family: var(--font-sans); }
-
-/* Arabic prose reads right-to-left; code, diagrams, tables stay LTR */
-[data-lang="ar"] .dp-prose { direction: rtl; text-align: right; }
+/* Prose is swapped to Arabic in place (ui.js); it reads right-to-left with
+   slightly looser leading, while code, diagrams and tables stay LTR. */
+[data-lang="ar"] .dp-prose { direction: rtl; text-align: right; line-height: 1.9; }
 [data-lang="ar"] .dp-prose pre,
 [data-lang="ar"] .dp-prose > .dp-mermaid,
 [data-lang="ar"] .dp-prose .dp-pg,
@@ -502,12 +497,6 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 [data-lang="ar"] .dp-prose ul,
 [data-lang="ar"] .dp-prose ol { padding-right: 1.4rem; padding-left: 0; }
 [data-lang="ar"] .dp-callout { border-left: 0; border-right: 4px solid var(--dp-accent); }
-
-/* page-header intent shows the active language (inline, not block) */
-.dp-hero__lede .tr-en { display: inline; }
-.dp-hero__lede .tr-ar { display: none; }
-[data-lang="ar"] .dp-hero__lede .tr-en { display: none; }
-[data-lang="ar"] .dp-hero__lede .tr-ar { display: inline; }
 
 /* language toggle button */
 .dp-lang-btn {
@@ -518,34 +507,6 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 }
 .dp-lang-btn:hover { border-color: var(--dp-accent); color: var(--dp-text); }
 
-/* inline bilingual spans for headings, callout titles, and quiz text
-   (only one language shows; keep it inline so emoji/number stay on the line) */
-.dp-callout__title .tr-ar,
-.dp-q__prompt .tr-ar,
-.dp-q__explain .tr-ar,
-.dp-opt .tr-ar,
-.dp-quiz__head h2 .tr-ar,
-.dp-prose h2 .tr-ar,
-.dp-prose h3 .tr-ar { display: none; }
-[data-lang="ar"] .dp-callout__title .tr-en,
-[data-lang="ar"] .dp-q__prompt .tr-en,
-[data-lang="ar"] .dp-q__explain .tr-en,
-[data-lang="ar"] .dp-opt .tr-en,
-[data-lang="ar"] .dp-quiz__head h2 .tr-en,
-[data-lang="ar"] .dp-prose h2 .tr-en,
-[data-lang="ar"] .dp-prose h3 .tr-en { display: none; }
-[data-lang="ar"] .dp-callout__title .tr-ar,
-[data-lang="ar"] .dp-q__prompt .tr-ar,
-[data-lang="ar"] .dp-q__explain .tr-ar,
-[data-lang="ar"] .dp-opt .tr-ar,
-[data-lang="ar"] .dp-quiz__head h2 .tr-ar,
-[data-lang="ar"] .dp-prose h2 .tr-ar,
-[data-lang="ar"] .dp-prose h3 .tr-ar { display: inline; }
+/* Arabic alignment for quiz options/prose */
 [data-lang="ar"] .dp-opt { text-align: right; }
 [data-lang="ar"] .dp-q__prompt, [data-lang="ar"] .dp-q__explain { text-align: right; }
-
-/* inline UI translations (<T> component) */
-.tri-ar { display: none; }
-[data-lang="ar"] .tri-en { display: none; }
-[data-lang="ar"] .tri-ar { display: inline; }
-.tri-ar { font-family: var(--font-sans); }

@@ -17,7 +17,7 @@
   " <span>⚠️ كل goroutine يحتاج إلى مخرج</span> ",
   "goroutines <strong>لا</strong> يجمعها جامع المهملات وهي محجوبة (blocked). فأي goroutine ينتظر إلى الأبد على channel لا يستقبل قيمةً أبداً هو <strong>تسريب (leak)</strong> — إذ يحتفظ بمكدّسه وبكل ما التقطه. والقاعدة: كل goroutine تبدؤه يجب أن يكون له مسار مضمون إلى الإنهاء، وعادةً ما يكون channel من نوع <code>done</code> أو <a href=\"/concurrency/context/\"><code>context</code></a> تستخدم عليه <code>select</code>. انظر <a href=\"/patterns/or-done-channel/\">Or-done</a> و<a href=\"/patterns/context-cancellation/\">Context &amp; Cancellation</a>.",
   "مواضيع ذات صلة",
-  " <span class=\"tr-en\">Check your understanding</span> <span class=\"tr-ar\" lang=\"ar\" dir=\"rtl\">اختبر فهمك</span> ",
+  "اختبر فهمك",
   " 1.\n<span>ما هي 'join point' في نموذج fork-join؟</span> ",
   " <span>حيث ينتظر الأب goroutines المشعّبة لتنتهي — وعادةً sync.WaitGroup.Wait()</span> ",
   " <span>عبارة go</span> ",
