@@ -1,0 +1,192 @@
+---
+title: "Heaps & Priority Queues"
+category: trees-graphs
+kind: topic
+order: 3
+difficulty: "Intermediate"
+status: ready
+intent: "A binary heap packed in a slice — parent/child by index arithmetic, sift-up and sift-down in O(log n), and Go's container/heap to build a priority queue."
+related:
+  - binary-trees
+  - binary-search-trees
+  - tries
+quiz:
+  - q: "In a binary heap stored in a slice, where do the children of the node at index i live?"
+    options:
+      - text: "At indices 2i+1 and 2i+2"
+        correct: true
+      - text: "At indices 2i and 2i+1"
+        correct: false
+      - text: "At indices i-1 and i+1"
+        correct: false
+      - text: "At indices i/2 and i/2+1"
+        correct: false
+    explain: "With a zero-based slice, node i's children sit at 2i+1 and 2i+2, and its parent at (i-1)/2. No pointers needed — the tree shape is implied by index arithmetic."
+  - q: "Why are both push and pop on a binary heap O(log n)?"
+    options:
+      - text: "An element only sifts up or down along one root-to-leaf path, whose length is the tree height, log n"
+        correct: true
+      - text: "Because the slice must be re-sorted on every operation"
+        correct: false
+      - text: "Because hashing the value takes log n time"
+        correct: false
+      - text: "They are actually O(1); the log n is for search"
+        correct: false
+    explain: "A heap is a complete binary tree, so its height is ⌊log₂ n⌋. Sift-up (after push) and sift-down (after pop) each walk at most one full path, doing constant work per level — hence O(log n)."
+  - q: "When implementing heap.Interface for a min-heap of ints, what should Less(i, j) return?"
+    options:
+      - text: "h[i] < h[j], so the smallest element bubbles to the root"
+        correct: true
+      - text: "h[i] > h[j]"
+        correct: false
+      - text: "Always true"
+        correct: false
+      - text: "h[i] == h[j]"
+        correct: false
+    explain: "container/heap puts the element that Less reports as 'least' at the root. For a min-heap you define Less as <; flip it to > and the very same code becomes a max-heap."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏥 Analogy">
+A heap is a hospital emergency room. Patients arrive in any order, but the most urgent one is always seen next — not whoever has waited longest. You never sort the whole waiting room; you just keep the single most urgent case at the front, and re-shuffle a little whenever someone arrives or leaves. That "always hand me the smallest (or largest) next" is exactly a priority queue.
+</Callout>
+
+## A tree with no pointers
+
+A **binary heap** is a *complete* binary tree — every level is full except possibly the last, which fills left to right. That regular shape lets us pack it into a plain slice and skip pointers entirely. For the node at index `i`:
+
+- **parent** is at `(i-1)/2`
+- **left child** is at `2*i + 1`
+- **right child** is at `2*i + 2`
+
+The one rule (the **heap property**) is local: every parent is `≤` both children (a **min-heap**) or `≥` both children (a **max-heap**). That guarantees the extreme value sits at the root, index `0` — readable in O(1).
+
+<Mermaid code={`graph TD
+  A["1 (i=0)"] --> B["3 (i=1)"]
+  A --> C["2 (i=2)"]
+  B --> D["7 (i=3)"]
+  B --> E["5 (i=4)"]
+  C --> F["4 (i=5)"]`} />
+
+That tree, flattened by index, is just the slice `[1, 3, 2, 7, 5, 4]`. A min-heap is **not** sorted — only the root is guaranteed extreme; siblings have no order between them.
+
+## Sift up to push, sift down to pop
+
+Both updates restore the heap property by moving one element along a single root-to-leaf path:
+
+- **Push:** append the new value at the end, then **sift up** — swap it with its parent while it's smaller, until it fits. At most `log n` swaps.
+- **Pop:** the root is the answer; move the last element into the root slot, shrink the slice, then **sift down** — swap it with its smaller child while it's larger, until it settles. Again at most `log n` swaps.
+
+Constant work per level, height `log n`, so **push and pop are both O(log n)**, and peeking at the root is **O(1)**.
+
+## Use Go's container/heap
+
+You rarely hand-roll the sifting: the standard library's [`container/heap`](https://pkg.go.dev/container/heap) does it for you. You supply a type implementing `heap.Interface` — that's `sort.Interface` (`Len`, `Less`, `Swap`) plus `Push` and `Pop` for growing and shrinking the backing slice. `Less` alone decides min vs max. Here's a complete priority queue of tasks:
+
+<Playground client:visible title="priority_queue.go" code={`package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+type Task struct {
+	Name     string
+	Priority int // lower number = more urgent
+}
+
+// PQ implements heap.Interface as a min-heap on Priority.
+type PQ []Task
+
+func (pq PQ) Len() int { return len(pq) }
+
+// Less makes the smallest Priority the root -> a min-heap.
+func (pq PQ) Less(i, j int) bool { return pq[i].Priority < pq[j].Priority }
+
+func (pq PQ) Swap(i, j int) { pq[i], pq[j] = pq[j], pq[i] }
+
+// Push and Pop operate on the slice's end; heap handles the sifting.
+func (pq *PQ) Push(x any) {
+	*pq = append(*pq, x.(Task))
+}
+
+func (pq *PQ) Pop() any {
+	old := *pq
+	n := len(old)
+	item := old[n-1]
+	*pq = old[:n-1]
+	return item
+}
+
+func main() {
+	pq := &PQ{
+		{"email", 5},
+		{"deploy", 1},
+		{"lunch", 9},
+	}
+	heap.Init(pq) // O(n) — arrange the slice into a valid heap
+
+	heap.Push(pq, Task{"hotfix", 0}) // O(log n)
+
+	// Pop drains in priority order: 0,1,5,9
+	for pq.Len() > 0 {
+		t := heap.Pop(pq).(Task)
+		fmt.Printf("priority %d: %s\n", t.Priority, t.Name)
+	}
+}`} />
+
+`heap.Init` is O(n) — cheaper than `n` pushes — and every `heap.Push`/`heap.Pop` is O(log n). Note you call the package functions `heap.Push(pq, x)` / `heap.Pop(pq)`, never your own `pq.Push`/`pq.Pop` directly; those are hooks the package calls for you.
+
+## Top-k without a full sort
+
+A classic heap win: find the **k largest** of a stream in O(n log k) using a *min-heap of size k*. Keep only k elements; if a new value beats the smallest (the root), evict the root and insert the newcomer. You never sort the whole input — and the same shape powers Dijkstra's shortest paths and merging k sorted lists.
+
+<Playground client:visible title="top_k.go" code={`package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+// IntMinHeap is a min-heap of ints.
+type IntMinHeap []int
+
+func (h IntMinHeap) Len() int           { return len(h) }
+func (h IntMinHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h IntMinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *IntMinHeap) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *IntMinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	v := old[n-1]
+	*h = old[:n-1]
+	return v
+}
+
+// topK returns the k largest values using a min-heap of size k.
+func topK(nums []int, k int) []int {
+	h := &IntMinHeap{}
+	heap.Init(h)
+	for _, v := range nums {
+		if h.Len() < k {
+			heap.Push(h, v)
+		} else if v > (*h)[0] { // beats the current smallest kept
+			heap.Pop(h) // drop the smallest
+			heap.Push(h, v)
+		}
+	}
+	return *h // the k largest, in no particular order
+}
+
+func main() {
+	nums := []int{4, 1, 7, 3, 9, 2, 8, 5}
+	fmt.Println("3 largest:", topK(nums, 3)) // contains 7, 8, 9
+}`} />
+
+<Callout type="gotcha" title="⚠️ A heap is not a sorted slice">
+The biggest trap is assuming the backing slice is in order. It is **not** — only the root is guaranteed extreme. Iterating the slice does not visit elements in sorted order; to get sorted output you must `heap.Pop` repeatedly. Two more snags: `Push`/`Pop` must use a **pointer receiver** (they resize the slice), and you must call the package functions `heap.Push(h, x)` / `heap.Pop(h)` — calling `h.Push(x)` directly appends *without* sifting and corrupts the heap property.
+</Callout>
+
+Next: a different shape for keys, where the path *is* the data — [tries](/dsa/tries/).

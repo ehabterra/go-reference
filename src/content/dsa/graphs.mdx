@@ -1,0 +1,217 @@
+---
+title: "Graphs: BFS & DFS"
+category: trees-graphs
+kind: topic
+order: 5
+difficulty: "Intermediate"
+status: ready
+intent: "Vertices joined by edges — adjacency lists, BFS for shortest hops, DFS for reachability and ordering, all O(V + E)."
+related:
+  - binary-trees
+  - stacks-and-queues
+  - hash-tables
+quiz:
+  - q: "Why is an adjacency list (map[int][]int) usually preferred over an adjacency matrix?"
+    options:
+      - text: "Most real graphs are sparse, so a list stores only the edges that exist — O(V + E) space and traversal — while a matrix always uses O(V²)"
+        correct: true
+      - text: "A list can answer 'is there an edge u→v?' in O(1)"
+        correct: false
+      - text: "A matrix cannot represent directed graphs"
+        correct: false
+      - text: "A list is the only structure that supports weights"
+        correct: false
+    explain: "For a sparse graph (E much less than V²) the list wins on both space and traversal time. The matrix's edge is its O(1) edge-existence check and dense-graph cache friendliness."
+  - q: "On an unweighted graph, what does BFS from a start vertex compute?"
+    options:
+      - text: "The shortest path in number of hops to every reachable vertex"
+        correct: true
+      - text: "The shortest path by edge weight"
+        correct: false
+      - text: "A topological ordering"
+        correct: false
+      - text: "The minimum spanning tree"
+        correct: false
+    explain: "BFS expands the frontier one layer at a time, so the first time it reaches a vertex is via a path with the fewest edges. For weighted shortest paths you need Dijkstra instead."
+  - q: "What role does the visited set play in BFS and DFS?"
+    options:
+      - text: "It stops a vertex being processed twice, preventing infinite loops on cycles and keeping the traversal O(V + E)"
+        correct: true
+      - text: "It sorts the vertices before traversal"
+        correct: false
+      - text: "It stores the shortest distances"
+        correct: false
+      - text: "It is only needed for directed graphs"
+        correct: false
+    explain: "Without marking vertices visited, a cycle would send the traversal round forever, and shared neighbors would be expanded repeatedly. Marking each vertex once bounds the work at V + E."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗺️ Analogy">
+A graph is a map of cities joined by roads, or a social network of people joined by friendships. The cities/people are **vertices**; the roads/friendships are **edges**. Questions like "what's the fewest flights from A to B?" or "who can reach me through friends-of-friends?" are graph traversals — and the two workhorses are BFS and DFS.
+</Callout>
+
+## Vertices, edges, and how to store them
+
+A graph is a set of **vertices** (V) joined by **edges** (E). Edges can be **directed** (a one-way follow on social media) or **undirected** (a two-way friendship), and **weighted** (road distance) or **unweighted** (just connected or not).
+
+There are two standard representations:
+
+- **Adjacency list** — `map[int][]int`, mapping each vertex to its neighbors. It stores only edges that exist, so space is O(V + E) and a full traversal is **O(V + E)**. This is the usual choice because most real graphs are *sparse* (E is far smaller than V²).
+- **Adjacency matrix** — a `[V][V]` grid where `m[u][v]` marks an edge. It answers "is there an edge u→v?" in O(1), but always costs O(V²) space and a traversal is O(V²). Reach for it only on small or *dense* graphs.
+
+Here is a small undirected graph and its adjacency list:
+
+<Mermaid code={`graph LR
+  0 --- 1
+  0 --- 2
+  1 --- 3
+  2 --- 3
+  3 --- 4
+  4 --- 5`} />
+
+```go
+adj := map[int][]int{
+    0: {1, 2},
+    1: {0, 3},
+    2: {0, 3},
+    3: {1, 2, 4},
+    4: {3, 5},
+    5: {4},
+}
+```
+
+## BFS: shortest path in hops
+
+**Breadth-first search** explores the graph in layers using a **queue** (FIFO): it visits the start, then all its neighbors, then their neighbors, and so on. Because it expands outward one ring at a time, the first time BFS reaches a vertex is along a path with the *fewest edges* — so on an **unweighted** graph it gives the shortest path in hops for free.
+
+Two pieces make it work: a `visited` set so a cycle can't loop forever, and a `dist` map recording the hop count as each vertex is discovered.
+
+<Playground client:visible title="bfs.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+// Graph is an undirected, unweighted graph stored as an adjacency list:
+// each vertex maps to its slice of neighbors. Sparse and the usual choice.
+type Graph struct {
+	adj map[int][]int
+}
+
+func NewGraph() *Graph { return &Graph{adj: map[int][]int{}} }
+
+// AddEdge links u and v in both directions (undirected).
+func (g *Graph) AddEdge(u, v int) {
+	g.adj[u] = append(g.adj[u], v)
+	g.adj[v] = append(g.adj[v], u)
+}
+
+// BFS visits vertices in breadth-first order from start and returns the
+// visit order plus the shortest distance (in hops) to each vertex.
+// Adjacency-list BFS is O(V + E).
+func (g *Graph) BFS(start int) ([]int, map[int]int) {
+	var order []int
+	dist := map[int]int{start: 0}
+	visited := map[int]bool{start: true} // the visited set avoids cycles
+	queue := []int{start}                // FIFO frontier
+
+	for len(queue) > 0 {
+		u := queue[0]
+		queue = queue[1:]
+		order = append(order, u)
+
+		neighbors := append([]int(nil), g.adj[u]...)
+		sort.Ints(neighbors) // sort for deterministic output
+		for _, v := range neighbors {
+			if !visited[v] {
+				visited[v] = true
+				dist[v] = dist[u] + 1
+				queue = append(queue, v)
+			}
+		}
+	}
+	return order, dist
+}
+
+func main() {
+	g := NewGraph()
+	g.AddEdge(0, 1)
+	g.AddEdge(0, 2)
+	g.AddEdge(1, 3)
+	g.AddEdge(2, 3)
+	g.AddEdge(3, 4)
+	g.AddEdge(4, 5)
+
+	order, dist := g.BFS(0)
+	fmt.Println("BFS order:", order)
+	for v := 0; v <= 5; v++ {
+		fmt.Printf("hops 0 -> %d = %d\n", v, dist[v])
+	}
+}`} />
+
+## DFS: reachability and ordering
+
+**Depth-first search** plunges as deep as possible down one path before backtracking. It's naturally **recursive** (the call stack *is* your stack; you can also use an explicit slice as a stack). DFS answers "is B reachable from A?", detects **cycles** (you hit a vertex already on the current path), and produces the orderings behind **topological sort** (ordering tasks so every dependency comes first).
+
+<Playground client:visible title="dfs.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+// Graph is a directed graph: AddEdge(u, v) means an edge u -> v.
+type Graph struct {
+	adj map[int][]int
+}
+
+func NewGraph() *Graph { return &Graph{adj: map[int][]int{}} }
+
+// AddEdge adds a directed edge u -> v.
+func (g *Graph) AddEdge(u, v int) { g.adj[u] = append(g.adj[u], v) }
+
+// DFS explores as deep as possible before backtracking, recording visit
+// order. The visited set keeps it O(V + E) and avoids revisiting in cycles.
+func (g *Graph) DFS(start int) []int {
+	visited := map[int]bool{}
+	var order []int
+
+	var visit func(u int)
+	visit = func(u int) {
+		visited[u] = true
+		order = append(order, u)
+
+		neighbors := append([]int(nil), g.adj[u]...)
+		sort.Ints(neighbors) // sort for deterministic output
+		for _, v := range neighbors {
+			if !visited[v] {
+				visit(v)
+			}
+		}
+	}
+	visit(start)
+	return order
+}
+
+func main() {
+	g := NewGraph()
+	g.AddEdge(0, 1)
+	g.AddEdge(0, 2)
+	g.AddEdge(1, 3)
+	g.AddEdge(2, 3)
+	g.AddEdge(3, 4)
+
+	fmt.Println("DFS order:", g.DFS(0))
+}`} />
+
+<Callout type="gotcha" title="⚠️ BFS hops ≠ weighted shortest path">
+BFS gives the shortest path *in number of edges*. The moment edges carry **weights** (distances, costs, times), the fewest-hops path may not be the cheapest — so BFS no longer applies. For non-negative weights use **[Dijkstra's algorithm](https://pkg.go.dev/container/heap)** (BFS with a priority queue / min-heap instead of a plain FIFO); for graphs with negative edges, Bellman-Ford. Also: mark a vertex visited *when you enqueue it*, not when you dequeue it, or it can land in the queue several times.
+</Callout>
+
+BFS and DFS are the foundation under a huge range of problems — connected components, flood fill, maze solving, dependency resolution, bipartite checking, and more — so getting these two traversals into your fingers pays off across the whole track.
+
+Next: divide and conquer on sorted data — [binary search](/dsa/binary-search/).

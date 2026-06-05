@@ -1,0 +1,206 @@
+---
+title: "Binary Trees"
+category: trees-graphs
+kind: topic
+order: 1
+difficulty: "Beginner"
+status: ready
+intent: "Nodes with up to two children — structure, depth vs height, the three DFS traversals (inorder, preorder, postorder), and level-order BFS with a queue."
+related:
+  - binary-search-trees
+  - heaps
+  - big-o
+quiz:
+  - q: "How many children can a node in a binary tree have?"
+    options:
+      - text: "At most two — a left child and a right child, either of which may be nil"
+        correct: true
+      - text: "Exactly two, always"
+        correct: false
+      - text: "Any number, like a general tree"
+        correct: false
+      - text: "At most one"
+        correct: false
+    explain: "The word binary means each node has up to two children, conventionally Left and Right. Either or both can be nil, so a node may have zero, one, or two children."
+  - q: "Which depth-first traversal visits the root before either subtree?"
+    options:
+      - text: "Preorder — root, then left subtree, then right subtree"
+        correct: true
+      - text: "Inorder — left, root, right"
+        correct: false
+      - text: "Postorder — left, right, root"
+        correct: false
+      - text: "Level-order"
+        correct: false
+    explain: "Preorder processes the node first (pre = before its children). Inorder visits the root in the middle; postorder visits it last, which is why postorder is the natural order for freeing or deleting a tree bottom-up."
+  - q: "What data structure does level-order (breadth-first) traversal rely on?"
+    options:
+      - text: "A queue — dequeue a node, then enqueue its children, level by level"
+        correct: true
+      - text: "A stack"
+        correct: false
+      - text: "A hash map"
+        correct: false
+      - text: "A second binary tree"
+        correct: false
+    explain: "BFS uses a FIFO queue so that nodes are processed in the order they were discovered, which sweeps the tree one level at a time. A stack (LIFO) would instead give you a depth-first walk."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🌳 Analogy">
+A binary tree is a family tree where everyone has at most two children. Start from the single ancestor at the top (the root) and you can always reach anyone by going left or right at each person. There are no cousins marrying back in — every node has exactly one parent, so there are no cycles and no shortcuts.
+</Callout>
+
+## A node with two children
+
+Each node holds a value and two pointers, `Left` and `Right`, either of which may be `nil`. The tree is identified by its **root**:
+
+<Mermaid code={`graph TD
+  A["1 (root)"] --> B["2"]
+  A --> C["3"]
+  B --> D["4"]
+  B --> E["5"]
+  C --> F["6"]`} />
+
+```go
+type Node struct {
+	Val   int
+	Left  *Node
+	Right *Node
+}
+```
+
+A node with no children is a **leaf**. The **depth** of a node is the number of edges from the root down to it (the root has depth 0). The **height** of the tree is the depth of its deepest leaf — the length of the longest root-to-leaf path. A balanced tree of `n` nodes has height about `log₂ n`; a degenerate tree that chains to one side has height `n − 1`, behaving like a linked list.
+
+## Three depth-first traversals
+
+Depth-first traversal recurses all the way down one branch before backing up. The only thing that differs between the three classic orders is *when you visit the node* relative to its subtrees:
+
+- **Inorder** — left subtree, **node**, right subtree.
+- **Preorder** — **node**, left subtree, right subtree.
+- **Postorder** — left subtree, right subtree, **node**.
+
+<Playground client:visible title="traversals.go" code={`package main
+
+import "fmt"
+
+type Node struct {
+	Val   int
+	Left  *Node
+	Right *Node
+}
+
+// inorder: left, node, right
+func inorder(n *Node, visit func(int)) {
+	if n == nil {
+		return
+	}
+	inorder(n.Left, visit)
+	visit(n.Val)
+	inorder(n.Right, visit)
+}
+
+// preorder: node, left, right
+func preorder(n *Node, visit func(int)) {
+	if n == nil {
+		return
+	}
+	visit(n.Val)
+	preorder(n.Left, visit)
+	preorder(n.Right, visit)
+}
+
+// postorder: left, right, node
+func postorder(n *Node, visit func(int)) {
+	if n == nil {
+		return
+	}
+	postorder(n.Left, visit)
+	postorder(n.Right, visit)
+	visit(n.Val)
+}
+
+func collect(walk func(*Node, func(int)), root *Node) []int {
+	var out []int
+	walk(root, func(v int) { out = append(out, v) })
+	return out
+}
+
+func main() {
+	//        1
+	//       / \\
+	//      2   3
+	//     / \\   \\
+	//    4   5   6
+	root := &Node{Val: 1,
+		Left:  &Node{Val: 2, Left: &Node{Val: 4}, Right: &Node{Val: 5}},
+		Right: &Node{Val: 3, Right: &Node{Val: 6}},
+	}
+
+	fmt.Println("inorder:  ", collect(inorder, root))
+	fmt.Println("preorder: ", collect(preorder, root))
+	fmt.Println("postorder:", collect(postorder, root))
+}`} />
+
+## Level-order traversal (BFS)
+
+Breadth-first traversal sweeps the tree level by level, top to bottom. Instead of recursion it uses a **queue**: dequeue a node, visit it, then enqueue its non-nil children so the next level is processed in order.
+
+<Mermaid code={`graph LR
+  Q["queue (FIFO)"] --> S1["dequeue node<br/>visit value"]
+  S1 --> S2["enqueue Left,<br/>then Right"]
+  S2 --> Q`} />
+
+<Playground client:visible title="bfs.go" code={`package main
+
+import "fmt"
+
+type Node struct {
+	Val   int
+	Left  *Node
+	Right *Node
+}
+
+// levelOrder returns values grouped by depth, using a queue.
+func levelOrder(root *Node) [][]int {
+	var levels [][]int
+	if root == nil {
+		return levels
+	}
+	queue := []*Node{root} // a slice used as a FIFO queue
+	for len(queue) > 0 {
+		n := len(queue) // nodes on the current level
+		row := make([]int, 0, n)
+		for i := 0; i < n; i++ {
+			node := queue[0] // peek front
+			queue = queue[1:] // dequeue
+			row = append(row, node.Val)
+			if node.Left != nil {
+				queue = append(queue, node.Left) // enqueue
+			}
+			if node.Right != nil {
+				queue = append(queue, node.Right)
+			}
+		}
+		levels = append(levels, row)
+	}
+	return levels
+}
+
+func main() {
+	root := &Node{Val: 1,
+		Left:  &Node{Val: 2, Left: &Node{Val: 4}, Right: &Node{Val: 5}},
+		Right: &Node{Val: 3, Right: &Node{Val: 6}},
+	}
+	for depth, row := range levelOrder(root) {
+		fmt.Printf("level %d: %v\n", depth, row)
+	}
+}`} />
+
+<Callout type="tip" title="💡 Pick the traversal to fit the job">
+The order is not arbitrary — each one is the right tool for a task. **Postorder** visits children before the node, so it is how you free, delete, or compute a size/height bottom-up. **Preorder** is how you serialize or clone a tree top-down. **Inorder** has no special meaning for a plain binary tree — but on a *binary search tree* it emits values in sorted order, which is the whole next page.
+</Callout>
+
+Next: add an ordering rule and the tree becomes searchable — [binary search trees](/dsa/binary-search-trees/).

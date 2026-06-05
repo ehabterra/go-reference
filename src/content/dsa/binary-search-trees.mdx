@@ -1,0 +1,156 @@
+---
+title: "Binary Search Trees"
+category: trees-graphs
+kind: topic
+order: 2
+difficulty: "Intermediate"
+status: ready
+intent: "The BST ordering invariant (left < node < right) gives O(h) search and insert, an inorder walk yields sorted order, and balance decides log n vs n."
+related:
+  - binary-trees
+  - heaps
+  - big-o
+quiz:
+  - q: "What is the binary search tree ordering invariant?"
+    options:
+      - text: "For every node, all keys in its left subtree are smaller and all keys in its right subtree are larger"
+        correct: true
+      - text: "The left child is always smaller than the right child, with no constraint on the parent"
+        correct: false
+      - text: "Parents are always smaller than both children"
+        correct: false
+      - text: "Nodes are filled level by level, left to right"
+        correct: false
+    explain: "The invariant holds recursively for the whole subtree, not just the immediate children. That global ordering is what lets search discard half the remaining tree at each step. (The last option describes a heap, not a BST.)"
+  - q: "Why is BST search O(h) rather than O(log n) in general?"
+    options:
+      - text: "h is the height; it is log n only when the tree is balanced, and n − 1 when it degenerates into a chain"
+        correct: true
+      - text: "Because search must visit every node"
+        correct: false
+      - text: "Because comparisons are O(h) each"
+        correct: false
+      - text: "Because Go maps are faster"
+        correct: false
+    explain: "Each step descends one level, so the cost is the height h. Inserting already-sorted keys builds a one-sided chain of height n − 1, making search O(n). Self-balancing trees keep h at O(log n)."
+  - q: "What order does an inorder traversal of a BST produce?"
+    options:
+      - text: "Ascending sorted order of the keys"
+        correct: true
+      - text: "The insertion order"
+        correct: false
+      - text: "Descending sorted order"
+        correct: false
+      - text: "A random order"
+        correct: false
+    explain: "Inorder visits left subtree, node, right subtree. Because every left subtree holds smaller keys and every right subtree holds larger keys, this emits keys from smallest to largest — sorted, for free."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔎 Analogy">
+A binary search tree is a guessing game played on a sorted line. Ask "is your number bigger or smaller than this one?" and with each answer you throw away half of what's left — exactly how you find a word in a dictionary by opening near the middle and narrowing down, instead of reading every page.
+</Callout>
+
+## The ordering invariant
+
+A BST is a binary tree with one extra rule that holds at **every** node: all keys in the **left** subtree are smaller, and all keys in the **right** subtree are larger. That single invariant is what makes searching fast — at each node you compare once and discard an entire subtree.
+
+<Mermaid code={`graph TD
+  A["8"] --> B["3"]
+  A --> C["10"]
+  B --> D["1"]
+  B --> E["6"]
+  C --> F["14"]
+  E --> G["4"]
+  E --> H["7"]`} />
+
+In the tree above, everything left of 8 is below 8 and everything right is above 8 — and the same holds recursively for 3, for 10, and so on.
+
+## Search and insert in O(h)
+
+To **search**, start at the root and compare: equal means found, smaller means go left, larger means go right, `nil` means absent. **Insert** follows the identical path and hangs the new node where the search fell off the tree. Both do one comparison per level, so both cost `O(h)` where `h` is the height:
+
+- **Balanced** tree: `h ≈ log₂ n`, so search and insert are `O(log n)`.
+- **Degenerate** tree (keys inserted already sorted): `h = n − 1`, a one-sided chain, so both degrade to `O(n)` — no better than a linked list.
+
+<Playground client:visible title="bst.go" code={`package main
+
+import "fmt"
+
+type Node struct {
+	Key         int
+	Left, Right *Node
+}
+
+// insert returns the (possibly new) subtree root with key added.
+func insert(n *Node, key int) *Node {
+	if n == nil {
+		return &Node{Key: key} // fell off the tree: hang the new node here
+	}
+	switch {
+	case key < n.Key:
+		n.Left = insert(n.Left, key)
+	case key > n.Key:
+		n.Right = insert(n.Right, key)
+	}
+	// equal key: ignore (no duplicates)
+	return n
+}
+
+// search walks down, discarding half the tree at each step. O(h).
+func search(n *Node, key int) bool {
+	for n != nil {
+		switch {
+		case key == n.Key:
+			return true
+		case key < n.Key:
+			n = n.Left
+		default:
+			n = n.Right
+		}
+	}
+	return false
+}
+
+// inorder: left, node, right -> visits keys in ascending order.
+func inorder(n *Node, out *[]int) {
+	if n == nil {
+		return
+	}
+	inorder(n.Left, out)
+	*out = append(*out, n.Key)
+	inorder(n.Right, out)
+}
+
+func main() {
+	var root *Node
+	for _, k := range []int{8, 3, 10, 1, 6, 14, 4, 7} {
+		root = insert(root, k)
+	}
+
+	var sorted []int
+	inorder(root, &sorted)
+	fmt.Println("inorder (sorted):", sorted)
+
+	fmt.Println("search 7:", search(root, 7))   // true
+	fmt.Println("search 9:", search(root, 9))   // false
+}`} />
+
+The inorder walk prints the keys already sorted — that is the BST's signature property. If you only ever need sorted output, a BST gives it to you in `O(n)` with no separate sort step.
+
+## Balance, and Go's missing BST
+
+Because performance hinges on height, real systems use **self-balancing** trees that rotate nodes to keep `h` at `O(log n)` no matter the insertion order. The two classics are the **AVL tree** (strictly balanced, faster lookups) and the **red-black tree** (looser balance, fewer rotations on insert/delete — the choice in many standard libraries, like C++'s `std::map`).
+
+Go's standard library has **no built-in BST**. Reach for one of these instead:
+
+- For **ordered** data, keep a **sorted slice** and binary-search it with [`sort.Search`](https://pkg.go.dev/sort#Search) — `O(log n)` lookups, with the trade-off that an insert is `O(n)` because elements shift. Great for read-heavy, write-light data.
+- For **unordered** key/value lookups, use the built-in `map` for average `O(1)` access — see [hash tables](/dsa/hash-tables/). A map gives no ordering, which is exactly what a BST trades away speed for.
+
+<Callout type="gotcha" title="⚠️ A BST is not automatically balanced">
+Inserting keys in sorted order (1, 2, 3, 4, …) builds a tree that leans entirely to one side — height `n − 1`, so search becomes `O(n)`, the very linear scan the tree was meant to avoid. A plain BST gives `O(log n)` only on reasonably random input; for worst-case guarantees you need a self-balancing variant (AVL or red-black) or a different structure altogether.
+</Callout>
+
+Next: a tree tuned for fast min/max instead of full ordering — [heaps](/dsa/heaps/).

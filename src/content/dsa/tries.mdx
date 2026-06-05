@@ -1,0 +1,233 @@
+---
+title: "Tries"
+category: trees-graphs
+kind: topic
+order: 4
+difficulty: "Intermediate"
+status: ready
+intent: "A prefix tree keyed by characters — Insert, Search and StartsWith in O(L) where L is the key length, the engine behind autocomplete and prefix queries."
+related:
+  - hash-tables
+  - heaps
+  - graphs
+quiz:
+  - q: "What does the cost of Search in a trie depend on?"
+    options:
+      - text: "O(L), the length of the key being searched — independent of how many words are stored"
+        correct: true
+      - text: "O(n), the number of words in the trie"
+        correct: false
+      - text: "O(log n), the height of a balanced tree"
+        correct: false
+      - text: "O(1), like a hash lookup"
+        correct: false
+    explain: "Search walks one character of the key per level, so it does L hops regardless of whether the trie holds ten words or ten million. The dictionary's size never enters the cost."
+  - q: "Why does a trie node need an isEnd (or terminal) flag?"
+    options:
+      - text: "To distinguish a stored word from a mere prefix — 'car' may be a word even though 'ca' and 'cart' also exist"
+        correct: true
+      - text: "To count how many children the node has"
+        correct: false
+      - text: "To mark the root of the trie"
+        correct: false
+      - text: "To store the character at that node"
+        correct: false
+    explain: "Reaching a node by spelling out a key only proves that path exists. The isEnd flag records that a word actually terminates here, separating a real word from a prefix of longer words."
+  - q: "What can a trie do that a plain hash map of words cannot?"
+    options:
+      - text: "Answer prefix queries — find every key starting with a given prefix, or test if any does, in O(L)"
+        correct: true
+      - text: "Look up an exact key in O(1)"
+        correct: false
+      - text: "Store duplicate keys"
+        correct: false
+      - text: "Use less memory than a hash map"
+        correct: false
+    explain: "A hash scatters keys by their full hash, destroying any prefix relationship, so 'find all words starting with car' means scanning every key. A trie shares prefixes along its paths, so StartsWith is a single O(L) walk."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+A trie is a dictionary's thumb index taken to the extreme. To find "category" you don't scan every page — you flip to the C tab, then the "ca" subsection, then "cat", narrowing one letter at a time. Every word that shares a beginning shares that path, so the work depends only on how long your word is, not on how fat the dictionary is.
+</Callout>
+
+## The path spells the word
+
+A **trie** (from re*trie*val, usually said "try") is a tree where each edge is labelled with a character. A word is not stored in any single node — it's spelled out by the **path** from the root. Nodes that share a prefix share the path that spells it, so "cat", "car" and "card" all branch off a common "ca" stem:
+
+<Mermaid code={`graph TD
+  R["root"] -->|c| C["c"]
+  C -->|a| CA["ca"]
+  CA -->|t| CAT["cat ✓"]
+  CA -->|r| CAR["car ✓"]
+  CAR -->|d| CARD["card ✓"]
+  CA -->|p| CAP["cap ✓"]`} />
+
+The checkmarks mark nodes where a word ends. That flag matters: reaching the "car" node proves the path exists, but only `isEnd` tells you "car" is a *stored word* rather than just a prefix of "card". The node itself holds no letter — the edge you took to reach it is the letter.
+
+```go
+type Node struct {
+	children map[rune]*Node
+	isEnd    bool
+}
+
+type Trie struct {
+	root *Node
+}
+```
+
+Using `map[rune]*Node` for children keeps it simple and handles any Unicode alphabet; a fixed `[26]*Node` array is a common optimization when keys are known lowercase ASCII.
+
+## Insert, Search, StartsWith — all O(L)
+
+Every operation walks one node per character of the key, so each costs **O(L)** where L is the key's length — strikingly, *independent of how many words the trie holds*. The three core operations differ only in what they do at the end of the walk:
+
+- **Insert:** walk the key, creating missing child nodes, then set `isEnd` on the final node.
+- **Search:** walk the key; return true only if the path exists *and* the final node's `isEnd` is set.
+- **StartsWith:** walk the prefix; return true if the path merely exists — `isEnd` is irrelevant.
+
+<Playground client:visible title="trie.go" code={`package main
+
+import "fmt"
+
+type Node struct {
+	children map[rune]*Node
+	isEnd    bool
+}
+
+func newNode() *Node {
+	return &Node{children: make(map[rune]*Node)}
+}
+
+type Trie struct {
+	root *Node
+}
+
+func NewTrie() *Trie { return &Trie{root: newNode()} }
+
+// Insert adds a word: O(L) in the word's length.
+func (t *Trie) Insert(word string) {
+	cur := t.root
+	for _, ch := range word {
+		next, ok := cur.children[ch]
+		if !ok {
+			next = newNode()
+			cur.children[ch] = next
+		}
+		cur = next
+	}
+	cur.isEnd = true
+}
+
+// walk follows a path and returns the node it lands on, or nil.
+func (t *Trie) walk(s string) *Node {
+	cur := t.root
+	for _, ch := range s {
+		next, ok := cur.children[ch]
+		if !ok {
+			return nil
+		}
+		cur = next
+	}
+	return cur
+}
+
+// Search reports whether the exact word was inserted.
+func (t *Trie) Search(word string) bool {
+	n := t.walk(word)
+	return n != nil && n.isEnd
+}
+
+// StartsWith reports whether any stored word has this prefix.
+func (t *Trie) StartsWith(prefix string) bool {
+	return t.walk(prefix) != nil
+}
+
+func main() {
+	t := NewTrie()
+	for _, w := range []string{"cat", "car", "card", "cap"} {
+		t.Insert(w)
+	}
+
+	fmt.Println(t.Search("car"))     // true  - a stored word
+	fmt.Println(t.Search("ca"))      // false - a prefix, not a word
+	fmt.Println(t.Search("cars"))    // false - never inserted
+	fmt.Println(t.StartsWith("ca"))  // true  - prefix of cat/car/...
+	fmt.Println(t.StartsWith("dog")) // false - no such path
+}`} />
+
+Notice `Search("ca")` is `false` while `StartsWith("ca")` is `true` — that's the `isEnd` flag earning its keep.
+
+## Autocomplete: collect all words under a prefix
+
+`StartsWith` only answers yes/no. Real autocomplete walks to the prefix node, then does a depth-first traversal of the subtree beneath it, gathering every path that ends in a word:
+
+<Playground client:visible title="autocomplete.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+type Node struct {
+	children map[rune]*Node
+	isEnd    bool
+}
+
+func newNode() *Node { return &Node{children: make(map[rune]*Node)} }
+
+type Trie struct{ root *Node }
+
+func NewTrie() *Trie { return &Trie{root: newNode()} }
+
+func (t *Trie) Insert(word string) {
+	cur := t.root
+	for _, ch := range word {
+		if cur.children[ch] == nil {
+			cur.children[ch] = newNode()
+		}
+		cur = cur.children[ch]
+	}
+	cur.isEnd = true
+}
+
+// Complete returns every stored word that begins with prefix.
+func (t *Trie) Complete(prefix string) []string {
+	cur := t.root
+	for _, ch := range prefix {
+		if cur.children[ch] == nil {
+			return nil // no word has this prefix
+		}
+		cur = cur.children[ch]
+	}
+	var out []string
+	var dfs func(n *Node, path string)
+	dfs = func(n *Node, path string) {
+		if n.isEnd {
+			out = append(out, path)
+		}
+		for ch, child := range n.children {
+			dfs(child, path+string(ch))
+		}
+	}
+	dfs(cur, prefix)
+	sort.Strings(out) // stable output; map order is random
+	return out
+}
+
+func main() {
+	t := NewTrie()
+	for _, w := range []string{"cat", "car", "card", "cap", "dog"} {
+		t.Insert(w)
+	}
+	fmt.Println("ca ->", t.Complete("ca")) // [cap car card cat]
+	fmt.Println("d  ->", t.Complete("d"))  // [dog]
+}`} />
+
+<Callout type="gotcha" title="⚠️ When NOT to reach for a trie">
+A trie shines only for **prefix** work — autocomplete, longest-prefix routing, dictionary lookups. For plain exact-key lookup, a [hash table](/dsa/hash-tables/) is simpler, smaller, and O(1) on average rather than O(L). The cost is memory: a node per character can balloon for sparse, long keys (a `map[rune]*Node` per node has real overhead). When keys are known lowercase ASCII, swap the map for a `[26]*Node` array to cut allocations and pointer chasing.
+</Callout>
+
+Next: from trees of letters to networks of anything — [graphs](/dsa/graphs/).
