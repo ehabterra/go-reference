@@ -1,0 +1,26 @@
+---
+import { getCollection, render } from 'astro:content';
+import PageLayout from '../../layouts/PageLayout.astro';
+
+export async function getStaticPaths() {
+  const items = await getCollection('dsa');
+  return items.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<PageLayout
+  entry={entry}
+  collection="dsa"
+  base="/dsa"
+  sectionTitle="DSA"
+  sectionHref="/dsa/"
+  relatedHeading="Related topics"
+  topicLabel="DSA"
+>
+  <Content />
+</PageLayout>

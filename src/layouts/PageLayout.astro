@@ -14,6 +14,7 @@ const {
   sectionTitle = 'Design Patterns',
   sectionHref = '/patterns/',
   relatedHeading = 'Related patterns',
+  topicLabel = 'Concurrency',
 } = Astro.props;
 const d = entry.data;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -29,7 +30,7 @@ const contentAr = (contentModules[`../i18n/content/${entry.id}.json`] as any)?.d
       <a href={sectionHref}>{sectionTitle}</a> › <span>{catLabel}</span> › <span>{d.title}</span>
     </nav>
 
-    <PageHeader data={d} slug={entry.id} />
+    <PageHeader data={d} slug={entry.id} topicLabel={topicLabel} />
 
     <div class="dp-article">
       <div class="dp-article__body dp-prose">

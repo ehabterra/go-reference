@@ -1,12 +1,12 @@
 ---
-const { data: d, slug } = Astro.props;
+const { data: d, slug, topicLabel = 'Concurrency' } = Astro.props;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const catLabel = cap(d.category.replace(/-/g, ' '));
 const eyebrow =
   d.kind === 'guide'
     ? `${catLabel} · Guide`
     : d.kind === 'topic'
-      ? `${catLabel} · Concurrency`
+      ? `${catLabel} · ${topicLabel}`
       : `${catLabel} pattern${d.gof ? ' · Gang of Four' : ''}`;
 ---
 <header class="dp-hero">

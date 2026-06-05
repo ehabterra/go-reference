@@ -1,0 +1,177 @@
+---
+title: "Big-O & Complexity"
+category: complexity
+kind: topic
+order: 1
+difficulty: "Start here"
+status: ready
+intent: "Measure cost before you optimize — Big-O for time and space, the common growth classes, and how to read the complexity of real Go code."
+related:
+  - arrays-and-slices
+  - binary-search
+  - hash-tables
+quiz:
+  - q: "What does Big-O notation describe?"
+    options:
+      - text: "How the running time grows as the input size grows, ignoring constants"
+        correct: true
+      - text: "The exact number of seconds an algorithm takes"
+        correct: false
+      - text: "The memory address of the data"
+        correct: false
+      - text: "The number of lines of code"
+        correct: false
+    explain: "Big-O describes the growth rate of time (or space) as input size n → ∞. Constant factors and lower-order terms are dropped, so O(2n + 5) is just O(n)."
+  - q: "What is the time complexity of binary search on a sorted slice of n elements?"
+    options:
+      - text: "O(log n) — it halves the search range each step"
+        correct: true
+      - text: "O(n) — it checks every element"
+        correct: false
+      - text: "O(1) — it jumps straight to the answer"
+        correct: false
+      - text: "O(n log n)"
+        correct: false
+    explain: "Each comparison discards half the remaining range, so it takes about log₂(n) steps — 10 steps for 1000 elements, 20 for a million."
+  - q: "Why is appending to a Go slice called amortized O(1)?"
+    options:
+      - text: "Most appends are O(1); the occasional reallocation that copies everything is O(n), but averaged over many appends the cost per append is constant"
+        correct: true
+      - text: "Because append never reallocates"
+        correct: false
+      - text: "Because append is always exactly one operation"
+        correct: false
+      - text: "Because the slice never grows"
+        correct: false
+    explain: "When cap is exceeded, Go allocates a bigger backing array (roughly doubling) and copies. Doubling means those O(n) copies happen rarely enough that the average over n appends is O(1)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Finding a name in a phone book two ways: flipping one page at a time from the front, or opening to the middle and deciding "earlier or later" each time. With a million names, the first way can take a million flips; the second takes about twenty. Big-O is the language for that gap — it tells you how the work *grows* as the book gets bigger, not how long one flip takes.
+</Callout>
+
+## Why growth, not a stopwatch
+
+A stopwatch measures one machine, one input, one day. **Big-O** measures how the work scales as the input size **n** grows — which is what actually decides whether your code survives 10× the data. Two rules make it portable:
+
+- **Drop constants:** `O(2n)` and `O(n)` are the same class; hardware changes the constant, not the shape.
+- **Keep the dominant term:** `O(n² + n)` is `O(n²)` — for large n, the biggest term wins.
+
+So we care about the *shape* of the curve, not its exact height.
+
+## The growth classes you'll meet
+
+<Mermaid code={`graph LR
+  A["O(1)<br/>constant"] --> B["O(log n)<br/>logarithmic"] --> C["O(n)<br/>linear"] --> D["O(n log n)<br/>linearithmic"] --> E["O(n²)<br/>quadratic"] --> F["O(2ⁿ)<br/>exponential"]
+  classDef good fill:#0f2a1a,stroke:#22c55e,color:#d7ffe9;
+  classDef bad fill:#2a0f17,stroke:#f43f5e,color:#ffd7e0;
+  class A,B good;
+  class E,F bad;`} />
+
+| Class | Name | Example in Go | n=1,000 |
+|---|---|---|---|
+| O(1) | constant | `m[key]`, `s[i]`, `len(s)` | 1 |
+| O(log n) | logarithmic | binary search, balanced-tree lookup | ~10 |
+| O(n) | linear | one loop over a slice | 1,000 |
+| O(n log n) | linearithmic | `sort.Slice`, merge sort | ~10,000 |
+| O(n²) | quadratic | nested loop over the same slice | 1,000,000 |
+| O(2ⁿ) | exponential | naive recursive subsets/Fibonacci | astronomically large |
+
+## Reading it off real code
+
+Count how many times the work in the innermost statement runs as a function of n:
+
+```go
+// O(n) — the loop body runs once per element
+func sum(a []int) int {
+	total := 0
+	for _, v := range a { // n iterations
+		total += v
+	}
+	return total
+}
+
+// O(n²) — a loop inside a loop over the same input
+func hasDuplicate(a []int) bool {
+	for i := range a { // n
+		for j := i + 1; j < len(a); j++ { // n
+			if a[i] == a[j] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// O(log n) — the range halves every step
+func countHalvings(n int) int {
+	steps := 0
+	for n > 1 {
+		n /= 2 // discard half
+		steps++
+	}
+	return steps
+}
+```
+
+The same `hasDuplicate` becomes **O(n)** with a hash set — trading O(n) space to drop a whole factor of n off the time. That trade is the heart of most optimization.
+
+## See the gap
+
+The same task — find `999` in a sorted slice of 1,000 — scanned linearly vs. halved. Run it:
+
+<Playground client:visible title="complexity.go" code={`package main
+
+import "fmt"
+
+// O(n): check every element until found.
+func linearSearch(a []int, target int) (idx, steps int) {
+	for i, v := range a {
+		steps++
+		if v == target {
+			return i, steps
+		}
+	}
+	return -1, steps
+}
+
+// O(log n): halve the range each step (input must be sorted).
+func binarySearch(a []int, target int) (idx, steps int) {
+	lo, hi := 0, len(a)-1
+	for lo <= hi {
+		steps++
+		mid := lo + (hi-lo)/2
+		switch {
+		case a[mid] == target:
+			return mid, steps
+		case a[mid] < target:
+			lo = mid + 1
+		default:
+			hi = mid - 1
+		}
+	}
+	return -1, steps
+}
+
+func main() {
+	a := make([]int, 1000)
+	for i := range a {
+		a[i] = i // sorted 0..999
+	}
+	_, ls := linearSearch(a, 999)
+	_, bs := binarySearch(a, 999)
+	fmt.Printf("n=%d  →  linear: %d steps,  binary: %d steps\n", len(a), ls, bs)
+}`} />
+
+## Space complexity counts too
+
+The same growth classes describe **extra memory**. Reversing a slice in place is O(1) space; building a new reversed copy is O(n). Recursion adds O(depth) for the call stack — a recursion n deep costs O(n) space even if it returns one number.
+
+<Callout type="gotcha" title="⚠️ Worst, average, and amortized aren't the same">
+A hash-map lookup is **average** O(1) but **worst-case** O(n) when everything collides. A slice `append` is **amortized** O(1) — most are instant, but the one that reallocates copies all n elements. State *which* you mean. And remember Big-O hides constants: an O(n) pass with a huge constant can lose to an O(n log n) one on realistic sizes.
+</Callout>
+
+Next: the structure those costs live on — [arrays and slices](/dsa/arrays-and-slices/).

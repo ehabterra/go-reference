@@ -1,0 +1,171 @@
+---
+title: "Hash Tables"
+category: linear
+kind: topic
+order: 4
+difficulty: "Beginner"
+status: ready
+intent: "Average O(1) lookup via hashing — how Go's built-in map works, collisions and load factor, the comma-ok idiom, and the ordering and nil-map gotchas."
+related:
+  - arrays-and-slices
+  - big-o
+  - stacks-and-queues
+quiz:
+  - q: "What is the average-case cost of a map lookup, and why only average?"
+    options:
+      - text: "O(1) average; worst case O(n) if many keys hash to the same bucket"
+        correct: true
+      - text: "O(log n) always"
+        correct: false
+      - text: "O(1) always, with no worst case"
+        correct: false
+      - text: "O(n) always"
+        correct: false
+    explain: "Hashing sends a key straight to a bucket — O(1) on average. If a bad hash or adversarial keys pile everything into one bucket, lookups degrade toward scanning a list: O(n)."
+  - q: "What does the comma-ok form `v, ok := m[key]` tell you that `v := m[key]` cannot?"
+    options:
+      - text: "Whether the key was actually present, vs. absent and returning the zero value"
+        correct: true
+      - text: "The bucket index of the key"
+        correct: false
+      - text: "Whether the map is sorted"
+        correct: false
+      - text: "The capacity of the map"
+        correct: false
+    explain: "A missing key yields the value type's zero value, so `m[\"x\"]` returning 0 is ambiguous. `ok` is a bool that's true only if the key exists."
+  - q: "What happens if you write to a nil map?"
+    options:
+      - text: "It panics — you must initialize with make or a literal first"
+        correct: true
+      - text: "It silently creates the map"
+        correct: false
+      - text: "It returns an error"
+        correct: false
+      - text: "Nothing; the write is ignored"
+        correct: false
+    explain: "Reading a nil map is fine (you get zero values), but writing panics. Initialize with make(map[K]V) or a map literal before inserting."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧥 Analogy">
+A coat check turns a coat into a small number: you hand over your coat, a function (the attendant) computes a tag, and your coat goes on the hook with that number. To get it back, the same function recomputes the same number and walks straight to the hook — no searching the whole rack. A hash table does exactly this with keys and buckets.
+</Callout>
+
+## A key becomes a bucket
+
+A **hash function** turns a key into a number, and that number (mod the bucket count) picks a bucket. Equal keys always hash the same, so lookup recomputes the bucket and goes straight there — O(1) on average:
+
+<Mermaid code={`graph LR
+  K1["key: apple"] --> H["hash(key) % n"]
+  K2["key: grape"] --> H
+  H --> B0["bucket 0"]
+  H --> B1["bucket 1: apple → grape"]
+  H --> B2["bucket 2"]
+  H --> B3["bucket 3"]`} />
+
+When two keys land in the same bucket — a **collision** — they're chained together (Go's map handles this for you). As the **load factor** (entries per bucket) rises, Go grows the table and rehashes, keeping chains short so lookups stay near O(1).
+
+## Go's built-in map
+
+You almost never implement hashing yourself — `map[K]V` is built in. The key type must be **comparable** (no slices, maps, or functions as keys). A frequency count shows the everyday idioms:
+
+<Playground client:visible title="map.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+func main() {
+	text := "the cat sat on the mat the cat ran"
+	counts := map[string]int{}
+	for _, w := range strings.Fields(text) {
+		counts[w]++ // missing key reads as 0, so ++ just works
+	}
+
+	// comma-ok distinguishes "present" from "absent zero value"
+	if n, ok := counts["cat"]; ok {
+		fmt.Println("cat appears", n, "times")
+	}
+	delete(counts, "ran") // remove a key
+
+	// iteration order is randomized on purpose — sort keys for stable output
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("%-4s %d\n", k, counts[k])
+	}
+}`} />
+
+## Build a tiny one
+
+Implementing a small map with **separate chaining** makes the mechanism concrete — hash to a bucket, then scan that bucket's short slice:
+
+<Playground client:visible title="hashmap.go" code={`package main
+
+import "fmt"
+
+type entry struct {
+	key string
+	val int
+}
+
+type HashMap struct {
+	buckets [][]entry
+}
+
+func New(n int) *HashMap { return &HashMap{buckets: make([][]entry, n)} }
+
+// FNV-1a hash folded into a bucket index.
+func (h *HashMap) index(key string) int {
+	var sum uint32 = 2166136261
+	for i := 0; i < len(key); i++ {
+		sum ^= uint32(key[i])
+		sum *= 16777619
+	}
+	return int(sum) % len(h.buckets)
+}
+
+func (h *HashMap) Put(key string, val int) {
+	b := h.index(key)
+	for i := range h.buckets[b] {
+		if h.buckets[b][i].key == key {
+			h.buckets[b][i].val = val // update in place
+			return
+		}
+	}
+	h.buckets[b] = append(h.buckets[b], entry{key, val}) // collision → chain
+}
+
+func (h *HashMap) Get(key string) (int, bool) {
+	for _, e := range h.buckets[h.index(key)] {
+		if e.key == key {
+			return e.val, true
+		}
+	}
+	return 0, false
+}
+
+func main() {
+	m := New(4)
+	m.Put("apple", 3)
+	m.Put("banana", 5)
+	m.Put("apple", 7) // updates, doesn't duplicate
+	fmt.Println(m.Get("apple"))  // 7 true
+	fmt.Println(m.Get("cherry")) // 0 false
+	for i, b := range m.buckets {
+		fmt.Printf("bucket %d: %v\n", i, b)
+	}
+}`} />
+
+<Callout type="gotcha" title="⚠️ Three things Go's map will not do for you">
+**Order:** iteration order is deliberately randomized — never rely on it; collect and sort keys when you need determinism. **Nil writes:** reading a nil map is fine, but writing to one panics — `make` it first. **Concurrency:** a plain map is not safe for concurrent writes (Go will throw a fatal "concurrent map writes"); guard it with a [`sync.Mutex`](/concurrency/sync-package/) or use [`sync.Map`](https://pkg.go.dev/sync#Map) for the right workload.
+</Callout>
+
+With keys mastered, the next leap is ordered and hierarchical data — trees, heaps and graphs (coming next in this track).

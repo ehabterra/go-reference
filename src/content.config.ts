@@ -17,6 +17,11 @@ const refSchema = z.object({
     'building-blocks',
     'coordination',
     'runtime',
+    // data-structures-&-algorithms categories
+    'complexity',
+    'linear',
+    'trees-graphs',
+    'algorithms',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -57,4 +62,9 @@ const concurrency = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency };
+const dsa = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/dsa' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa };

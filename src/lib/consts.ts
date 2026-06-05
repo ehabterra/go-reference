@@ -64,4 +64,32 @@ export const CONCURRENCY_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Data-structures-&-algorithms categories (the journey on /dsa/). */
+export const DSA_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'complexity',
+    title: 'Complexity & Big-O',
+    blurb:
+      'How to measure cost before you optimize — Big-O for time and space, amortized analysis, and reading the complexity of real Go code.',
+  },
+  {
+    key: 'linear',
+    title: 'Linear Structures',
+    blurb:
+      'The everyday building blocks — arrays and slices, strings, linked lists, stacks, queues and hash tables — and what each operation actually costs.',
+  },
+  {
+    key: 'trees-graphs',
+    title: 'Trees & Graphs',
+    blurb:
+      'Hierarchical and networked data — binary search trees, heaps and priority queues, tries, and graph traversal with BFS, DFS and friends.',
+  },
+  {
+    key: 'algorithms',
+    title: 'Algorithms & Patterns',
+    blurb:
+      'The reusable techniques — sorting, binary search, two pointers and sliding window, recursion and backtracking, dynamic programming and greedy.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

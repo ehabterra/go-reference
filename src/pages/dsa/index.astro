@@ -1,0 +1,70 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CategorySection from '../../components/CategorySection.astro';
+import Card from '../../components/Card.astro';
+import { DSA_CATEGORIES } from '../../lib/consts';
+
+const topics = await getCollection('dsa');
+const slugs = topics.map((t) => t.id).join(',');
+const start = topics.find((t) => t.id === 'big-o');
+---
+<BaseLayout title="Data Structures & Algorithms" description="A Go-first guide to data structures and algorithms — Big-O, arrays and slices, linked lists, hash tables, trees, graphs, sorting, searching and dynamic programming, with diagrams and runnable code.">
+  <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>DSA</span></nav>
+
+  <header class="dp-hero">
+    <p class="dp-hero__eyebrow" data-i18n="dsa.eyebrow">A Go-first guide</p>
+    <h1 data-i18n="dsa.h1">Data Structures & Algorithms, in Go</h1>
+    <p class="dp-hero__lede" data-i18n-html="dsa.lede">
+      The structures and techniques every engineer leans on — built and analyzed the Go way. From
+      <code>Big-O</code> to slices, hash tables, trees, graphs and dynamic programming, each page pairs a clear
+      mental model with idiomatic Go you can <strong>run right here</strong> and the costs you should know by heart.
+    </p>
+    <div class="dp-hero__cta">
+      <a class="dp-btn dp-btn--primary" href="/dsa/big-o/" data-i18n="ui.startJourney">Start the journey →</a>
+      <a class="dp-btn dp-btn--ghost" href="#linear" data-i18n="dsa.cta.jump">Jump to the structures</a>
+    </div>
+  </header>
+
+  <div class="dp-overall">
+    <div class="dp-overall__top">
+      <strong data-i18n="dsa.progressTitle">Your DSA progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset data-i18n="ui.reset">Reset</button>
+    </div>
+    <div class="dp-progress" data-dp-progress data-slugs={slugs}>
+      <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
+      <span class="dp-progress__label"></span>
+    </div>
+    <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="dsa.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
+  </div>
+
+  {start && (
+    <Fragment>
+      <h2 class="dp-section-head" style="border:0;" data-i18n="ui.startHere">Start here</h2>
+      <div class="dp-grid">
+        <Card
+          slug={start.id}
+          category="complexity"
+          title={start.data.title}
+          intent={start.data.intent}
+          numLabel={`START · ${start.data.difficulty}`}
+          footLabel="Read first"
+          base="/dsa"
+        />
+      </div>
+    </Fragment>
+  )}
+
+  {DSA_CATEGORIES.map((c) => (
+    <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="dsa" base="/dsa" />
+  ))}
+
+  <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
+    <p class="dp-callout__title" data-i18n="dsa.go.title">🐹 Reach for the standard library first</p>
+    <p data-i18n="dsa.go.body">
+      In real Go you rarely hand-roll these — <code>slices</code>, <code>maps</code>, <code>sort</code>,
+      <code>container/heap</code> and <code>container/list</code> cover most needs. We build them from scratch
+      here so the costs and trade-offs are obvious; in production, prefer the battle-tested library version.
+    </p>
+  </div>
+</BaseLayout>

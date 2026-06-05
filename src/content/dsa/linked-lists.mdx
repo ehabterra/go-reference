@@ -1,0 +1,169 @@
+---
+title: "Linked Lists"
+category: linear
+kind: topic
+order: 2
+difficulty: "Beginner"
+status: ready
+intent: "Nodes joined by pointers — O(1) insert/delete at a known position, O(n) access; singly vs doubly linked, the reversal classic, and when a slice is the better choice."
+related:
+  - arrays-and-slices
+  - stacks-and-queues
+  - big-o
+quiz:
+  - q: "What is the cost of accessing the i-th element of a singly linked list?"
+    options:
+      - text: "O(n) — you must follow Next pointers from the head"
+        correct: true
+      - text: "O(1) — direct indexing like an array"
+        correct: false
+      - text: "O(log n)"
+        correct: false
+      - text: "O(n²)"
+        correct: false
+    explain: "Nodes are scattered in memory and reachable only through Next links, so there's no random access — finding index i means walking i hops from the head."
+  - q: "What does a linked list do in O(1) that a slice can't?"
+    options:
+      - text: "Insert or delete a node given a pointer to it, without shifting other elements"
+        correct: true
+      - text: "Access the i-th element"
+        correct: false
+      - text: "Sort its elements"
+        correct: false
+      - text: "Use less memory per element"
+        correct: false
+    explain: "Splicing a node in or out is just a couple of pointer rewrites. A slice insert/delete in the middle must shift everything after it — O(n). (But a slice usually wins overall thanks to cache locality.)"
+  - q: "In the standard reversal loop, why save `next := head.Next` before rewiring?"
+    options:
+      - text: "Setting head.Next = prev destroys the link to the rest of the list, so you must capture it first"
+        correct: true
+      - text: "To make the function recursive"
+        correct: false
+      - text: "Because Go requires it syntactically"
+        correct: false
+      - text: "To count the nodes"
+        correct: false
+    explain: "Reversal walks the list flipping each Next to point backward. Once you overwrite head.Next, the forward link is gone — so you stash next first, then advance to it."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚂 Analogy">
+A linked list is a train: each car holds cargo and a coupling to the next car. To find the 50th car you walk from the engine, car by car — there's no teleporting to the middle. But to add or remove a car, you just unclip and reclip two couplings, no matter how long the train is.
+</Callout>
+
+## A node points to the next node
+
+Each node carries a value and a pointer to the next node; the last points to `nil`. The list keeps a `Head`:
+
+<Mermaid code={`graph LR
+  H["Head"] --> A["1 • "] --> B["2 • "] --> C["3 • "] --> N["nil"]`} />
+
+```go
+type Node[T any] struct {
+	Val  T
+	Next *Node[T]
+}
+
+type List[T any] struct {
+	Head *Node[T]
+	size int
+}
+```
+
+## Prepend is O(1); access is O(n)
+
+Adding to the front is a single pointer rewrite — no shifting, no reallocation. Walking to a position is linear. Build one and print it:
+
+<Playground client:visible title="list.go" code={`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+type Node[T any] struct {
+	Val  T
+	Next *Node[T]
+}
+
+type List[T any] struct {
+	Head *Node[T]
+	size int
+}
+
+// Prepend inserts at the front in O(1).
+func (l *List[T]) Prepend(v T) {
+	l.Head = &Node[T]{Val: v, Next: l.Head}
+	l.size++
+}
+
+func (l *List[T]) String() string {
+	var b strings.Builder
+	for n := l.Head; n != nil; n = n.Next { // O(n) walk
+		fmt.Fprintf(&b, "%v -> ", n.Val)
+	}
+	b.WriteString("nil")
+	return b.String()
+}
+
+func main() {
+	l := &List[int]{}
+	for _, v := range []int{3, 2, 1} {
+		l.Prepend(v)
+	}
+	fmt.Println(l)            // 1 -> 2 -> 3 -> nil
+	fmt.Println("size:", l.size)
+}`} />
+
+## The reversal classic
+
+Reversing a list in place is the interview staple — three pointers, one pass, O(1) extra space:
+
+<Playground client:visible title="reverse.go" code={`package main
+
+import "fmt"
+
+type Node struct {
+	Val  int
+	Next *Node
+}
+
+func reverse(head *Node) *Node {
+	var prev *Node
+	for head != nil {
+		next := head.Next // 1. stash the rest of the list
+		head.Next = prev  // 2. flip this link backward
+		prev = head       // 3. prev advances
+		head = next       // 4. head advances
+	}
+	return prev // new head
+}
+
+func print(head *Node) {
+	for n := head; n != nil; n = n.Next {
+		fmt.Printf("%d -> ", n.Val)
+	}
+	fmt.Println("nil")
+}
+
+func main() {
+	// build 1 -> 2 -> 3 -> 4
+	var head *Node
+	for i := 4; i >= 1; i-- {
+		head = &Node{Val: i, Next: head}
+	}
+	print(head)
+	print(reverse(head))
+}`} />
+
+## Singly, doubly, and the standard library
+
+A **doubly** linked list adds a `Prev` pointer, so you can walk backward and delete a node in O(1) given only that node. Go ships one in [`container/list`](https://pkg.go.dev/container/list) — reach for it rather than rolling your own when you genuinely need list semantics (for example, the O(1) move-to-front in an LRU cache).
+
+<Callout type="gotcha" title="⚠️ In Go, a slice usually wins">
+Linked lists look elegant but each node is a separate heap allocation scattered across memory, so traversal thrashes the CPU cache — often **slower** than a slice even where Big-O says otherwise. Pointer chasing also pressures the GC. Reach for a linked list only when you truly need O(1) splicing at a held position (LRU, intrusive queues); otherwise a `[]T` is simpler and faster.
+</Callout>
+
+Next: two lists with a discipline — [stacks & queues](/dsa/stacks-and-queues/).

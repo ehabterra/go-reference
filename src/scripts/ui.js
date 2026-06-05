@@ -84,6 +84,7 @@ const CAT_COLOR = {
   foundations: '#f472b6', creational: '#34d399', structural: '#a78bfa', behavioral: '#fbbf24',
   concurrency: '#22d3ee', stdlib: '#60a5fa', practice: '#fb7185',
   'building-blocks': '#2dd4bf', coordination: '#fb923c', runtime: '#818cf8',
+  complexity: '#f59e0b', linear: '#22c55e', 'trees-graphs': '#8b5cf6', algorithms: '#ec4899',
 };
 
 function fuzzyScore(q, item) {

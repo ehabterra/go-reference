@@ -1,0 +1,152 @@
+---
+title: "Stacks & Queues"
+category: linear
+kind: topic
+order: 3
+difficulty: "Beginner"
+status: ready
+intent: "LIFO and FIFO with O(1) push and pop — a stack on a Go slice, the balanced-brackets classic, and the head-index trick that keeps a queue's dequeue cheap."
+related:
+  - arrays-and-slices
+  - linked-lists
+  - hash-tables
+quiz:
+  - q: "A stack is LIFO. What does that mean?"
+    options:
+      - text: "Last In, First Out — the most recently pushed item is the first popped"
+        correct: true
+      - text: "Items come out in sorted order"
+        correct: false
+      - text: "First In, First Out — like a checkout line"
+        correct: false
+      - text: "Items come out in random order"
+        correct: false
+    explain: "A stack only touches one end: push and pop both act on the top, so the last thing in is the first thing out — like a stack of plates."
+  - q: "Why is repeatedly doing `q = q[1:]` to dequeue a problem?"
+    options:
+      - text: "The head keeps advancing but the backing array is never reclaimed, so memory grows unbounded"
+        correct: true
+      - text: "It panics on the second call"
+        correct: false
+      - text: "It reverses the queue"
+        correct: false
+      - text: "It makes dequeue O(log n)"
+        correct: false
+    explain: "Re-slicing moves the start forward but keeps the whole original array alive, and earlier elements are never freed. Track a head index (and occasionally compact) or use container/list."
+  - q: "How do you implement a stack on a Go slice?"
+    options:
+      - text: "Push with append(s, x); pop with s[len(s)-1] then s = s[:len(s)-1]"
+        correct: true
+      - text: "Push with s = s[1:]; pop with append"
+        correct: false
+      - text: "You can't — slices don't support it"
+        correct: false
+      - text: "Use a map keyed by index"
+        correct: false
+    explain: "The end of a slice is the natural top: append pushes (amortized O(1)) and reslicing off the last element pops (O(1))."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🍽️ Analogy">
+A **stack** is a pile of plates: you add and take from the top, so the last plate on is the first off (LIFO). A **queue** is the line at a coffee shop: you join at the back and are served from the front, so first in is first out (FIFO). Same data, opposite discipline.
+</Callout>
+
+## Two ends, two disciplines
+
+<Mermaid code={`graph LR
+  subgraph S["Stack · LIFO"]
+    direction TB
+    S3["3  ← top: push & pop"] --> S2["2"] --> S1["1  ← bottom"]
+  end
+  subgraph Q["Queue · FIFO"]
+    direction LR
+    F["front: dequeue"] --> Q1["1"] --> Q2["2"] --> Q3["3  ← rear: enqueue"]
+  end`} />
+
+## A stack is just a slice
+
+The end of a slice is the top. `append` pushes; reslicing off the last element pops — both O(1). The classic use is matching brackets:
+
+<Playground client:visible title="stack.go" code={`package main
+
+import "fmt"
+
+// balanced reports whether every bracket is correctly closed and nested.
+func balanced(s string) bool {
+	closes := map[rune]rune{')': '(', ']': '[', '}': '{'}
+	var stack []rune
+	for _, c := range s {
+		switch c {
+		case '(', '[', '{':
+			stack = append(stack, c) // push the opener
+		case ')', ']', '}':
+			// must match the most recent opener
+			if len(stack) == 0 || stack[len(stack)-1] != closes[c] {
+				return false
+			}
+			stack = stack[:len(stack)-1] // pop
+		}
+	}
+	return len(stack) == 0 // nothing left unclosed
+}
+
+func main() {
+	for _, s := range []string{"({[]})", "(]", "((()))", "(()"} {
+		fmt.Printf("%-8s -> %v\n", s, balanced(s))
+	}
+}`} />
+
+## A queue needs more care
+
+The trap: `Dequeue` as `q = q[1:]` looks O(1), but the head drifts forward while the backing array — and everything before the head — is never reclaimed. Keep a **head index** and compact occasionally:
+
+<Playground client:visible title="queue.go" code={`package main
+
+import "fmt"
+
+// Queue is FIFO. A head index makes Dequeue O(1) amortized without
+// leaking the front of the backing array.
+type Queue[T any] struct {
+	buf  []T
+	head int
+}
+
+func (q *Queue[T]) Enqueue(v T) { q.buf = append(q.buf, v) }
+
+func (q *Queue[T]) Dequeue() (T, bool) {
+	var zero T
+	if q.head >= len(q.buf) {
+		return zero, false // empty
+	}
+	v := q.buf[q.head]
+	q.buf[q.head] = zero // drop the reference so the GC can collect it
+	q.head++
+	if q.head > 16 && q.head*2 > len(q.buf) {
+		q.buf = append(q.buf[:0], q.buf[q.head:]...) // reclaim space
+		q.head = 0
+	}
+	return v, true
+}
+
+func (q *Queue[T]) Len() int { return len(q.buf) - q.head }
+
+func main() {
+	q := &Queue[string]{}
+	for _, s := range []string{"a", "b", "c"} {
+		q.Enqueue(s)
+	}
+	for q.Len() > 0 {
+		v, _ := q.Dequeue()
+		fmt.Println("served:", v)
+	}
+}`} />
+
+For a double-ended queue (push/pop at both ends) reach for [`container/list`](https://pkg.go.dev/container/list), or a ring buffer when the maximum size is known.
+
+<Callout type="tip" title="🐹 Channels are Go's concurrent queue">
+When producers and consumers run in different goroutines, you usually don't build a queue at all — a buffered **channel** *is* a thread-safe FIFO with blocking and backpressure built in. See [worker pool](/patterns/worker-pool/) and [pipeline](/patterns/pipeline/).
+</Callout>
+
+Next: keys instead of positions — [hash tables](/dsa/hash-tables/).

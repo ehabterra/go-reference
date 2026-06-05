@@ -1,0 +1,142 @@
+---
+title: "Arrays & Slices"
+category: linear
+kind: topic
+order: 1
+difficulty: "Beginner"
+status: ready
+intent: "A Go slice is a view over a backing array — how the (ptr, len, cap) header, append, growth, copy and re-slicing actually behave, and the aliasing traps."
+related:
+  - big-o
+  - linked-lists
+  - hash-tables
+quiz:
+  - q: "What are the three fields of a Go slice header?"
+    options:
+      - text: "A pointer to the backing array, a length, and a capacity"
+        correct: true
+      - text: "A start index, an end index, and a step"
+        correct: false
+      - text: "The elements themselves, copied by value"
+        correct: false
+      - text: "A hash, a length, and a pointer"
+        correct: false
+    explain: "A slice is a small struct: a pointer to an element in a backing array, len (elements in view) and cap (elements from the pointer to the end of the array). Copying a slice copies the header, not the data."
+  - q: "Two slices share a backing array. You write through one of them. What happens?"
+    options:
+      - text: "The other slice sees the change too — they alias the same memory"
+        correct: true
+      - text: "Nothing; slices always copy on write"
+        correct: false
+      - text: "The program panics"
+        correct: false
+      - text: "Only happens for arrays, never slices"
+        correct: false
+    explain: "Re-slicing (b := a[1:3]) does not copy elements — both headers point into the same array, so a write through one is visible through the other. Use copy() or a full-slice expression to isolate."
+  - q: "Why is `append` amortized O(1) rather than always O(1)?"
+    options:
+      - text: "When capacity runs out it allocates a larger array and copies everything — O(n) — but growth-by-doubling makes that rare"
+        correct: true
+      - text: "Because append never grows the slice"
+        correct: false
+      - text: "Because append always allocates a new array"
+        correct: false
+      - text: "Because slices have unlimited capacity"
+        correct: false
+    explain: "Within spare capacity append is O(1). When cap is exceeded Go allocates a bigger array (≈2× for small slices) and copies the old elements; doubling spreads that O(n) cost so the average stays O(1)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔖 Analogy">
+A **backing array** is a fixed bookshelf with a set number of slots. A **slice** is a bookmark that says "start at slot 1, I'm looking at 3 books, and there's room for 5 before the shelf ends." Move or widen the bookmark and you're still pointing at the same shelf — which is exactly why two bookmarks over one shelf can surprise you.
+</Callout>
+
+## Array vs slice
+
+An **array** has a fixed size baked into its type — `[3]int` and `[4]int` are different types — so you rarely use them directly. A **slice** (`[]int`) is a flexible, growable view over an array Go manages for you. It's the workhorse you'll reach for 99% of the time.
+
+```go
+var arr [3]int        // fixed: exactly 3 ints, size is part of the type
+s := []int{10, 20, 30} // slice: grows with append
+s = append(s, 40)
+```
+
+## The slice header
+
+A slice value is a tiny three-field struct. It does **not** contain the elements — it points at them:
+
+<Mermaid code={`graph LR
+  subgraph SH["slice header (s := arr[1:4])"]
+    direction TB
+    P["ptr →"]
+    L["len = 3"]
+    C["cap = 4"]
+  end
+  P --> B1
+  subgraph BACK["backing array (length 5)"]
+    direction LR
+    B0["[0]"]
+    B1["[1]"]
+    B2["[2]"]
+    B3["[3]"]
+    B4["[4] spare"]
+  end`} />
+
+`len(s)` is how many elements you can see; `cap(s)` is how many exist from the pointer to the end of the backing array. Copying a slice (passing it to a function, assigning it) copies just those three fields — both copies share the same elements.
+
+## append and growth
+
+`append` writes into spare capacity when there is some; otherwise it allocates a **bigger backing array**, copies, and returns a slice pointing at the new one. Watch the capacity jump:
+
+<Playground client:visible title="growth.go" code={`package main
+
+import "fmt"
+
+func main() {
+	s := []int{}
+	prevCap := -1
+	for i := 0; i < 17; i++ {
+		s = append(s, i)
+		if cap(s) != prevCap {
+			fmt.Printf("len=%2d  cap=%2d   <- reallocated & copied\n", len(s), cap(s))
+			prevCap = cap(s)
+		}
+	}
+	fmt.Println("preallocate to skip the copies: make([]int, 0, 17)")
+}`} />
+
+If you know the final size, `make([]int, 0, n)` reserves capacity up front and avoids every reallocation.
+
+## The aliasing trap
+
+Because re-slicing shares the backing array, a write through one slice is visible through another — and `append` can write through too, if there's spare capacity:
+
+<Playground client:visible title="aliasing.go" code={`package main
+
+import "fmt"
+
+func main() {
+	base := []int{1, 2, 3, 4, 5}
+	view := base[1:3] // len 2, cap 4 — shares base's array
+
+	view[0] = 99
+	fmt.Println("base:", base) // [1 99 3 4 5] — base changed too!
+
+	// append has spare capacity, so it overwrites base[3] in place:
+	view = append(view, 100)
+	fmt.Println("base after append:", base) // [1 99 3 100 5]
+
+	// To isolate, copy into a fresh slice:
+	safe := make([]int, len(view))
+	copy(safe, view)
+	safe[0] = -1
+	fmt.Println("base untouched:", base, " safe:", safe)
+}`} />
+
+<Callout type="gotcha" title="⚠️ Cut capacity with a full-slice expression">
+To hand out a sub-slice that *cannot* clobber the parent via append, use the three-index form `s[low:high:max]`, which caps capacity at `max-low`. For example `base[1:3:3]` has len 2 **and** cap 2, so the next append is forced to allocate a fresh array instead of writing into `base`. Also: re-slicing keeps the whole backing array alive, so slicing one element out of a huge slice can leak memory — `copy` it out if you need only the small piece.
+</Callout>
+
+Next: when the data isn't contiguous — [linked lists](/dsa/linked-lists/).
