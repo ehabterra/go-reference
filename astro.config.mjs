@@ -6,7 +6,7 @@ import vercel from '@astrojs/vercel';
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://design-patterns-go.vercel.app',
+  site: 'https://go-reference.vercel.app',
   integrations: [mdx(), react()],
   adapter: vercel(),
   markdown: {

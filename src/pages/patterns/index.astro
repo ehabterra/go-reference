@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
-import PatternCard from '../../components/PatternCard.astro';
+import Card from '../../components/Card.astro';
 import { CATEGORIES } from '../../lib/consts';
 
 const all = await getCollection('patterns');
@@ -80,7 +80,7 @@ const cheat = byId('cheatsheet');
     <Fragment>
       <h2 class="dp-section-head" style="border:0;">Start here</h2>
       <div class="dp-grid">
-        <PatternCard
+        <Card
           slug={foundations.id}
           category="foundations"
           title={foundations.data.title}
@@ -99,7 +99,7 @@ const cheat = byId('cheatsheet');
   <h2 class="dp-section-head" style="border:0;">Go &amp; the standard library</h2>
   <div class="dp-grid">
     {stdlib && (
-      <PatternCard
+      <Card
         slug={stdlib.id}
         category="stdlib"
         title={stdlib.data.title}
@@ -109,7 +109,7 @@ const cheat = byId('cheatsheet');
       />
     )}
     {cheat && (
-      <PatternCard
+      <Card
         slug={cheat.id}
         category="practice"
         title={cheat.data.title}

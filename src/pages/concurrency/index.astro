@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
-import PatternCard from '../../components/PatternCard.astro';
+import Card from '../../components/Card.astro';
 import { CONCURRENCY_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('concurrency');
@@ -42,7 +42,7 @@ const start = topics.find((t) => t.id === 'concurrency-vs-parallelism');
     <Fragment>
       <h2 class="dp-section-head" style="border:0;">Start here</h2>
       <div class="dp-grid">
-        <PatternCard
+        <Card
           slug={start.id}
           category="foundations"
           title={start.data.title}

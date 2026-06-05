@@ -1,6 +1,6 @@
 ---
 import { getCollection, render } from 'astro:content';
-import PatternLayout from '../../layouts/PatternLayout.astro';
+import PageLayout from '../../layouts/PageLayout.astro';
 
 export async function getStaticPaths() {
   const items = await getCollection('patterns');
@@ -13,6 +13,6 @@ export async function getStaticPaths() {
 const { entry } = Astro.props;
 const { Content } = await render(entry);
 ---
-<PatternLayout entry={entry}>
+<PageLayout entry={entry}>
   <Content />
-</PatternLayout>
+</PageLayout>

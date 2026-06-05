@@ -1,9 +1,9 @@
 {
-  "name": "design-patterns-go",
+  "name": "go-reference",
   "type": "module",
   "version": "0.1.0",
   "private": true,
-  "description": "A visual, Go-first guide to design patterns.",
+  "description": "The Go Reference — a visual, Go-first guide to design patterns and concurrency.",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",

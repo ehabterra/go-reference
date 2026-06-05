@@ -1,6 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
-import PatternCard from './PatternCard.astro';
+import Card from './Card.astro';
 
 interface Props {
   cat: string;
@@ -33,7 +33,7 @@ const slugs = items.map((p) => p.id).join(',');
   ) : (
     <div class="dp-grid">
       {items.map((p) => (
-        <PatternCard
+        <Card
           slug={p.id}
           category={p.data.category}
           title={p.data.title}

@@ -64,4 +64,4 @@ export const CONCURRENCY_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
-export const REPO_URL = 'https://github.com/ehabterra/design-patterns';
+export const REPO_URL = 'https://github.com/ehabterra/go-reference';
