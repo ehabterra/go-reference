@@ -20,5 +20,8 @@
     "mermaid": "^11.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "cheerio": "^1.2.0"
   }
 }

@@ -194,26 +194,52 @@ function initSearch() {
 }
 
 /* ---------- language toggle (EN / عربي) — language-file driven ---------- */
+// Collect the translatable prose blocks of a content page, in document order.
+// MUST stay identical to the build-time extractor (scripts/extract-i18n.mjs).
+function i18nBlocks() {
+  const body = document.querySelector('.dp-article__body');
+  if (!body) return [];
+  return Array.from(body.querySelectorAll('h2,h3,h4,p,li,.dp-opt')).filter(
+    (el) =>
+      !el.closest('pre, .dp-mermaid, .dp-pg, .dp-grid, .dp-pager, table') &&
+      !el.classList.contains('dp-card__intent') &&
+      (el.textContent || '').trim().length > 0,
+  );
+}
+
 function initLang() {
   const btn = document.querySelector('[data-dp-lang]');
   const root = document.documentElement;
   let dict = {};
   const src = document.getElementById('dp-i18n');
   if (src) { try { dict = JSON.parse(src.textContent || '{}'); } catch {} }
+  let content = [];
+  const csrc = document.getElementById('dp-content-ar');
+  if (csrc) { try { content = JSON.parse(csrc.textContent || '[]'); } catch {} }
+  let blocks = null;
 
   function apply(lang) {
+    const ar = lang === 'ar';
     document.querySelectorAll('[data-i18n]').forEach((n) => {
       if (n.dataset.en == null) n.dataset.en = n.textContent;
-      const ar = dict[n.getAttribute('data-i18n')];
-      n.textContent = lang === 'ar' && ar ? ar : n.dataset.en;
+      const t = dict[n.getAttribute('data-i18n')];
+      n.textContent = ar && t ? t : n.dataset.en;
     });
     document.querySelectorAll('[data-i18n-html]').forEach((n) => {
       if (n.dataset.enHtml == null) n.dataset.enHtml = n.innerHTML;
-      const ar = dict[n.getAttribute('data-i18n-html')];
-      n.innerHTML = lang === 'ar' && ar ? ar : n.dataset.enHtml;
+      const t = dict[n.getAttribute('data-i18n-html')];
+      n.innerHTML = ar && t ? t : n.dataset.enHtml;
     });
+    if (content.length) {
+      if (!blocks) blocks = i18nBlocks();
+      blocks.forEach((el, i) => {
+        if (el.dataset.enHtml == null) el.dataset.enHtml = el.innerHTML;
+        const t = content[i];
+        el.innerHTML = ar && t ? t : el.dataset.enHtml;
+      });
+    }
     root.dataset.lang = lang;
-    if (btn) btn.textContent = lang === 'ar' ? 'EN' : 'عربي';
+    if (btn) btn.textContent = ar ? 'EN' : 'عربي';
   }
 
   apply(root.dataset.lang === 'ar' ? 'ar' : 'en'); // honor the persisted choice on load

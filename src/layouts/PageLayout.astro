@@ -18,6 +18,10 @@ const {
 const d = entry.data;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const catLabel = cap(d.category.replace(/-/g, ' '));
+
+// Per-page Arabic content (ordered to match the runtime block collector).
+const contentModules = import.meta.glob('../i18n/content/*.json', { eager: true });
+const contentAr = (contentModules[`../i18n/content/${entry.id}.json`] as any)?.default ?? [];
 ---
 <BaseLayout title={d.title} description={d.intent}>
   <article>
@@ -50,5 +54,6 @@ const catLabel = cap(d.category.replace(/-/g, ' '));
     </div>
   </article>
 
+  <script type="application/json" id="dp-content-ar" set:html={JSON.stringify(contentAr)}></script>
   <script>import '../scripts/mermaid.js';</script>
 </BaseLayout>
