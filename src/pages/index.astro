@@ -14,9 +14,9 @@ const allSlugs = [...patterns, ...concurrency].map((p) => p.id).join(',');
 ---
 <BaseLayout>
   <header class="dp-hero">
-    <p class="dp-hero__eyebrow">A visual, Go-first reference</p>
+    <p class="dp-hero__eyebrow" data-i18n="home.eyebrow">A visual, Go-first reference</p>
     <h1>The Go Reference</h1>
-    <p class="dp-hero__lede">
+    <p class="dp-hero__lede" data-i18n-html="home.lede">
       Deeply learn the things that make Go engineers great — design patterns and concurrency — with clear
       diagrams, idiomatic Go you can <strong>run right here</strong>, quizzes, and progress that sticks.
       Pick a track and start.
@@ -29,65 +29,65 @@ const allSlugs = [...patterns, ...concurrency].map((p) => p.id).join(',');
 
   <div class="dp-overall">
     <div class="dp-overall__top">
-      <strong>Your overall progress</strong>
-      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset>Reset</button>
+      <strong data-i18n="home.progressTitle">Your overall progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset data-i18n="home.reset">Reset</button>
     </div>
     <div class="dp-progress" data-dp-progress data-slugs={allSlugs}>
       <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
       <span class="dp-progress__label"></span>
     </div>
-    <p class="dp-kicker" style="margin:.7rem 0 0;">
+    <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="home.progressNote">
       Tracked across both tracks — mark any page “learned” and this fills up. Saved in your browser.
     </p>
   </div>
 
-  <h2 class="dp-section-head" style="border:0;margin-top:2.4rem;">Pick a track</h2>
+  <h2 class="dp-section-head" style="border:0;margin-top:2.4rem;" data-i18n="home.pickTrack">Pick a track</h2>
   <div class="dp-topics">
     <a class="dp-topic" data-cat="behavioral" href="/patterns/">
       <div class="dp-topic__icon">🧩</div>
       <h3>Design Patterns</h3>
-      <p>All {gofCount} Gang-of-Four patterns plus {concPatternCount} Go concurrency patterns — creational, structural, behavioral — each Go-first with diagrams, runnable code and trade-offs.</p>
-      <span class="dp-topic__stat">{gofCount + concPatternCount} patterns · diagrams · playground · quizzes</span>
-      <span class="dp-topic__go">Enter →</span>
+      <p data-i18n="home.patterns.desc">All {gofCount} Gang-of-Four patterns plus {concPatternCount} Go concurrency patterns — creational, structural, behavioral — each Go-first with diagrams, runnable code and trade-offs.</p>
+      <span class="dp-topic__stat">{gofCount + concPatternCount} <span data-i18n="home.patterns.stat">patterns · diagrams · playground · quizzes</span></span>
+      <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
     </a>
 
     <a class="dp-topic" data-cat="building-blocks" href="/concurrency/">
       <div class="dp-topic__icon">🔀</div>
       <h3>Concurrency</h3>
-      <p>A deep, practical guide to Go concurrency — races, goroutines, channels, <code>select</code>, the <code>sync</code> package, the memory model, context, and the runtime scheduler.</p>
-      <span class="dp-topic__stat">{concTopicCount} topics · foundations → runtime · runnable</span>
-      <span class="dp-topic__go">Enter →</span>
+      <p data-i18n-html="home.concurrency.desc">A deep, practical guide to Go concurrency — races, goroutines, channels, <code>select</code>, the <code>sync</code> package, the memory model, context, and the runtime scheduler.</p>
+      <span class="dp-topic__stat">{concTopicCount} <span data-i18n="home.concurrency.stat">topics · foundations → runtime · runnable</span></span>
+      <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
     </a>
 
     <div class="dp-topic dp-topic--soon" data-cat="stdlib">
       <div class="dp-topic__icon">🧪</div>
       <h3>Data Structures &amp; Algorithms</h3>
-      <p>Go-first DSA with complexity analysis and runnable implementations.</p>
-      <span class="dp-topic__stat">Coming soon</span>
+      <p data-i18n="home.dsa.desc">Go-first DSA with complexity analysis and runnable implementations.</p>
+      <span class="dp-topic__stat" data-i18n="home.comingSoon">Coming soon</span>
     </div>
   </div>
 
-  <h2 class="dp-section-head" style="border:0;margin-top:2.8rem;">How it works</h2>
+  <h2 class="dp-section-head" style="border:0;margin-top:2.8rem;" data-i18n="home.how">How it works</h2>
   <div class="dp-features">
     <div class="dp-feature">
       <div class="dp-feature__icon">📊</div>
-      <h3>See it, then read it</h3>
-      <p>Mermaid diagrams make the relationships obvious before you read a line of code.</p>
+      <h3 data-i18n="home.f1.t">See it, then read it</h3>
+      <p data-i18n="home.f1.d">Mermaid diagrams make the relationships obvious before you read a line of code.</p>
     </div>
     <div class="dp-feature">
       <div class="dp-feature__icon">▶️</div>
-      <h3>Run it in place</h3>
-      <p>Every example is an editable Go playground that compiles and runs against the real Go toolchain.</p>
+      <h3 data-i18n="home.f2.t">Run it in place</h3>
+      <p data-i18n="home.f2.d">Every example is an editable Go playground that compiles and runs against the real Go toolchain.</p>
     </div>
     <div class="dp-feature">
       <div class="dp-feature__icon">🐹</div>
-      <h3>Go-first, not translated</h3>
-      <p>Idiomatic Go throughout — interfaces, goroutines and channels, not Java in disguise.</p>
+      <h3 data-i18n="home.f3.t">Go-first, not translated</h3>
+      <p data-i18n="home.f3.d">Idiomatic Go throughout — interfaces, goroutines and channels, not Java in disguise.</p>
     </div>
     <div class="dp-feature">
       <div class="dp-feature__icon">🧠</div>
-      <h3>Made to remember</h3>
-      <p>A quiz on every page and progress tracking turn passive reading into a journey you finish.</p>
+      <h3 data-i18n="home.f4.t">Made to remember</h3>
+      <p data-i18n="home.f4.d">A quiz on every page and progress tracking turn passive reading into a journey you finish.</p>
     </div>
   </div>
 </BaseLayout>

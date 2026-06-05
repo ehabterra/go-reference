@@ -543,3 +543,9 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 [data-lang="ar"] .dp-prose h3 .tr-ar { display: inline; }
 [data-lang="ar"] .dp-opt { text-align: right; }
 [data-lang="ar"] .dp-q__prompt, [data-lang="ar"] .dp-q__explain { text-align: right; }
+
+/* inline UI translations (<T> component) */
+.tri-ar { display: none; }
+[data-lang="ar"] .tri-en { display: none; }
+[data-lang="ar"] .tri-ar { display: inline; }
+.tri-ar { font-family: var(--font-sans); }

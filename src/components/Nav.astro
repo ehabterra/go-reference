@@ -9,8 +9,8 @@ import { REPO_URL } from '../lib/consts';
     </a>
 
     <nav class="dp-nav__links" id="dp-nav-links">
-      <a href="/patterns/">Design Patterns</a>
-      <a href="/concurrency/">Concurrency</a>
+      <a href="/patterns/" data-i18n="nav.patterns">Design Patterns</a>
+      <a href="/concurrency/" data-i18n="nav.concurrency">Concurrency</a>
       <a href={REPO_URL} target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
 
@@ -18,7 +18,7 @@ import { REPO_URL } from '../lib/consts';
       <button class="dp-lang-btn" data-dp-lang aria-label="Switch language / تبديل اللغة">عربي</button>
       <button class="dp-search-btn" data-dp-search aria-label="Search (Cmd K)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <span class="dp-search-btn__label">Search</span>
+        <span class="dp-search-btn__label" data-i18n="nav.search">Search</span>
         <kbd>⌘K</kbd>
       </button>
       <button class="dp-menu-btn" data-dp-menu aria-label="Menu" aria-expanded="false">

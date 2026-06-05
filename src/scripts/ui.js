@@ -193,18 +193,34 @@ function initSearch() {
   });
 }
 
-/* ---------- language toggle (EN / عربي) ---------- */
+/* ---------- language toggle (EN / عربي) — language-file driven ---------- */
 function initLang() {
   const btn = document.querySelector('[data-dp-lang]');
   const root = document.documentElement;
-  const label = () => { if (btn) btn.textContent = root.dataset.lang === 'ar' ? 'EN' : 'عربي'; };
-  label();
-  if (!btn) return;
-  btn.addEventListener('click', () => {
+  let dict = {};
+  const src = document.getElementById('dp-i18n');
+  if (src) { try { dict = JSON.parse(src.textContent || '{}'); } catch {} }
+
+  function apply(lang) {
+    document.querySelectorAll('[data-i18n]').forEach((n) => {
+      if (n.dataset.en == null) n.dataset.en = n.textContent;
+      const ar = dict[n.getAttribute('data-i18n')];
+      n.textContent = lang === 'ar' && ar ? ar : n.dataset.en;
+    });
+    document.querySelectorAll('[data-i18n-html]').forEach((n) => {
+      if (n.dataset.enHtml == null) n.dataset.enHtml = n.innerHTML;
+      const ar = dict[n.getAttribute('data-i18n-html')];
+      n.innerHTML = lang === 'ar' && ar ? ar : n.dataset.enHtml;
+    });
+    root.dataset.lang = lang;
+    if (btn) btn.textContent = lang === 'ar' ? 'EN' : 'عربي';
+  }
+
+  apply(root.dataset.lang === 'ar' ? 'ar' : 'en'); // honor the persisted choice on load
+  if (btn) btn.addEventListener('click', () => {
     const next = root.dataset.lang === 'ar' ? 'en' : 'ar';
-    root.dataset.lang = next;
     try { localStorage.setItem('dp-lang', next); } catch {}
-    label();
+    apply(next);
   });
 }
 
