@@ -1,0 +1,25 @@
+---
+import { getCollection, render } from 'astro:content';
+import PatternLayout from '../../layouts/PatternLayout.astro';
+
+export async function getStaticPaths() {
+  const items = await getCollection('concurrency');
+  return items.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<PatternLayout
+  entry={entry}
+  collection="concurrency"
+  base="/concurrency"
+  sectionTitle="Concurrency"
+  sectionHref="/concurrency/"
+  relatedHeading="Related topics"
+>
+  <Content />
+</PatternLayout>

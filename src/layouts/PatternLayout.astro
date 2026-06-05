@@ -7,14 +7,22 @@ import Related from '../components/Related.astro';
 import QuizBlock from '../components/QuizBlock.astro';
 import Pager from '../components/Pager.astro';
 
-const { entry } = Astro.props;
+const {
+  entry,
+  collection = 'patterns',
+  base = '/patterns',
+  sectionTitle = 'Design Patterns',
+  sectionHref = '/patterns/',
+  relatedHeading = 'Related patterns',
+} = Astro.props;
 const d = entry.data;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const catLabel = cap(d.category.replace(/-/g, ' '));
 ---
 <BaseLayout title={d.title} description={d.intent}>
   <article>
     <nav class="dp-breadcrumb dp-kicker">
-      <a href="/">Design Patterns</a> › <span>{cap(d.category)}</span> › <span>{d.title}</span>
+      <a href={sectionHref}>{sectionTitle}</a> › <span>{catLabel}</span> › <span>{d.title}</span>
     </nav>
 
     <PatternHeader data={d} />
@@ -24,9 +32,9 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
         <slot />
         {d.status !== 'ready' && <DraftScaffold data={d} />}
         <Tradeoffs data={d} />
-        <Related related={d.related} />
+        <Related related={d.related} collection={collection} base={base} heading={relatedHeading} />
         {d.quiz.length > 0 && <QuizBlock quiz={d.quiz} />}
-        <Pager slug={entry.id} />
+        <Pager slug={entry.id} collection={collection} base={base} />
       </div>
 
       <aside class="dp-article__toc" aria-label="On this page">

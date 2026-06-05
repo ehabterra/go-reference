@@ -1,0 +1,120 @@
+---
+title: "Deadlock, Livelock & Starvation"
+category: foundations
+kind: topic
+order: 3
+difficulty: "Intermediate"
+status: ready
+intent: "The three ways concurrent programs stop making progress — the Coffman conditions behind deadlock, and how Go detects the simple cases."
+related:
+  - race-conditions
+  - sync-package
+  - channels
+quiz:
+  - q: "Which is NOT one of the four Coffman conditions for deadlock?"
+    options:
+      - text: "High CPU usage"
+        correct: true
+      - text: "Mutual exclusion"
+        correct: false
+      - text: "Hold and wait"
+        correct: false
+      - text: "Circular wait"
+        correct: false
+    explain: "The four are mutual exclusion, hold-and-wait, no preemption, and circular wait. Break any one and deadlock is impossible. CPU usage is unrelated."
+  - q: "What's the most reliable fix for lock-ordering deadlock?"
+    options:
+      - text: "Always acquire multiple locks in the same global order"
+        correct: true
+      - text: "Add time.Sleep between Lock calls"
+        correct: false
+      - text: "Use more goroutines"
+        correct: false
+      - text: "Increase GOMAXPROCS"
+        correct: false
+    explain: "Breaking 'circular wait' by acquiring locks in a consistent order means two goroutines can never each hold what the other needs."
+  - q: "How does livelock differ from deadlock?"
+    options:
+      - text: "In livelock goroutines are actively running but never make progress; in deadlock they're blocked"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Livelock only happens with channels"
+        correct: false
+      - text: "Deadlock uses more CPU"
+        correct: false
+    explain: "Deadlocked goroutines are stuck waiting. Livelocked ones keep doing work (e.g., politely backing off in sync) yet make no forward progress — like two people mirroring each other in a hallway."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚶 Analogy">
+**Deadlock:** two cars meet on a one-lane bridge, each refusing to back up — frozen forever. **Livelock:** both drivers keep swerving to the same side in perfect sync, moving constantly but never passing. **Starvation:** one driver is so aggressive that the polite one never gets a turn.
+</Callout>
+
+## Deadlock — the Coffman conditions
+
+A deadlock needs **all four** of these at once. Break any one and it can't happen:
+
+1. **Mutual exclusion** — a resource is held exclusively.
+2. **Hold and wait** — a goroutine holds one resource while waiting for another.
+3. **No preemption** — resources are released only voluntarily.
+4. **Circular wait** — a cycle of goroutines each waiting on the next.
+
+<Mermaid code={`graph LR
+  G1["Goroutine 1<br/>holds Lock A"] -->|wants Lock B| G2["Goroutine 2<br/>holds Lock B"]
+  G2 -->|wants Lock A| G1`} />
+
+The classic trigger is **inconsistent lock order**:
+
+```go
+// Goroutine 1: locks A then B
+// Goroutine 2: locks B then A   ← circular wait → deadlock
+go func() { a.Lock(); b.Lock(); /* ... */ }()
+go func() { b.Lock(); a.Lock(); /* ... */ }()
+```
+
+**Fix:** always acquire locks in the **same global order** (e.g. by address or ID), so a cycle is impossible.
+
+## Go detects the simple cases
+
+If *every* goroutine is blocked, the runtime aborts with a clear message instead of hanging forever. **Run** this:
+
+<Playground client:visible title="deadlock.go" code={`package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("about to block forever (on purpose)…")
+
+	ch := make(chan int) // unbuffered: a send needs a ready receiver
+	ch <- 1              // nobody is receiving → all goroutines asleep
+
+	fmt.Println("unreachable")
+}`} />
+
+<Callout type="go" title="🐹 The runtime's deadlock detector has limits">
+Go prints <code>fatal error: all goroutines are asleep - deadlock!</code> only when **all** goroutines are blocked. If even one goroutine is still running (or stuck in a syscall), the runtime can't tell a deadlock from slow work — it'll just hang. So the detector catches toy cases, not partial deadlocks. Design with consistent lock ordering and timeouts (`context`, `select` + `time.After`).
+</Callout>
+
+## Livelock
+
+Goroutines that are *running* but making no progress — for example, two that detect contention and both "politely" back off in lockstep, forever. Livelock is harder to spot than deadlock because the program looks busy. Randomized backoff (jitter) usually breaks the symmetry.
+
+## Starvation
+
+A **greedy** goroutine that holds a lock far longer than it needs starves the polite ones — they technically run, but rarely get the resource.
+
+```go
+// Greedy: holds the lock for the whole unit of work
+lock.Lock(); doEverything(); lock.Unlock()
+
+// Polite: many short critical sections — but loses the race for the lock
+lock.Lock(); step1(); lock.Unlock()
+lock.Lock(); step2(); lock.Unlock()
+```
+
+<Callout type="tip" title="✅ Detect starvation with metrics">
+Starvation isn't a crash — it's an unfairness you only see in throughput. Record per-worker completion rates and alert on lopsided distributions. Keep critical sections small, and don't do slow work (I/O, sleeps) while holding a lock.
+</Callout>

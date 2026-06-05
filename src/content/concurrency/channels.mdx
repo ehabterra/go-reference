@@ -1,0 +1,136 @@
+---
+title: "Channels"
+category: building-blocks
+kind: topic
+order: 5
+difficulty: "Beginner"
+status: ready
+intent: "Typed conduits for communicating between goroutines — direction, buffering, ownership, and the states table that explains every behavior."
+related:
+  - goroutines
+  - select
+  - sync-package
+quiz:
+  - q: "What do you get when you read from a closed channel?"
+    options:
+      - text: "The zero value and ok=false, immediately, without blocking"
+        correct: true
+      - text: "A panic"
+        correct: false
+      - text: "It blocks forever"
+        correct: false
+      - text: "The last value sent, repeatedly"
+        correct: false
+    explain: "Reads from a closed channel never block: you get the zero value and the comma-ok returns false. That's exactly what lets `for range` over a channel terminate."
+  - q: "Who should close a channel?"
+    options:
+      - text: "The sender / owner — never the receiver"
+        correct: true
+      - text: "The receiver, when it's done reading"
+        correct: false
+      - text: "Whichever goroutine finishes first"
+        correct: false
+      - text: "The garbage collector"
+        correct: false
+    explain: "Only the goroutine that owns/writes the channel closes it. Sending on a closed channel panics, and closing an already-closed channel panics — so closing from a receiver risks both."
+  - q: "What's the difference between an unbuffered and a buffered channel?"
+    options:
+      - text: "Unbuffered send blocks until a receiver is ready; buffered send blocks only when the buffer is full"
+        correct: true
+      - text: "Buffered channels are always faster"
+        correct: false
+      - text: "Unbuffered channels can't be closed"
+        correct: false
+      - text: "Buffered channels don't need a receiver"
+        correct: false
+    explain: "An unbuffered channel is a synchronization point — send and receive rendezvous. A buffered channel decouples them until the buffer fills (send blocks) or empties (receive blocks)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚇 Analogy">
+A channel is a conveyor belt between workers. An **unbuffered** belt is hand-to-hand: you can't put a part down until someone takes it (a rendezvous). A **buffered** belt has slots: you keep working until the slots fill up, and the next worker keeps working until they run out. Closing the belt tells everyone downstream "no more parts are coming."
+</Callout>
+
+## Creating and directing channels
+
+```go
+ch := make(chan int)        // unbuffered (synchronous)
+ch := make(chan int, 4)     // buffered, capacity 4
+
+var recvOnly <-chan int     // receive-only (for consumers)
+var sendOnly chan<- int     // send-only (for producers)
+```
+
+Restricting direction in function signatures is how Go documents and enforces who may send vs receive.
+
+## The states table — memorize this
+
+Every channel behavior falls out of this table. Most concurrency bugs are a cell you forgot:
+
+| Channel state | Receive | Send | Close |
+|---|---|---|---|
+| **nil** | block forever | block forever | **panic** |
+| **open, empty** | block | succeed (or block if unbuffered, no receiver) | ok |
+| **open, full** | succeed | block | ok |
+| **closed** | zero value, `ok=false` | **panic** | **panic** |
+
+<Callout type="gotcha" title="⚠️ The three panics">
+Sending on a **closed** channel panics. **Closing** a closed channel panics. Closing a **nil** channel panics. These are the sharp edges — they're why closing is the *sender's* job and why you never close from a receiver.
+</Callout>
+
+## Channel ownership
+
+The cleanest designs give each channel a single **owner** goroutine that:
+
+1. creates it,
+2. writes to it,
+3. closes it, and
+4. exposes it to consumers as **receive-only**.
+
+Consumers only read. **Run** the canonical pattern:
+
+<Playground client:visible title="channels.go" code={`package main
+
+import "fmt"
+
+// generate owns the channel: it creates, writes, and closes it,
+// and returns it as receive-only so consumers can't misuse it.
+func generate(n int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out) // the owner always closes
+		for i := 1; i <= n; i++ {
+			out <- i
+		}
+	}()
+	return out
+}
+
+func main() {
+	// range over a channel exits automatically when it's closed
+	for v := range generate(5) {
+		fmt.Println(v)
+	}
+	fmt.Println("channel drained and closed")
+}`} />
+
+## Closing broadcasts to everyone
+
+Because every receiver of a closed channel unblocks at once, a closed channel is a one-to-many **signal** — the basis of `done`-channel cancellation:
+
+```go
+done := make(chan struct{})
+for i := 0; i < 5; i++ {
+	go func(i int) {
+		<-done // all five block here…
+		fmt.Println(i, "go!")
+	}(i)
+}
+close(done) // …and all five unblock simultaneously
+```
+
+<Callout type="go" title="🐹 Unbuffered for sync, buffered for throughput">
+Reach for an **unbuffered** channel when you want a guarantee that the receiver got the value (a rendezvous). Add a **buffer** to decouple a bursty producer from a steady consumer — but a buffer only hides back-pressure until it fills; it doesn't remove it. When in doubt, start unbuffered.
+</Callout>

@@ -1,0 +1,124 @@
+---
+title: "Goroutines"
+category: building-blocks
+kind: topic
+order: 4
+difficulty: "Beginner"
+status: ready
+intent: "Go's lightweight, runtime-scheduled concurrent functions — the fork-join model, their tiny cost, and how to avoid leaks."
+related:
+  - channels
+  - select
+  - concurrency-vs-parallelism
+quiz:
+  - q: "What is the 'join point' in the fork-join model?"
+    options:
+      - text: "Where the parent waits for forked goroutines to finish — typically sync.WaitGroup.Wait()"
+        correct: true
+      - text: "The go statement"
+        correct: false
+      - text: "The channel buffer"
+        correct: false
+      - text: "GOMAXPROCS"
+        correct: false
+    explain: "`go` forks a branch; without a join point (Wait, a channel receive, etc.) main may exit before the goroutine runs. WaitGroup.Wait() reunites the branches."
+  - q: "Roughly how expensive is a goroutine?"
+    options:
+      - text: "A few KB of stack that grows on demand — you can have millions"
+        correct: true
+      - text: "About 1 MB each, like an OS thread"
+        correct: false
+      - text: "One OS thread per goroutine"
+        correct: false
+      - text: "They can't be created at runtime"
+        correct: false
+    explain: "A goroutine starts with a ~2–4 KB stack that grows as needed, and context switches are far cheaper than OS threads — so millions are feasible."
+  - q: "What's the danger of a goroutine with no way to stop?"
+    options:
+      - text: "A goroutine leak — it blocks forever and is never garbage-collected"
+        correct: true
+      - text: "It crashes the program immediately"
+        correct: false
+      - text: "It uses a full OS thread"
+        correct: false
+      - text: "Nothing; the GC collects blocked goroutines"
+        correct: false
+    explain: "Goroutines aren't GC'd while blocked. One stuck on a channel send/receive forever leaks its stack and whatever it references. Always give it a termination path (done channel or context)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧵 Analogy">
+An OS thread is a full-time employee — expensive to hire, heavy to manage. A goroutine is more like a task on a shared to-do list: the Go runtime has a small pool of workers (threads) and hands them goroutines to run, parking and resuming them as they block. You can create a *million* tasks; the runtime figures out who runs them.
+</Callout>
+
+## Starting a goroutine
+
+Prefix any call with `go` and it runs concurrently:
+
+```go
+go sayHello()            // a named function
+go func() { work() }()   // an anonymous function
+```
+
+## The fork-join model
+
+The `go` statement **forks** a new branch of execution. To be sure it actually ran (and finished), you need a **join point** — most often `sync.WaitGroup`. Without one, `main` can return before the goroutine ever runs.
+
+<Mermaid code={`graph TD
+  M["main"] -->|go| W1["worker 1"]
+  M -->|go| W2["worker 2"]
+  M -->|go| W3["worker 3"]
+  W1 --> J["wg.Wait() · join"]
+  W2 --> J
+  W3 --> J
+  J --> E["main continues"]`} />
+
+Edit and **Run**:
+
+<Playground client:visible title="goroutines.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func worker(id int, wg *sync.WaitGroup) {
+	defer wg.Done() // mark this branch finished at the join
+	fmt.Printf("worker %d done\n", id)
+}
+
+func main() {
+	var wg sync.WaitGroup
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		go worker(i, &wg) // fork
+	}
+	wg.Wait() // join: block until all three finish
+	fmt.Println("all workers finished")
+}`} />
+
+## They're cheap
+
+- **~2–4 KB** initial stack (vs ~1 MB for an OS thread), and it **grows on demand**.
+- Context switches are far cheaper than OS-thread switches because the runtime, not the kernel, schedules them.
+- Result: a single program can run **hundreds of thousands to millions** of goroutines. Treat them as a near-free resource — but not a *free* one.
+
+## Two gotchas
+
+<Callout type="go" title="🐹 The loop-variable capture (fixed in Go 1.22)">
+Before Go 1.22, a goroutine in a `for` loop captured the **shared** loop variable, so they often all saw the final value:
+
+```go
+for _, s := range items {
+	go func() { fmt.Println(s) }() // pre-1.22: prints the last item N times
+}
+```
+
+Go 1.22 made each iteration get its own variable, so this is fixed in modern Go. On older versions (or to be explicit), pass it as an argument: `go func(s string) { ... }(s)`.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Every goroutine needs an exit">
+Goroutines are **not** garbage-collected while blocked. A goroutine waiting forever on a channel that never receives a value is a **leak** — it holds its stack and everything it captured. The rule: every goroutine you start must have a guaranteed path to termination, usually a `done` channel or a [`context`](/concurrency/concurrency-vs-parallelism/) you `select` on. See [Or-done](/patterns/or-done-channel/) and [Context & Cancellation](/patterns/context-cancellation/).
+</Callout>

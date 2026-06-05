@@ -9,10 +9,11 @@ interface Props {
   status?: string;
   numLabel?: string;
   footLabel?: string;
+  base?: string;
 }
-const { slug, category, title, intent, order, difficulty, status, numLabel, footLabel } = Astro.props;
+const { slug, category, title, intent, order, difficulty, status, numLabel, footLabel, base = '/patterns' } = Astro.props;
 ---
-<a class="dp-card" data-cat={category} data-slug={slug} href={`/patterns/${slug}/`}>
+<a class="dp-card" data-cat={category} data-slug={slug} href={`${base}/${slug}/`}>
   <span class="dp-card__num">{numLabel ?? `${order} · ${difficulty}`}</span>
   <span class="dp-card__title">{title}</span>
   <p class="dp-card__intent">{intent}</p>

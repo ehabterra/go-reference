@@ -1,0 +1,131 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CategorySection from '../../components/CategorySection.astro';
+import PatternCard from '../../components/PatternCard.astro';
+import { CATEGORIES } from '../../lib/consts';
+
+const all = await getCollection('patterns');
+const byId = (id: string) => all.find((p) => p.id === id);
+
+const patternSlugs = all.filter((p) => p.data.kind === 'pattern').map((p) => p.id).join(',');
+const foundations = byId('foundations');
+const stdlib = byId('stdlib-patterns');
+const cheat = byId('cheatsheet');
+---
+<BaseLayout title="Design Patterns" description="Every Gang-of-Four design pattern, the Go way — diagrams, runnable code, stdlib examples, quizzes.">
+  <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Design Patterns</span></nav>
+
+  <header class="dp-hero">
+    <p class="dp-hero__eyebrow">Interactive learning journey</p>
+    <h1>Design Patterns, the Go way</h1>
+    <p class="dp-hero__lede">
+      Every classic Gang-of-Four pattern and Go's essential concurrency patterns — explained with clear
+      diagrams, idiomatic Go you can <strong>run right here</strong>, and the exact places they hide in the
+      standard library. Built to actually stick.
+    </p>
+    <div class="dp-hero__cta">
+      <a class="dp-btn dp-btn--primary" href="/patterns/foundations/">Start the journey →</a>
+      <a class="dp-btn dp-btn--ghost" href="#creational">Browse the patterns</a>
+    </div>
+  </header>
+
+  <div class="dp-overall">
+    <div class="dp-overall__top">
+      <strong>Your progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset>Reset</button>
+    </div>
+    <div class="dp-progress" data-dp-progress data-slugs={patternSlugs}>
+      <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
+      <span class="dp-progress__label"></span>
+    </div>
+    <p class="dp-kicker" style="margin:.7rem 0 0;">
+      Saved in your browser — mark a pattern “learned” on its page and watch the bars fill.
+    </p>
+  </div>
+
+  <h2 class="dp-section-head" style="border:0;">How this guide works</h2>
+  <div class="dp-features">
+    <div class="dp-feature">
+      <div class="dp-feature__icon">🧭</div>
+      <h3>One pattern, one page</h3>
+      <p>Every page follows the same rhythm: analogy → problem → diagram → idiomatic Go → trade-offs → quiz.</p>
+    </div>
+    <div class="dp-feature">
+      <div class="dp-feature__icon">📊</div>
+      <h3>See it, then read it</h3>
+      <p>UML structure and sequence diagrams make the relationships obvious before you read a line of code.</p>
+    </div>
+    <div class="dp-feature">
+      <div class="dp-feature__icon">🐹</div>
+      <h3>Go-first, not translated</h3>
+      <p>How interfaces, composition and goroutines reshape each classic pattern — and where the stdlib uses it.</p>
+    </div>
+    <div class="dp-feature">
+      <div class="dp-feature__icon">🧠</div>
+      <h3>Made to remember</h3>
+      <p>Runnable code, a quiz on every page, and progress tracking turn passive reading into a journey you finish.</p>
+    </div>
+  </div>
+
+  <div class="dp-callout dp-callout--tip">
+    <p class="dp-callout__title">🚀 New here? Start with the Foundations</p>
+    <p>
+      Five minutes on <a href="/patterns/foundations/">what patterns are and why Go does them differently</a>
+      makes every page that follows click into place. Then work top-to-bottom, or jump to whatever you need.
+    </p>
+  </div>
+
+  {foundations && (
+    <Fragment>
+      <h2 class="dp-section-head" style="border:0;">Start here</h2>
+      <div class="dp-grid">
+        <PatternCard
+          slug={foundations.id}
+          category="foundations"
+          title={foundations.data.title}
+          intent={foundations.data.intent}
+          numLabel={`START · ${foundations.data.difficulty}`}
+          footLabel="Read first"
+        />
+      </div>
+    </Fragment>
+  )}
+
+  {CATEGORIES.map((c) => (
+    <CategorySection cat={c.key} title={c.title} blurb={c.blurb} />
+  ))}
+
+  <h2 class="dp-section-head" style="border:0;">Go &amp; the standard library</h2>
+  <div class="dp-grid">
+    {stdlib && (
+      <PatternCard
+        slug={stdlib.id}
+        category="stdlib"
+        title={stdlib.data.title}
+        intent={stdlib.data.intent}
+        numLabel={`GUIDE · ${stdlib.data.difficulty}`}
+        footLabel="Tour"
+      />
+    )}
+    {cheat && (
+      <PatternCard
+        slug={cheat.id}
+        category="practice"
+        title={cheat.data.title}
+        intent={cheat.data.intent}
+        numLabel={`PRACTICE · ${cheat.data.difficulty}`}
+        footLabel="Revise"
+      />
+    )}
+  </div>
+
+  <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
+    <p class="dp-callout__title">🐹 A note on Go and patterns</p>
+    <p>
+      Many “patterns” are really workarounds for things Java and C++ make hard. Go's interfaces, struct
+      embedding, first-class functions and goroutines dissolve some of them and reshape the rest. Throughout
+      this guide we call out when a pattern becomes a one-liner in Go — and when it's still genuinely useful.
+    </p>
+  </div>
+</BaseLayout>

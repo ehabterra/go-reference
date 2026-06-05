@@ -1,0 +1,121 @@
+---
+title: "select"
+category: building-blocks
+kind: topic
+order: 6
+difficulty: "Intermediate"
+status: ready
+intent: "Wait on multiple channel operations at once — the basis of timeouts, cancellation, non-blocking I/O and multiplexing."
+related:
+  - channels
+  - goroutines
+  - sync-package
+quiz:
+  - q: "If multiple cases in a select are ready at once, which runs?"
+    options:
+      - text: "One is chosen uniformly at random"
+        correct: true
+      - text: "The first one written"
+        correct: false
+      - text: "The last one written"
+        correct: false
+      - text: "All of them"
+        correct: false
+    explain: "select picks a ready case at random, which prevents one always-ready channel from starving the others."
+  - q: "What does a `default` clause do in a select?"
+    options:
+      - text: "Makes the select non-blocking — runs default if no case is ready"
+        correct: true
+      - text: "Runs after every case"
+        correct: false
+      - text: "Handles errors"
+        correct: false
+      - text: "Blocks forever"
+        correct: false
+    explain: "With a `default`, select never blocks: if no channel op is ready right now, it takes the default branch immediately."
+  - q: "How do you add a timeout to a blocking receive?"
+    options:
+      - text: "select on the channel and on <-time.After(d)"
+        correct: true
+      - text: "Wrap it in time.Sleep"
+        correct: false
+      - text: "Set a deadline on the channel"
+        correct: false
+      - text: "Use a buffered channel"
+        correct: false
+    explain: "`case <-time.After(d):` fires after the duration, so whichever happens first — the value or the timeout — wins the select."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎛️ Analogy">
+`select` is a switchboard operator watching several lines. Whichever line rings first, they answer it. If two ring at once, they pick one at random. With a "default" instruction, they don't wait at all — if no line is ringing this instant, they move on.
+</Callout>
+
+## What select does
+
+`select` blocks until **one** of its channel operations can proceed, then runs that case. It's how you compose multiple channels — receives, sends, timeouts, cancellation — into one coordination point.
+
+```go
+select {
+case v := <-c1:
+	use(v)
+case c2 <- x:        // a send can be a case too
+	sent()
+case <-done:
+	return            // cancellation
+}
+```
+
+<Mermaid code={`graph LR
+  C1["c1 (data)"] --> SEL["select"]
+  C2["c2 (data)"] --> SEL
+  DONE["done (cancel)"] --> SEL
+  TIME["time.After (timeout)"] --> SEL
+  SEL --> A["run the first ready case"]`} />
+
+## Three behaviors to know
+
+- **Random choice:** if several cases are ready, one is picked **uniformly at random** — this prevents starvation.
+- **`default` → non-blocking:** with a `default`, select returns immediately if nothing is ready.
+- **Empty `select{}` blocks forever** — occasionally used to park `main` while goroutines run (but usually a `sync.WaitGroup` or signal is clearer).
+
+## Timeout and non-blocking, in one run
+
+<Playground client:visible title="select.go" code={`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	ch := make(chan string)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		ch <- "result"
+	}()
+
+	// Timeout pattern: whichever fires first wins.
+	select {
+	case v := <-ch:
+		fmt.Println("got:", v)
+	case <-time.After(100 * time.Millisecond):
+		fmt.Println("timed out")
+	}
+
+	// Non-blocking check: don't wait at all.
+	select {
+	case v := <-ch:
+		fmt.Println("got:", v)
+	default:
+		fmt.Println("nothing ready right now")
+	}
+}`} />
+
+<Callout type="go" title="🐹 Two sharp edges">
+**`time.After` in a hot loop leaks timers** — each call allocates a timer that lives until it fires. In a tight `for { select … }`, create one `time.NewTimer` and `Reset` it, or drive cancellation with a `context`. And remember: **a `nil` channel blocks forever**, so setting a channel variable to `nil` *disables* its `select` case — a handy trick for turning a branch off once it's done.
+</Callout>
+
+This composition — receive, timeout, cancel — is the engine behind every concurrency pattern: [Pipeline](/patterns/pipeline/), [Fan-in/out](/patterns/fan-in-fan-out/), [Or-done](/patterns/or-done-channel/) and [Context](/patterns/context-cancellation/).

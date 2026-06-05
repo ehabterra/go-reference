@@ -1,16 +1,20 @@
 ---
 import { getCollection } from 'astro:content';
-const { slug } = Astro.props as { slug: string };
-const all = (await getCollection('patterns')).sort((a, b) => a.data.order - b.data.order);
+const { slug, collection = 'patterns', base = '/patterns' } = Astro.props as {
+  slug: string;
+  collection?: 'patterns' | 'concurrency';
+  base?: string;
+};
+const all = (await getCollection(collection)).sort((a, b) => a.data.order - b.data.order);
 const idx = all.findIndex((p) => p.id === slug);
 const prev = idx > 0 ? all[idx - 1] : null;
 const next = idx >= 0 && idx < all.length - 1 ? all[idx + 1] : null;
 ---
-<nav class="dp-pager" aria-label="Pattern navigation">
+<nav class="dp-pager" aria-label="Section navigation">
   {prev ? (
-    <a class="prev" href={`/patterns/${prev.id}/`}><small>← Previous</small><strong>{prev.data.title}</strong></a>
+    <a class="prev" href={`${base}/${prev.id}/`}><small>← Previous</small><strong>{prev.data.title}</strong></a>
   ) : <span></span>}
   {next ? (
-    <a class="next" href={`/patterns/${next.id}/`}><small>Next →</small><strong>{next.data.title}</strong></a>
+    <a class="next" href={`${base}/${next.id}/`}><small>Next →</small><strong>{next.data.title}</strong></a>
   ) : <span></span>}
 </nav>

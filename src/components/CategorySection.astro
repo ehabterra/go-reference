@@ -2,10 +2,16 @@
 import { getCollection } from 'astro:content';
 import PatternCard from './PatternCard.astro';
 
-interface Props { cat: string; title: string; blurb: string; }
-const { cat, title, blurb } = Astro.props;
+interface Props {
+  cat: string;
+  title: string;
+  blurb: string;
+  collection?: 'patterns' | 'concurrency';
+  base?: string;
+}
+const { cat, title, blurb, collection = 'patterns', base = '/patterns' } = Astro.props;
 
-const all = await getCollection('patterns');
+const all = await getCollection(collection);
 const items = all
   .filter((p) => p.data.category === cat)
   .sort((a, b) => a.data.order - b.data.order);
@@ -15,22 +21,29 @@ const slugs = items.map((p) => p.id).join(',');
   <div class="dp-section-head">
     <h2><span class="dp-badge" data-cat={cat}><span class="dp-dot"></span>{title}</span></h2>
     <p>{blurb}</p>
-    <div class="dp-progress" data-dp-progress data-slugs={slugs} style="margin-top:.9rem;max-width:440px;">
-      <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
-      <span class="dp-progress__label"></span>
+    {items.length > 0 && (
+      <div class="dp-progress" data-dp-progress data-slugs={slugs} style="margin-top:.9rem;max-width:440px;">
+        <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
+        <span class="dp-progress__label"></span>
+      </div>
+    )}
+  </div>
+  {items.length === 0 ? (
+    <p class="dp-kicker" style="margin-top:-.4rem;">🚧 Coming soon.</p>
+  ) : (
+    <div class="dp-grid">
+      {items.map((p) => (
+        <PatternCard
+          slug={p.id}
+          category={p.data.category}
+          title={p.data.title}
+          intent={p.data.intent}
+          order={p.data.order}
+          difficulty={p.data.difficulty}
+          status={p.data.status}
+          base={base}
+        />
+      ))}
     </div>
-  </div>
-  <div class="dp-grid">
-    {items.map((p) => (
-      <PatternCard
-        slug={p.id}
-        category={p.data.category}
-        title={p.data.title}
-        intent={p.data.intent}
-        order={p.data.order}
-        difficulty={p.data.difficulty}
-        status={p.data.status}
-      />
-    ))}
-  </div>
+  )}
 </section>

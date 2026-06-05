@@ -284,3 +284,39 @@ img { max-width: 100%; }
   .dp-tradeoffs { grid-template-columns: 1fr; }
   .dp-pager { grid-template-columns: 1fr; }
 }
+
+/* =====================================================================
+   Additional sections (concurrency reference) + hub home
+   ===================================================================== */
+:root {
+  --dp-building-blocks: #2dd4bf;
+  --dp-coordination:    #fb923c;
+  --dp-runtime:         #818cf8;
+}
+.dp-badge[data-cat="building-blocks"] { color: var(--dp-building-blocks); }
+.dp-badge[data-cat="coordination"]    { color: var(--dp-coordination); }
+.dp-badge[data-cat="runtime"]         { color: var(--dp-runtime); }
+.dp-card[data-cat="building-blocks"]  { --c: var(--dp-building-blocks); }
+.dp-card[data-cat="coordination"]     { --c: var(--dp-coordination); }
+.dp-card[data-cat="runtime"]          { --c: var(--dp-runtime); }
+
+/* hub topic cards */
+.dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
+.dp-topic {
+  position: relative; display: flex; flex-direction: column; gap: .55rem;
+  padding: 1.7rem 1.6rem 1.5rem; border: 1px solid var(--dp-border); border-radius: var(--dp-radius);
+  background: var(--dp-surface); color: var(--dp-text); overflow: hidden;
+  transition: transform .14s ease, border-color .2s, box-shadow .2s;
+}
+.dp-topic::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--c, var(--dp-accent)); }
+.dp-topic[data-cat="behavioral"]      { --c: var(--dp-behavioral); }
+.dp-topic[data-cat="building-blocks"] { --c: var(--dp-building-blocks); }
+.dp-topic[data-cat="stdlib"]          { --c: var(--dp-stdlib); }
+.dp-topic:not(.dp-topic--soon):hover { transform: translateY(-3px); border-color: var(--c); box-shadow: var(--dp-shadow-sm); color: #fff; text-decoration: none; }
+.dp-topic__icon { font-size: 2rem; }
+.dp-topic h3 { margin: .2rem 0 0; font-size: 1.4rem; }
+.dp-topic p { margin: 0; color: var(--dp-muted); flex: 1; }
+.dp-topic__stat { font-size: .76rem; color: var(--dp-muted); text-transform: uppercase; letter-spacing: .07em; }
+.dp-topic__go { font-weight: 800; color: var(--dp-accent-2); }
+.dp-topic--soon { opacity: .55; }
+.dp-topic--soon .dp-topic__stat { color: var(--dp-behavioral); }

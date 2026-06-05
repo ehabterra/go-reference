@@ -1,23 +1,14 @@
-export const SITE_TITLE = 'Design Patterns, the Go Way';
+export const SITE_TITLE = 'The Go Reference';
 export const SITE_DESC =
-  'A visual, Go-first guide to every Gang-of-Four design pattern and Go’s essential concurrency patterns — with diagrams, runnable code, quizzes and progress tracking.';
-
-export type CategoryKey =
-  | 'foundations'
-  | 'creational'
-  | 'structural'
-  | 'behavioral'
-  | 'concurrency'
-  | 'stdlib'
-  | 'practice';
+  'A visual, Go-first reference — every Gang-of-Four design pattern and a deep concurrency guide, with diagrams, runnable code, quizzes and progress tracking.';
 
 export interface CategoryMeta {
-  key: CategoryKey;
+  key: string;
   title: string;
   blurb: string;
 }
 
-/** Ordered categories shown on the landing page as the "journey". */
+/** Design-pattern categories (the journey on /patterns/). */
 export const CATEGORIES: CategoryMeta[] = [
   {
     key: 'creational',
@@ -42,6 +33,34 @@ export const CATEGORIES: CategoryMeta[] = [
     title: 'Go Concurrency Patterns',
     blurb:
       'The patterns that make Go special — goroutines and channels composed into pipelines, pools and safe cancellation.',
+  },
+];
+
+/** Concurrency-reference categories (the journey on /concurrency/). */
+export const CONCURRENCY_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'foundations',
+    title: 'Foundations',
+    blurb:
+      'The hard truths first — what concurrency is, why it bites, and the failure modes (races, deadlock, starvation) you must design against.',
+  },
+  {
+    key: 'building-blocks',
+    title: 'Building Blocks',
+    blurb:
+      'The primitives: goroutines, channels, select, the sync package, atomics, and the memory model that makes them safe.',
+  },
+  {
+    key: 'coordination',
+    title: 'Coordination & Scale',
+    blurb:
+      'Putting the pieces together at scale — context cancellation, rate limiting, and propagating errors across goroutines.',
+  },
+  {
+    key: 'runtime',
+    title: 'The Runtime',
+    blurb:
+      "Under the hood — the M:N scheduler, work-stealing, GOMAXPROCS, the concurrent GC, and how goroutine stacks grow.",
   },
 ];
 

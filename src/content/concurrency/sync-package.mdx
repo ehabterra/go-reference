@@ -1,0 +1,136 @@
+---
+title: "The sync Package"
+category: building-blocks
+kind: topic
+order: 7
+difficulty: "Intermediate"
+status: ready
+intent: "Mutex, RWMutex, WaitGroup, Once, Cond and Pool — the lower-level primitives for when channels aren't the right tool."
+related:
+  - channels
+  - race-conditions
+  - goroutines
+when_use:
+  - "You're guarding a struct's own internal state (a counter, a cache, a map)."
+  - "You need a simple join (WaitGroup) or one-time init (Once)."
+  - "A tight, performance-critical critical section where channel overhead would hurt."
+when_avoid:
+  - "You're transferring ownership of data or coordinating a pipeline — use channels."
+  - "You're tempted to build complex signalling with Cond — a channel is usually clearer."
+quiz:
+  - q: "When should you prefer a Mutex over a channel?"
+    options:
+      - text: "To guard a struct's internal state with a small critical section"
+        correct: true
+      - text: "To transfer ownership of data between goroutines"
+        correct: false
+      - text: "To build a processing pipeline"
+        correct: false
+      - text: "Always — channels are obsolete"
+        correct: false
+    explain: "Mutexes shine for protecting state local to a type. Channels shine for moving data and coordinating goroutines. 'Internal state → mutex; communication → channel.'"
+  - q: "What does sync.Once guarantee?"
+    options:
+      - text: "The function passed to Do runs exactly once, even under concurrent calls"
+        correct: true
+      - text: "The function runs once per goroutine"
+        correct: false
+      - text: "The function never runs"
+        correct: false
+      - text: "The function runs once per second"
+        correct: false
+    explain: "sync.Once.Do runs its function a single time across the whole program, safely — the idiomatic lazy [Singleton](/patterns/singleton/)."
+  - q: "What's a key rule about sync types like Mutex and WaitGroup?"
+    options:
+      - text: "Don't copy them after first use — pass by pointer"
+        correct: true
+      - text: "They must be global variables"
+        correct: false
+      - text: "They only work with buffered channels"
+        correct: false
+      - text: "They must be created with make()"
+        correct: false
+    explain: "Copying a Mutex/WaitGroup duplicates its internal state and breaks it. `go vet` flags lock copies. Always share them by pointer (e.g. pass `*sync.WaitGroup`)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔑 Analogy">
+If channels are conveyor belts moving parts between workers, the `sync` package is the set of **locks on the shared tool cabinet**. When several workers reach into the *same* drawer (a struct's fields), a lock makes sure only one hand is inside at a time. Different job, different tool.
+</Callout>
+
+## Mutex & RWMutex — guard internal state
+
+A `sync.Mutex` makes a critical section exclusive. Wrap shared state in a type and lock around access — the same counter that raced [earlier](/concurrency/race-conditions/) is now correct. **Run** it:
+
+<Playground client:visible title="sync.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Counter guards its own state — atomicity scoped to the type.
+type Counter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *Counter) Inc() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}
+
+func main() {
+	c := &Counter{}
+	var wg sync.WaitGroup
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); c.Inc() }()
+	}
+	wg.Wait()
+	fmt.Println("counter =", c.n) // always 1000
+}`} />
+
+**`sync.RWMutex`** allows many concurrent readers *or* one writer — a win for read-heavy data (`RLock`/`RUnlock` for reads, `Lock`/`Unlock` for writes). It only pays off when reads vastly outnumber writes.
+
+## The rest of the toolkit
+
+| Type | What it's for |
+|---|---|
+| **`WaitGroup`** | The join point of fork-join — `Add`, `Done`, `Wait`. |
+| **`Once`** | Run something exactly once (lazy init) — the basis of [Singleton](/patterns/singleton/). |
+| **`Cond`** | Wait for / signal a condition: `Wait`, `Signal`, `Broadcast`. |
+| **`Pool`** | Reuse expensive objects to cut allocations and GC pressure. |
+| **`atomic`** | Lock-free reads/writes of a single value (`AddInt64`, `CompareAndSwap`, `atomic.Pointer`). |
+
+```go
+// Once — runs the init exactly once, concurrency-safe
+var once sync.Once
+once.Do(func() { /* expensive setup */ })
+
+// Cond — wake waiters when a condition becomes true
+c := sync.NewCond(&sync.Mutex{})
+c.L.Lock()
+for !ready { c.Wait() } // releases the lock, sleeps, re-acquires on wake
+c.L.Unlock()
+```
+
+## Mutex or channel?
+
+<Mermaid code={`graph TD
+  Q{"What are you doing?"}
+  Q -->|"Guarding a struct's<br/>internal state"| M["Mutex / RWMutex"]
+  Q -->|"Transferring ownership<br/>or coordinating goroutines"| C["Channel"]
+  Q -->|"Tight, hot critical section"| M
+  Q -->|"Building a pipeline / fan-out"| C`} />
+
+<Callout type="go" title="🐹 The rules that keep sync safe">
+**Don't copy** a `Mutex`, `WaitGroup`, `Once`, or `Cond` after use — share by pointer (`go vet` catches copies). **Lock for the shortest time** and never do I/O or sleep while holding a lock (that's how starvation starts). And **don't `Add` to a `WaitGroup` from inside the goroutines it's counting** — call `Add` before the `go` statement.
+</Callout>
+
+<Callout type="tip" title="✅ Go's guidance">
+"Use channels when possible; use the sync primitives when they're clearly simpler." Mutexes aren't a code smell — for protecting a type's own fields they're often the cleanest, fastest choice. Match the tool to the job, not to dogma.
+</Callout>
