@@ -145,5 +145,16 @@
   "intent.arrays-and-slices": "الـ slice في Go نافذة على مصفوفة داعمة (backing array) — كيف تعمل ترويسة (ptr, len, cap)، و append، والنمو، و copy، وإعادة التقطيع فعلًا، ومزالق التداخل (aliasing).",
   "intent.linked-lists": "عُقَد مرتبطة بمؤشّرات — إدراج/حذف بكلفة O(1) عند موضع معروف، ووصول O(n)؛ المفردة مقابل المزدوجة، وكلاسيكية العكس، ومتى تكون الـ slice الخيار الأفضل.",
   "intent.stacks-and-queues": "LIFO و FIFO مع push و pop بكلفة O(1) — stack على slice في Go، وكلاسيكية توازن الأقواس، وحيلة مؤشّر الرأس التي تُبقي إخراج الـ queue رخيصًا.",
-  "intent.hash-tables": "بحث بمتوسط O(1) عبر الـ hashing — كيف تعمل الـ map المدمجة في Go، والتصادمات (collisions) وعامل التحميل (load factor)، ونمط comma-ok، ومزالق الترتيب والـ nil map."
+  "intent.hash-tables": "بحث بمتوسط O(1) عبر الـ hashing — كيف تعمل الـ map المدمجة في Go، والتصادمات (collisions) وعامل التحميل (load factor)، ونمط comma-ok، ومزالق الترتيب والـ nil map.",
+  "intent.binary-trees": "عُقَد لكلٍّ منها طفلان على الأكثر — البنية، والعمق مقابل الارتفاع، واجتيازات DFS الثلاثة (inorder و preorder و postorder)، واجتياز المستويات (level-order) بـ BFS باستخدام queue.",
+  "intent.binary-search-trees": "ثابت ترتيب الـ BST (يسار < العقدة < يمين) يمنح بحثًا وإدراجًا بكلفة O(h)، واجتياز inorder يعطي ترتيبًا مفروزًا، والتوازن يحدّد log n مقابل n.",
+  "intent.heaps": "كومة ثنائية (binary heap) معبّأة في slice — حساب الأب/الأبناء بالفهرسة، و sift-up و sift-down بكلفة O(log n)، و container/heap في Go لبناء طابور أولوية (priority queue).",
+  "intent.tries": "شجرة بادئات (prefix tree) مُفهرَسة بالحروف — Insert و Search و StartsWith بكلفة O(L) حيث L طول المفتاح، المحرّك خلف الإكمال التلقائي واستعلامات البادئة.",
+  "intent.graphs": "رؤوس تربطها حواف — قوائم الجوار (adjacency lists)، و BFS لأقصر مسافة بالقفزات، و DFS لإمكان الوصول والترتيب، وكلها بكلفة O(V + E).",
+  "intent.binary-search": "اعثر على قيمة في slice مفروز بكلفة O(log n) بتنصيف المجال تكرارًا — الحلقة الصحيحة، ومزالق الانزياح بمقدار واحد، ومساعِدات المكتبة القياسية.",
+  "intent.sorting": "لماذا لا تتجاوز خوارزميات الفرز بالمقارنة O(n log n) — merge sort و quicksort يدويًا، ثم السطر الوحيد الذي تكتبه فعلًا في Go: slices.Sort.",
+  "intent.two-pointers": "استبدل الحلقات المتداخلة بمؤشّرين يتحرّكان بقصد — مؤشّران متقاربان على بيانات مفروزة، ونافذة منزلقة (sliding window) لمسائل المقاطع والسلاسل المتّصلة.",
+  "intent.recursion-and-backtracking": "عرّف المسألة بدلالة نفسها — حالة أساس وحالة تكرارية، ومكدّس الاستدعاء وحدوده، وحلقة الـ backtracking: اختَر / استكشِف / تراجَع.",
+  "intent.dynamic-programming": "حلّ المسائل ذات المسائل الفرعية المتداخلة والبنية الفرعية المثلى — من الاستدعاء الأسّي إلى الـ memoization من الأعلى للأسفل والـ tabulation من الأسفل للأعلى في Go.",
+  "intent.greedy": "اتّخذ الخيار الأمثل محليًا دون التراجع — متى يكون الجشع (greedy) صحيحًا بإثبات، وأمثلة كلاسيكية كجدولة الفترات، وأين يفشل."
 }
