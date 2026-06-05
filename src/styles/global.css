@@ -482,3 +482,38 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
   .dp-nav__links a { padding: .8rem .4rem; border-bottom: 1px solid var(--dp-border); font-size: 1rem; }
   .dp-nav__links a:last-child { border-bottom: 0; }
 }
+
+/* =====================================================================
+   i18n — EN / عربي toggle (prose translated, code/concepts stay English)
+   ===================================================================== */
+.tr-ar { display: none; }
+[data-lang="ar"] .tr-en { display: none; }
+[data-lang="ar"] .tr-ar { display: block; }
+.tr-ar { line-height: 1.95; }
+.tr-ar, [lang="ar"] { font-family: var(--font-sans); }
+
+/* Arabic prose reads right-to-left; code, diagrams, tables stay LTR */
+[data-lang="ar"] .dp-prose { direction: rtl; text-align: right; }
+[data-lang="ar"] .dp-prose pre,
+[data-lang="ar"] .dp-prose > .dp-mermaid,
+[data-lang="ar"] .dp-prose .dp-pg,
+[data-lang="ar"] .dp-prose table { direction: ltr; text-align: left; }
+[data-lang="ar"] .dp-prose code { direction: ltr; unicode-bidi: embed; }
+[data-lang="ar"] .dp-prose ul,
+[data-lang="ar"] .dp-prose ol { padding-right: 1.4rem; padding-left: 0; }
+[data-lang="ar"] .dp-callout { border-left: 0; border-right: 4px solid var(--dp-accent); }
+
+/* page-header intent shows the active language (inline, not block) */
+.dp-hero__lede .tr-en { display: inline; }
+.dp-hero__lede .tr-ar { display: none; }
+[data-lang="ar"] .dp-hero__lede .tr-en { display: none; }
+[data-lang="ar"] .dp-hero__lede .tr-ar { display: inline; }
+
+/* language toggle button */
+.dp-lang-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 42px; height: 34px;
+  padding: 0 .6rem; border-radius: 10px; border: 1px solid var(--dp-border);
+  background: var(--dp-surface); color: var(--dp-muted); cursor: pointer; font-weight: 700; font-size: .82rem;
+  transition: border-color .2s, color .2s;
+}
+.dp-lang-btn:hover { border-color: var(--dp-accent); color: var(--dp-text); }

@@ -1,17 +1,26 @@
 ---
 const { data: d } = Astro.props;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const eyebrow = d.kind === 'guide'
-  ? `${cap(d.category)} · Guide`
-  : `${cap(d.category)} pattern${d.gof ? ' · Gang of Four' : ''}`;
+const catLabel = cap(d.category.replace(/-/g, ' '));
+const eyebrow =
+  d.kind === 'guide'
+    ? `${catLabel} · Guide`
+    : d.kind === 'topic'
+      ? `${catLabel} · Concurrency`
+      : `${catLabel} pattern${d.gof ? ' · Gang of Four' : ''}`;
 ---
 <header class="dp-hero">
   <p class="dp-hero__eyebrow">{eyebrow}{d.difficulty ? ` · ${d.difficulty}` : ''}</p>
   <h1>{d.title}</h1>
-  {d.intent && <p class="dp-hero__lede">{d.intent}</p>}
+  {d.intent && (
+    <p class="dp-hero__lede">
+      <span class="tr-en">{d.intent}</span>
+      {d.intent_ar && <span class="tr-ar" lang="ar" dir="rtl">{d.intent_ar}</span>}
+    </p>
+  )}
   {d.aka && <p class="dp-kicker" style="margin-top:.9rem">Also known as — {d.aka}</p>}
   <div class="dp-badges" style="margin-top:1.1rem">
-    <span class="dp-badge" data-cat={d.category}><span class="dp-dot"></span>{cap(d.category)}</span>
+    <span class="dp-badge" data-cat={d.category}><span class="dp-dot"></span>{catLabel}</span>
     {d.difficulty && <span class="dp-badge dp-badge--muted">{d.difficulty}</span>}
     <span class="dp-badge dp-badge--muted">{d.status === 'ready' ? 'Complete' : 'Draft — more coming'}</span>
   </div>

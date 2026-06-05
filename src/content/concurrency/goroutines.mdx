@@ -6,6 +6,7 @@ order: 4
 difficulty: "Beginner"
 status: ready
 intent: "Go's lightweight, runtime-scheduled concurrent functions — the fork-join model, their tiny cost, and how to avoid leaks."
+intent_ar: "دوال Go الخفيفة التي يجدولها الـ runtime — نموذج fork-join، وتكلفتها الضئيلة، وكيف تتجنّب التسريبات (leaks)."
 related:
   - channels
   - select
@@ -48,14 +49,25 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Tr from '../../components/Tr.astro';
 
 <Callout type="analogy" title="🧵 Analogy">
+<Tr>
 An OS thread is a full-time employee — expensive to hire, heavy to manage. A goroutine is more like a task on a shared to-do list: the Go runtime has a small pool of workers (threads) and hands them goroutines to run, parking and resuming them as they block. You can create a *million* tasks; the runtime figures out who runs them.
+<Fragment slot="ar">
+خيط نظام التشغيل (OS thread) أشبه بموظّف بدوام كامل — مكلف في التوظيف وثقيل في الإدارة. أمّا الـ goroutine فأقرب إلى مهمة في قائمة مهام مشتركة: لدى الـ runtime في Go مجموعة صغيرة من العمّال (threads) يوزّع عليهم الـ goroutines لتشغيلها، فيوقفها ويستأنفها عندما تتوقّف (block). يمكنك إنشاء *مليون* مهمة، والـ runtime هو من يقرّر من يشغّلها.
+</Fragment>
+</Tr>
 </Callout>
 
 ## Starting a goroutine
 
+<Tr>
 Prefix any call with `go` and it runs concurrently:
+<Fragment slot="ar">
+ضع `go` قبل أي استدعاء فيُنفَّذ بشكل متزامن (concurrently):
+</Fragment>
+</Tr>
 
 ```go
 go sayHello()            // a named function
@@ -64,7 +76,12 @@ go func() { work() }()   // an anonymous function
 
 ## The fork-join model
 
+<Tr>
 The `go` statement **forks** a new branch of execution. To be sure it actually ran (and finished), you need a **join point** — most often `sync.WaitGroup`. Without one, `main` can return before the goroutine ever runs.
+<Fragment slot="ar">
+عبارة `go` تُنشئ (**fork**) فرعًا جديدًا للتنفيذ. ولتتأكّد أنه نُفِّذ فعلًا (وانتهى) تحتاج إلى **نقطة التقاء (join point)** — غالبًا `sync.WaitGroup`. بدونها قد ينتهي `main` قبل أن يعمل الـ goroutine أصلًا.
+</Fragment>
+</Tr>
 
 <Mermaid code={`graph TD
   M["main"] -->|go| W1["worker 1"]
@@ -75,7 +92,12 @@ The `go` statement **forks** a new branch of execution. To be sure it actually r
   W3 --> J
   J --> E["main continues"]`} />
 
+<Tr>
 Edit and **Run**:
+<Fragment slot="ar">
+حرّر الكود ثم اضغط **Run**:
+</Fragment>
+</Tr>
 
 <Playground client:visible title="goroutines.go" code={`package main
 
@@ -101,14 +123,26 @@ func main() {
 
 ## They're cheap
 
+<Tr>
 - **~2–4 KB** initial stack (vs ~1 MB for an OS thread), and it **grows on demand**.
 - Context switches are far cheaper than OS-thread switches because the runtime, not the kernel, schedules them.
 - Result: a single program can run **hundreds of thousands to millions** of goroutines. Treat them as a near-free resource — but not a *free* one.
+<Fragment slot="ar">
+- **~2–4 ك.ب** حجم المكدّس (stack) الابتدائي (مقابل ~1 م.ب لخيط نظام التشغيل)، وهو **ينمو عند الحاجة**.
+- تبديل السياق (context switch) أرخص بكثير من تبديل خيوط نظام التشغيل، لأن الـ runtime — وليست النواة (kernel) — هو من يجدوِلها.
+- النتيجة: برنامج واحد يمكنه تشغيل **مئات الآلاف إلى الملايين** من الـ goroutines. عاملها كأنها مورد شبه مجاني — لكنه ليس مجانيًا تمامًا.
+</Fragment>
+</Tr>
 
 ## Two gotchas
 
 <Callout type="go" title="🐹 The loop-variable capture (fixed in Go 1.22)">
+<Tr>
 Before Go 1.22, a goroutine in a `for` loop captured the **shared** loop variable, so they often all saw the final value:
+<Fragment slot="ar">
+قبل Go 1.22 كان الـ goroutine داخل حلقة `for` يلتقط متغيّر الحلقة **المشترك**، فكثيرًا ما كانت كلها ترى القيمة الأخيرة:
+</Fragment>
+</Tr>
 
 ```go
 for _, s := range items {
@@ -116,9 +150,19 @@ for _, s := range items {
 }
 ```
 
+<Tr>
 Go 1.22 made each iteration get its own variable, so this is fixed in modern Go. On older versions (or to be explicit), pass it as an argument: `go func(s string) { ... }(s)`.
+<Fragment slot="ar">
+جعل Go 1.22 لكل دورة متغيّرها الخاص، فاختفت هذه المشكلة في الإصدارات الحديثة. على الإصدارات الأقدم (أو لتكون صريحًا) مرّر القيمة كوسيط: `go func(s string) { ... }(s)`.
+</Fragment>
+</Tr>
 </Callout>
 
 <Callout type="gotcha" title="⚠️ Every goroutine needs an exit">
-Goroutines are **not** garbage-collected while blocked. A goroutine waiting forever on a channel that never receives a value is a **leak** — it holds its stack and everything it captured. The rule: every goroutine you start must have a guaranteed path to termination, usually a `done` channel or a [`context`](/concurrency/concurrency-vs-parallelism/) you `select` on. See [Or-done](/patterns/or-done-channel/) and [Context & Cancellation](/patterns/context-cancellation/).
+<Tr>
+Goroutines are **not** garbage-collected while blocked. A goroutine waiting forever on a channel that never receives a value is a **leak** — it holds its stack and everything it captured. The rule: every goroutine you start must have a guaranteed path to termination, usually a `done` channel or a [`context`](/concurrency/context/) you `select` on. See [Or-done](/patterns/or-done-channel/) and [Context & Cancellation](/patterns/context-cancellation/).
+<Fragment slot="ar">
+الـ goroutines **لا** يُجمَع مهملاتها (garbage-collected) وهي محجوبة (blocked). الـ goroutine الذي ينتظر للأبد على channel لا يستقبل قيمة أبدًا هو **تسريب (leak)** — يحتجز مكدّسه وكل ما التقطه. القاعدة: كل goroutine تبدؤه يجب أن يملك مسارًا مضمونًا للإنهاء، غالبًا channel باسم `done` أو [`context`](/concurrency/context/) تنتظره عبر `select`. انظر [Or-done](/patterns/or-done-channel/) و [Context & Cancellation](/patterns/context-cancellation/).
+</Fragment>
+</Tr>
 </Callout>

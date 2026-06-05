@@ -193,7 +193,23 @@ function initSearch() {
   });
 }
 
+/* ---------- language toggle (EN / عربي) ---------- */
+function initLang() {
+  const btn = document.querySelector('[data-dp-lang]');
+  const root = document.documentElement;
+  const label = () => { if (btn) btn.textContent = root.dataset.lang === 'ar' ? 'EN' : 'عربي'; };
+  label();
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const next = root.dataset.lang === 'ar' ? 'en' : 'ar';
+    root.dataset.lang = next;
+    try { localStorage.setItem('dp-lang', next); } catch {}
+    label();
+  });
+}
+
 function boot() {
+  initLang();
   initScroll();
   initReveal();
   initMenu();
