@@ -2,10 +2,12 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
+import Card from '../../components/Card.astro';
 import { CONCURRENCY_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('concurrency');
 const slugs = topics.map((t) => t.id).join(',');
+const start = topics.find((t) => t.id === 'concurrency-vs-parallelism');
 ---
 <BaseLayout title="Concurrency" description="A deep, Go-first guide to concurrency — races, goroutines, channels, select, sync, the memory model, context and the scheduler.">
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Concurrency</span></nav>
@@ -35,6 +37,23 @@ const slugs = topics.map((t) => t.id).join(',');
     </div>
     <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="con.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
   </div>
+
+  {start && (
+    <Fragment>
+      <h2 class="dp-section-head" style="border:0;" data-i18n="ui.startHere">Start here</h2>
+      <div class="dp-grid">
+        <Card
+          slug={start.id}
+          category="foundations"
+          title={start.data.title}
+          intent={start.data.intent}
+          numLabel={`START · ${start.data.difficulty}`}
+          footLabel="Read first"
+          base="/concurrency"
+        />
+      </div>
+    </Fragment>
+  )}
 
   {CONCURRENCY_CATEGORIES.map((c) => (
     <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="concurrency" base="/concurrency" />
