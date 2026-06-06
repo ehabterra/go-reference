@@ -5,7 +5,7 @@ kind: topic
 order: 15
 difficulty: "Intermediate"
 status: ready
-intent: "defer schedules cleanup (LIFO, args fixed at defer time, closures can rewrite named returns), panic unwinds the stack running those defers, and recover — only inside a defer — catches a panic and turns it back into control at a boundary."
+intent: "defer schedules cleanup, panic unwinds the stack, and recover — only inside a defer — turns a panic back into an ordinary error."
 related:
   - errors
   - control-flow

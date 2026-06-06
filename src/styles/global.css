@@ -197,7 +197,10 @@ img { max-width: 100%; }
 .dp-card:hover { transform: translateY(-3px); border-color: var(--c, var(--dp-accent)); box-shadow: var(--dp-shadow-sm); color: #fff; }
 .dp-card__num { font-size: .72rem; color: var(--dp-muted); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .dp-card__title { margin: .25rem 0 .4rem; font-size: 1.12rem; font-weight: 800; }
-.dp-card__intent { margin: 0; color: var(--dp-muted); font-size: .9rem; line-height: 1.5; flex: 1; }
+.dp-card__intent {
+  margin: 0; color: var(--dp-muted); font-size: .9rem; line-height: 1.5; flex: 1;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+}
 .dp-card__foot { display: flex; align-items: center; justify-content: space-between; margin-top: .9rem; font-size: .76rem; color: var(--dp-muted); }
 .dp-card__check { width: 1.35rem; height: 1.35rem; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--dp-border); font-size: .8rem; color: transparent; }
 .dp-card.is-learned { border-color: var(--c); }
