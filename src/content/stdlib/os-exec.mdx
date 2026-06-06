@@ -1,0 +1,206 @@
+---
+title: "os/exec"
+category: system
+kind: topic
+order: 7.5
+difficulty: "Intermediate"
+status: ready
+intent: "Running external programs from Go — exec.Command, Run vs Output vs Start, capturing stdout/stderr, streaming and pipes, context timeouts, environment and working directory, and why there's no shell (and why that's a security win)."
+related:
+  - files-and-os
+  - cli-with-flag
+  - context
+quiz:
+  - q: "exec.Command(\"ls\", \"-l\") — does the second argument get split by spaces like a shell?"
+    options:
+      - text: "No — there is no shell; each argument is passed literally, so you list them separately and avoid injection"
+        correct: true
+      - text: "Yes, it splits on whitespace like bash"
+        correct: false
+      - text: "Only if you set cmd.Shell = true"
+        correct: false
+      - text: "It runs the string through /bin/sh"
+        correct: false
+    explain: "os/exec does NOT invoke a shell. exec.Command(name, arg1, arg2, …) execs the program directly with those exact args — no globbing, no $VAR expansion, no word-splitting. That's why it's immune to shell-injection: user input becomes one argument, never code."
+  - q: "What's the difference between cmd.Run() and cmd.Output()?"
+    options:
+      - text: "Run() runs and waits, returning only an error; Output() also captures and returns the command's stdout as []byte"
+        correct: true
+      - text: "Run() is asynchronous, Output() is synchronous"
+        correct: false
+      - text: "Output() doesn't wait for the command"
+        correct: false
+      - text: "They are identical"
+        correct: false
+    explain: "Run() = Start() then Wait(); it returns an error but you must wire up Stdout yourself to see output. Output() is a convenience that captures stdout into a []byte and returns it (still erroring on failure). CombinedOutput() merges stdout+stderr."
+  - q: "A command exits with status 1. How do you get that exit code in Go?"
+    options:
+      - text: "The error from Run/Output is an *exec.ExitError; type-assert it and call ExitCode()"
+        correct: true
+      - text: "Run() returns the int code directly"
+        correct: false
+      - text: "Check os.Getenv(\"?\")"
+        correct: false
+      - text: "Exit codes aren't accessible from Go"
+        correct: false
+    explain: "A non-zero exit makes Run/Output return an error of concrete type *exec.ExitError. Assert it (errors.As) and call .ExitCode(); its .Stderr holds captured stderr when you used Output(). A nil error means the program exited 0."
+  - q: "How do you stop a child process if it runs too long?"
+    options:
+      - text: "Use exec.CommandContext(ctx, ...) with a context.WithTimeout — the child is killed when the context is cancelled"
+        correct: true
+      - text: "Call cmd.Timeout(5s)"
+        correct: false
+      - text: "There's no way; you must wait"
+        correct: false
+      - text: "Set GOMAXPROCS lower"
+        correct: false
+    explain: "exec.CommandContext binds the command to a context. When the context is cancelled or its deadline passes, os/exec sends the process a kill signal. Pair it with context.WithTimeout for a hard cap on runtime."
+  - q: "exec.Command(\"mytool\", ...) — where does Go look for \"mytool\"?"
+    options:
+      - text: "On $PATH (via exec.LookPath); a bare name with no slash that isn't on PATH fails with exec.ErrNotFound"
+        correct: true
+      - text: "Only in the current directory"
+        correct: false
+      - text: "In /usr/bin exclusively"
+        correct: false
+      - text: "Wherever GOROOT points"
+        correct: false
+    explain: "If the name contains no path separator, exec.Command resolves it on $PATH using exec.LookPath. A relative or absolute path (./tool, /usr/bin/tool) is used as-is. Not found → the error wraps exec.ErrNotFound."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+
+<Callout type="analogy" title="🔧 Analogy">
+`os/exec` lets your program **hire another program** to do a job — `git`, `ffmpeg`, `psql` — and collect the result. Unlike typing into a shell, you hand the worker its instructions as a *list of separate slips* (the arguments), not one sentence it has to parse. That difference is the whole reason there's no command-injection hole: user input is always cargo, never instructions.
+</Callout>
+
+<Callout type="tip" title="🧪 These examples are shown as code, not the live runner">
+The `go.dev` sandbox can't launch external programs, so the snippets below are fenced (not runnable) — copy them into a real module to try. Everything else on this page is standard, current Go.
+</Callout>
+
+## Running a command
+
+You build a `*exec.Cmd` with `exec.Command(name, args...)` and then choose how to run it. The three common entry points trade convenience for control:
+
+```go
+import "os/exec"
+
+// 1. Run and wait — error only. You must wire Stdout yourself to see output.
+cmd := exec.Command("git", "status", "--porcelain")
+err := cmd.Run()
+
+// 2. Output — run, wait, and return stdout as []byte (the usual choice).
+out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+fmt.Printf("commit: %s", out)
+
+// 3. CombinedOutput — stdout and stderr merged into one []byte.
+out, err = exec.Command("go", "vet", "./...").CombinedOutput()
+```
+
+Each argument is **separate** — `exec.Command("ls", "-l", "/tmp")`, never `exec.Command("ls -l /tmp")`. There is no shell to split the string, so spaces in a filename "just work" and hostile input can't smuggle in `; rm -rf /`.
+
+<Mermaid code={String.raw`graph LR
+  C["exec.Command(name, args...)"] --> CMD["*exec.Cmd"]
+  CMD -->|"Run()"| W["wait → error"]
+  CMD -->|"Output()"| O["stdout []byte + error"]
+  CMD -->|"Start() + Wait()"| A["async: run while you do other work"]`} />
+
+## Capturing output and exit codes
+
+`Output()` returns stdout; when the program exits non-zero, the error is a concrete **`*exec.ExitError`** carrying the exit code (and, with `Output()`, the captured stderr):
+
+```go
+out, err := exec.Command("go", "build", "./...").Output()
+if err != nil {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		fmt.Printf("build failed (exit %d):\n%s", ee.ExitCode(), ee.Stderr)
+	} else {
+		// e.g. the program wasn't found on PATH
+		fmt.Println("could not run:", err)
+	}
+	return
+}
+fmt.Printf("ok: %s", out)
+```
+
+A `nil` error means the process exited `0`. Distinguish "ran and failed" (`*exec.ExitError`) from "couldn't start" (a `LookPath`/permission error) — they need different handling.
+
+## Streaming, pipes, and stdin
+
+For long output, don't buffer it all — wire the child's streams to yours (or to a file). For full control, attach pipes:
+
+```go
+// Stream child output straight to this process's stdout/stderr.
+cmd := exec.Command("make", "build")
+cmd.Stdout = os.Stdout
+cmd.Stderr = os.Stderr
+cmd.Run()
+
+// Feed stdin from a string.
+cmd = exec.Command("grep", "needle")
+cmd.Stdin = strings.NewReader("hay\nneedle\nstack\n")
+out, _ := cmd.Output() // "needle\n"
+
+// A pipe lets you read incrementally while the command runs.
+cmd = exec.Command("tail", "-f", "app.log")
+stdout, _ := cmd.StdoutPipe()
+cmd.Start()
+scanner := bufio.NewScanner(stdout)
+for scanner.Scan() {
+	fmt.Println("line:", scanner.Text())
+}
+cmd.Wait()
+```
+
+`Start()` launches without waiting; pair it with `Wait()` (after you've drained the pipes) to reap the process. `cmd.Stdout`/`Stdin`/`Stderr` accept any [`io.Writer`/`io.Reader`](/stdlib/fmt-and-io/), so a `bytes.Buffer`, a file, or a network connection all work.
+
+## Timeouts, environment, and working directory
+
+A child process should almost always have a deadline. `exec.CommandContext` kills it when the [context](/concurrency/context/) is cancelled. You can also set its environment and working directory:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+cmd := exec.CommandContext(ctx, "slow-tool", "--big")
+cmd.Dir = "/srv/data"                          // working directory
+cmd.Env = append(os.Environ(), "LANG=C")        // inherit + override
+if err := cmd.Run(); err != nil {
+	if ctx.Err() == context.DeadlineExceeded {
+		fmt.Println("timed out, process killed")
+	}
+}
+```
+
+`cmd.Env = nil` (the default) inherits the parent's environment; setting it replaces the whole environment, so build on `os.Environ()` when you only mean to add a variable.
+
+## Reference
+
+| Goal | Call |
+|---|---|
+| Build a command | `exec.Command(name, args...)` |
+| Run, wait, error only | `cmd.Run()` |
+| Capture stdout | `cmd.Output()` → `[]byte` |
+| Capture stdout+stderr | `cmd.CombinedOutput()` |
+| Run asynchronously | `cmd.Start()` then `cmd.Wait()` |
+| Stream output live | set `cmd.Stdout`/`cmd.Stderr` |
+| Read output incrementally | `cmd.StdoutPipe()` |
+| Feed input | set `cmd.Stdin` |
+| Add a timeout | `exec.CommandContext(ctx, ...)` |
+| Set working dir / env | `cmd.Dir` / `cmd.Env` |
+| Get the exit code | `errors.As(err, &exec.ExitError{})` → `ExitCode()` |
+| Find a binary on PATH | `exec.LookPath(name)` |
+
+<Callout type="gotcha" title="⚠️ No shell means no shell features — and that's the point">
+Because there's no shell, you **don't get** `$VAR` expansion, `~` home-dir, glob `*.go`, pipes `|`, or redirection `>` for free — do those in Go (`os.Getenv`, `filepath.Glob`, wire pipes with `io`). Resist the urge to "fix" this with `exec.Command("sh", "-c", userInput)` — that re-opens the **command-injection** hole the design closed; only ever do it with a fully trusted, constant string. Also: always give long-running children a **timeout** via `CommandContext`, and remember a non-zero exit is a normal error to handle, not a panic.
+</Callout>
+
+## See also
+
+- [files & os](/stdlib/files-and-os/) — wire a child's streams to files; `os.Environ` for its environment.
+- [CLI Tools with flag](/stdlib/cli-with-flag/) — parse your own flags, then shell out to other tools.
+- [context](/concurrency/context/) — `CommandContext` for deadlines and cancellation.
+- [fmt & io](/stdlib/fmt-and-io/) — `cmd.Stdout`/`Stdin` accept any `io.Writer`/`io.Reader`.
+
+Next: prove your code works before it ships — [Testing Basics](/stdlib/testing-basics/).

@@ -44,6 +44,28 @@ quiz:
       - text: "Never — it's deprecated"
         correct: false
     explain: "If you build a big fixture before the loop, call b.ResetTimer() right before for i := 0; i < b.N; i++ so the timer starts fresh and only the work inside the loop is measured. There's also b.StopTimer/b.StartTimer to exclude per-iteration setup."
+  - q: "What does the Go 1.24 b.Loop() form (for b.Loop() { ... }) improve over for i := 0; i < b.N; i++?"
+    options:
+      - text: "It runs the body a tuned number of times AND keeps the compiler from optimizing the work away or hoisting setup, so it's more robust"
+        correct: true
+      - text: "It makes benchmarks run in parallel"
+        correct: false
+      - text: "It removes the need for go test"
+        correct: false
+      - text: "It only works for allocation benchmarks"
+        correct: false
+    explain: "for b.Loop() { ... } (Go 1.24+) replaces the manual b.N loop: it times only the looped region, runs setup before it once, and prevents the compiler from eliminating the loop body or its inputs — fixing the classic 'dead-code elimination ate my benchmark' trap."
+  - q: "Why compare benchmark runs with benchstat and -count instead of reading one number?"
+    options:
+      - text: "ns/op jitters run to run; -count=N gives multiple samples and benchstat reports the mean plus whether the difference is statistically significant"
+        correct: true
+      - text: "benchstat makes the code faster"
+        correct: false
+      - text: "-count sets b.N directly"
+        correct: false
+      - text: "A single run is always exact"
+        correct: false
+    explain: "Microbenchmarks are noisy. Run go test -bench=. -count=10 to collect samples, save old and new, then benchstat old.txt new.txt prints means, variance, and a significance verdict — so you don't chase noise as if it were a real regression."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -166,5 +188,41 @@ func main() {
 <Callout type="gotcha" title="⚠️ Stop the compiler from optimizing your work away">
 If a benchmark's result is never used, the compiler may **delete the code entirely**, and you'll measure nothing. Assign the result to a package-level `var sink` (or otherwise consume it) so the work can't be eliminated. Also: benchmark on a quiet machine, ignore the first noisy run, and compare runs with `benchstat` rather than eyeballing single numbers — `ns/op` jitters between runs.
 </Callout>
+
+## The modern loop: b.Loop (Go 1.24+)
+
+Go 1.24 added **`for b.Loop()`** as the preferred benchmark loop. It times only the looped region, runs any setup before it exactly once, and — crucially — stops the compiler from optimizing away the body or its inputs, which kills the classic "my benchmark measured nothing" bug:
+
+```go
+func BenchmarkConcatBuilder(b *testing.B) {
+	for b.Loop() { // Go 1.24+: tuned count, no dead-code elimination
+		var sb strings.Builder
+		for j := 0; j < 1000; j++ {
+			sb.WriteString("x")
+		}
+		_ = sb.String()
+	}
+}
+```
+
+The `for i := 0; i < b.N; i++` form still works everywhere and is what you'll see in older code; prefer `b.Loop()` on Go 1.24+.
+
+## Comparing runs
+
+A single `ns/op` is noisy. Take several samples and compare with `benchstat`:
+
+```bash
+# collect 10 samples of the baseline and the change
+$ go test -bench=. -benchmem -count=10 > old.txt
+#   ...make your change...
+$ go test -bench=. -benchmem -count=10 > new.txt
+$ benchstat old.txt new.txt   # mean ± variance, and is the delta significant?
+```
+
+## See also
+
+- [profiling with pprof](/stdlib/profiling-pprof/) — when a benchmark is slow, pprof shows *where* the time goes.
+- [testing basics](/stdlib/testing-basics/) — benchmarks share the `_test.go` file and `go test` runner.
+- [strings & bytes](/stdlib/strings-and-bytes/) — the `+=` vs `Builder` result this page measures.
 
 Next: the commands that tie it all together — [the Go toolchain](/stdlib/go-toolchain/).

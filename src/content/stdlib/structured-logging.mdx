@@ -5,7 +5,7 @@ kind: topic
 order: 7
 difficulty: "Intermediate"
 status: ready
-intent: "Log key-value attributes with log/slog — Text vs JSON handlers, levels, slog.With for shared fields, and why structured logs beat fmt.Println in production."
+intent: "Log key-value attributes with log/slog — Text vs JSON handlers, levels and thresholds, slog.With and slog.Group for context, typed attributes and LogAttrs for the hot path, and why structured logs beat fmt.Println in production."
 related:
   - cli-with-flag
   - errors
@@ -44,6 +44,28 @@ quiz:
       - text: "They produce identical output"
         correct: false
     explain: "Both write the same attributes; only the format differs. TextHandler emits key=value lines that are easy to read in a terminal. JSONHandler emits one JSON object per line — ideal for ingestion by tools like Loki, Elasticsearch, or CloudWatch."
+  - q: "A handler is set to slog.LevelInfo. What happens to logger.Debug(...) calls?"
+    options:
+      - text: "They're dropped — the handler filters out records below its level, cheaply"
+        correct: true
+      - text: "They still print, just without a level"
+        correct: false
+      - text: "They cause a panic"
+        correct: false
+      - text: "They print to stderr instead"
+        correct: false
+    explain: "Each handler has a minimum level. Records below it are discarded — and slog checks Enabled() first, so a disabled Debug call avoids most of the formatting work. You raise/lower the threshold without touching call sites."
+  - q: "Why prefer slog.LogAttrs / typed attrs (slog.Int, slog.String) over the loose \"key\", value form?"
+    options:
+      - text: "They're compiler-checked (no mismatched pairs / !BADKEY) and avoid the allocation of boxing each value into any"
+        correct: true
+      - text: "They're the only way to add attributes"
+        correct: false
+      - text: "They automatically encrypt values"
+        correct: false
+      - text: "They change the output format"
+        correct: false
+    explain: "The variadic key,value form can desync (a forgotten value logs !BADKEY) and boxes every value into an any. slog.LogAttrs(ctx, level, msg, slog.Int(...), ...) takes typed slog.Attr values — checked at compile time and allocation-light, which matters on hot paths."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -89,31 +111,113 @@ func main() {
 
 Notice `reqLog` carries `request_id=abc-123` on **both** of its lines without repeating it — that's `slog.With` building a child logger with shared context.
 
-## Levels, handlers, and shared fields
+## Levels and the threshold
 
 slog has four built-in levels — **Debug, Info, Warn, Error** — and the handler filters by a configurable threshold, so you can silence `Debug` in production without touching call sites:
 
 <Mermaid code={String.raw`graph LR
-  CALL["logger.Info/Warn/Error<br/>(msg + attrs)"] --> H{"Handler"}
+  CALL["logger.Info/Warn/Error<br/>(msg + attrs)"] --> EN{"level ≥ threshold?"}
+  EN -->|no| DROP["discarded (cheap)"]
+  EN -->|yes| H{"Handler"}
   H -->|"TextHandler"| TXT["level=INFO msg=... key=val"]
   H -->|"JSONHandler"| JSON["{level:INFO, msg:..., key:val}"]
   TXT --> OUT["os.Stdout / file"]
   JSON --> OUT`} />
 
+The level is set on the handler via `HandlerOptions{Level: ...}`. Wire it to a `--verbose` [flag](/stdlib/cli-with-flag/) and you can flip Debug on for one run. Because slog checks `Enabled()` before formatting, a dropped `Debug` line costs almost nothing.
+
+## Text vs JSON handlers
+
 Swapping the **handler** changes the format without touching any log call. For a machine-readable pipeline, use `JSONHandler` — every line becomes one JSON object:
 
-```go
-logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-	Level: slog.LevelInfo, // Debug lines are dropped
-}))
-logger.Info("server started", "port", 8080)
-// {"time":"...","level":"INFO","msg":"server started","port":8080}
-```
+<Playground client:visible title="json.go" code={String.raw`package main
 
-To make this logger the default for the package-level `slog.Info` calls everywhere, register it once with `slog.SetDefault(logger)`.
+import (
+	"log/slog"
+	"os"
+)
+
+func main() {
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelInfo, // Debug lines are dropped
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{} // strip time for a deterministic demo
+			}
+			return a
+		},
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, opts))
+
+	logger.Debug("verbose detail", "n", 1) // below threshold → not printed
+	logger.Info("server started", "port", 8080)
+	logger.Error("db down", "attempt", 3)
+	// {"level":"INFO","msg":"server started","port":8080}
+	// {"level":"ERROR","msg":"db down","attempt":3}
+}`} />
+
+To make a logger the default for the package-level `slog.Info` calls everywhere, register it once with `slog.SetDefault(logger)`.
+
+## Grouping and typed attributes
+
+Related fields can be nested under a **group** with `slog.Group`, which namespaces them (`req.method`, `req.path` in text; a nested object in JSON). And for hot paths, `slog.LogAttrs` with **typed** `slog.Attr` values skips the `any`-boxing of the loose form and is compiler-checked:
+
+<Playground client:visible title="group.go" code={String.raw`package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+)
+
+func main() {
+	opts := &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+
+	// Group related attributes under one key.
+	logger.Info("request done",
+		slog.Group("req", slog.String("method", "GET"), slog.Int("status", 200)),
+	)
+
+	// LogAttrs: typed, allocation-light, compiler-checked.
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "metrics",
+		slog.Int("rps", 1200), slog.Float64("p99_ms", 8.4),
+	)
+}`} />
+
+## Reference
+
+| Want | Use |
+|---|---|
+| A readable local logger | `slog.New(slog.NewTextHandler(os.Stdout, nil))` |
+| Machine-ingestible logs | `slog.New(slog.NewJSONHandler(...))` |
+| Set the global default | `slog.SetDefault(logger)` |
+| Attach context to all lines | `logger.With("key", v)` |
+| Namespace related fields | `slog.Group("name", attrs...)` |
+| Typed, fast attributes | `slog.LogAttrs(ctx, level, msg, slog.Int(...))` |
+| Set the minimum level | `&slog.HandlerOptions{Level: slog.LevelDebug}` |
+| Add source file/line | `&slog.HandlerOptions{AddSource: true}` |
+
+## Under the hood
+
+A `*slog.Logger` is a thin front end; the work happens in a **`slog.Handler`** — an interface with `Enabled`, `Handle(Record)`, `WithAttrs`, and `WithGroup`. A call assembles a `slog.Record` (time, level, message, attrs) and, if `Enabled` passes, hands it to the handler to format and write. Because `Handler` is just an interface, you can write your own (route errors to Sentry, sample noisy lines, fan out to several sinks) and the rest of your code is unchanged. `With`/`WithGroup` return a logger whose handler has the attributes pre-bound, so shared context is computed once, not per line.
 
 <Callout type="gotcha" title="⚠️ Odd args silently corrupt a line">
-The variadic `key, value, key, value` form is convenient but fragile: forget a value and slog logs a `!BADKEY` entry instead of failing. For anything important, use the **typed** helpers — `slog.Int("port", 8080)`, `slog.String("env", "prod")`, `slog.Any("user", u)` — which the compiler checks and which are slightly faster (no boxing guesswork). Reserve the loose `"key", value` form for quick, low-stakes lines.
+The variadic `key, value, key, value` form is convenient but fragile: forget a value and slog logs a `!BADKEY` entry instead of failing. For anything important, use the **typed** helpers — `slog.Int("port", 8080)`, `slog.String("env", "prod")`, `slog.Any("user", u)` — which the compiler checks and which avoid boxing each value into an `any`. On hot paths prefer `slog.LogAttrs`. Reserve the loose `"key", value` form for quick, low-stakes lines.
 </Callout>
 
-Next: prove your code works before it ships — [Testing Basics](/stdlib/testing-basics/).
+## See also
+
+- [CLI Tools with flag](/stdlib/cli-with-flag/) — a `--verbose` flag to toggle the log level.
+- [errors](/fundamentals/errors/) — log a wrapped error with `slog.Any("err", err)`.
+- [files & os](/stdlib/files-and-os/) — point a handler at a file (`*os.File` is an `io.Writer`).
+- [testing-basics](/stdlib/testing-basics/) — capture log output in a `bytes.Buffer` to assert on it.
+
+Next: shelling out to other programs — [os/exec](/stdlib/os-exec/).

@@ -5,11 +5,11 @@ kind: topic
 order: 6
 difficulty: "Beginner"
 status: ready
-intent: "Build command-line tools with the flag package — typed options with defaults, positional args, subcommands via FlagSet, and env-var fallbacks."
+intent: "Build command-line tools with the flag package — typed options with defaults, binding with Var, positional args, subcommands via FlagSet, custom flag.Value types, and env-var fallbacks."
 related:
   - files-and-os
   - structured-logging
-  - fmt-and-io
+  - os-exec
 quiz:
   - q: "Why do flag.String / flag.Int return a *pointer* instead of the value?"
     options:
@@ -44,6 +44,28 @@ quiz:
       - text: "The flag package can't do subcommands"
         correct: false
     explain: "The global flag set handles one set of options. For subcommands, switch on os.Args[1], then call a dedicated flag.NewFlagSet(name, ...).Parse(os.Args[2:]) — each subcommand gets its own flags."
+  - q: "What does implementing the flag.Value interface (String() + Set(string) error) let you do?"
+    options:
+      - text: "Define a custom flag type — e.g. a comma-separated list or a validated enum — parsed by flag like a built-in"
+        correct: true
+      - text: "Speed up flag.Parse"
+        correct: false
+      - text: "Make a flag required"
+        correct: false
+      - text: "Log every flag automatically"
+        correct: false
+    explain: "flag.Var(&myValue, name, usage) accepts anything implementing flag.Value. Set is called with the raw argument string (return an error to reject it); String renders the default. That's how you get -tags a,b,c or a duration flag."
+  - q: "Where does flag print its auto-generated usage, and how do you trigger it?"
+    options:
+      - text: "To stderr — automatically on a parse error or -h/--help, built from each flag's usage string"
+        correct: true
+      - text: "To stdout, only if you call flag.Help()"
+        correct: false
+      - text: "It doesn't; you must write usage yourself"
+        correct: false
+      - text: "To a log file"
+        correct: false
+    explain: "flag wires up -h/--help for free and prints usage (to stderr) on any parse error, assembling it from the name, type, default, and usage string of every defined flag. Override flag.Usage to customize it."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -102,7 +124,11 @@ func main() {
 
 Run as `tool --name go --count 2 report.txt` and you'd get two `hello, go` lines plus `[report.txt]` as the positional. The built-in `--help` flag prints every usage string for free.
 
-## Positionals, env vars, and subcommands
+<Callout type="tip" title="🧪 Var binds a flag to an existing variable">
+Instead of the pointer-returning `flag.Int`, the `…Var` forms bind to a variable you already have: `flag.IntVar(&cfg.Count, "count", 1, "…")`. That's the clean way to populate a config struct's fields directly, so the rest of your program reads `cfg.Count`, not `*count`.
+</Callout>
+
+## Positionals and env-var fallbacks
 
 After parsing, **positional arguments** — the words that aren't flags — sit in `flag.Args()`:
 
@@ -112,7 +138,7 @@ flag.Arg(0)  // "report.txt"
 flag.NArg()  // 1
 ```
 
-For configuration that shouldn't live on the command line (secrets, deploy mode), read an **environment variable with a fallback** via `os.Getenv`:
+For configuration that shouldn't live on the command line (secrets, deploy mode), read an **environment variable with a fallback** via `os.Getenv`. A common idiom is "flag overrides env overrides default":
 
 ```go
 mode := os.Getenv("APP_MODE")
@@ -121,21 +147,96 @@ if mode == "" {
 }
 ```
 
-When one binary needs several commands (`tool add`, `tool list`), give each its own **`flag.NewFlagSet`** and parse the args after the command word:
+## Subcommands with FlagSet
 
-```go
-addCmd := flag.NewFlagSet("add", flag.ExitOnError)
-prio := addCmd.Int("priority", 1, "task priority")
+The global functions (`flag.String`, `flag.Parse`) operate on one default flag set. When a binary needs several commands (`tool add`, `tool list`), give **each its own `flag.NewFlagSet`** and parse the arguments *after* the command word. This playground parses a hard-coded argument slice so it runs deterministically; in a real tool you'd pass `os.Args[2:]`:
 
-switch os.Args[1] {
-case "add":
-	addCmd.Parse(os.Args[2:]) // each subcommand owns its flags
-	// ... use *prio and addCmd.Args()
+<Playground client:visible title="subcommands.go" code={String.raw`package main
+
+import (
+	"flag"
+	"fmt"
+)
+
+func main() {
+	// Each subcommand owns its own flags.
+	addCmd := flag.NewFlagSet("add", flag.ExitOnError)
+	prio := addCmd.Int("priority", 1, "task priority")
+
+	listCmd := flag.NewFlagSet("list", flag.ExitOnError)
+	all := listCmd.Bool("all", false, "include done tasks")
+
+	// Normally: command, args := os.Args[1], os.Args[2:]
+	command := "add"
+	args := []string{"-priority", "5", "buy", "milk"}
+
+	switch command {
+	case "add":
+		addCmd.Parse(args)
+		fmt.Printf("add: priority=%d task=%v\n", *prio, addCmd.Args())
+	case "list":
+		listCmd.Parse(args)
+		fmt.Printf("list: all=%v\n", *all)
+	default:
+		fmt.Println("usage: tool <add|list> [flags]")
+	}
+}`} />
+
+## Custom flag types
+
+A flag's type isn't limited to the built-ins. Anything implementing **`flag.Value`** — `String() string` and `Set(string) error` — can be a flag via `flag.Var`. This is how you accept a comma-separated list, a validated enum, or (with `flag.Duration`) a `time.Duration`. `Set` receives the raw text and can reject it:
+
+<Playground client:visible title="custom.go" code={String.raw`package main
+
+import (
+	"flag"
+	"fmt"
+	"strings"
+)
+
+// tagList implements flag.Value to accept -tags a,b,c.
+type tagList []string
+
+func (t *tagList) String() string { return strings.Join(*t, ",") }
+
+func (t *tagList) Set(v string) error {
+	if v == "" {
+		return fmt.Errorf("tags cannot be empty")
+	}
+	*t = strings.Split(v, ",")
+	return nil
 }
-```
+
+func main() {
+	var tags tagList
+	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
+	fs.Var(&tags, "tags", "comma-separated tags")
+
+	fs.Parse([]string{"-tags", "go,cli,stdlib"})
+	fmt.Printf("%d tags: %v\n", len(tags), []string(tags))
+}`} />
+
+## Reference
+
+| Need | Use |
+|---|---|
+| A string/int/bool option | `flag.String/Int/Bool(name, def, usage)` |
+| Bind to an existing variable | `flag.StringVar(&v, …)` |
+| Parse the command line | `flag.Parse()` |
+| Leftover positionals | `flag.Args()` / `flag.Arg(0)` / `flag.NArg()` |
+| Separate command groups | `flag.NewFlagSet(name, errHandling)` |
+| A custom-typed flag | implement `flag.Value`, register with `flag.Var` |
+| Config from environment | `os.Getenv` / `os.LookupEnv` with a default |
+| Custom help text | override `flag.Usage` |
 
 <Callout type="gotcha" title="⚠️ Flags must come before positionals">
-The standard `flag` parser **stops at the first non-flag argument**. So `tool file.txt --count 3` treats `--count 3` as positionals, not flags — `*count` keeps its default. Put flags first (`tool --count 3 file.txt`), or use `--` only to force the end of flags. If you want flags anywhere, that's where a third-party parser (like `cobra`/`pflag`) earns its keep.
+The standard `flag` parser **stops at the first non-flag argument**. So `tool file.txt --count 3` treats `--count 3` as positionals, not flags — `*count` keeps its default. Put flags first (`tool --count 3 file.txt`), or use a bare `--` to force the end of flags. If you need flags interspersed anywhere, or rich subcommands and shell completion, that's where a third-party parser (`spf13/cobra` + `pflag`) earns its keep — but reach for it only when the stdlib `flag` genuinely isn't enough.
 </Callout>
+
+## See also
+
+- [files & os](/stdlib/files-and-os/) — `os.Args`, `os.Getenv`, and the standard streams `flag` builds on.
+- [os/exec](/stdlib/os-exec/) — once you've parsed options, run other programs.
+- [Structured Logging with slog](/stdlib/structured-logging/) — add a `--verbose` flag that flips the log level.
 
 Next: replace ad-hoc `fmt.Println` debugging with real logs — [Structured Logging with slog](/stdlib/structured-logging/).

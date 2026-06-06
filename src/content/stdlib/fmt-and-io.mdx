@@ -5,23 +5,23 @@ kind: topic
 order: 1
 difficulty: "Start here"
 status: ready
-intent: "Formatting and streaming — the fmt verbs you'll actually use, the tiny io.Reader/io.Writer interfaces everything plugs into, and the Stringer hook."
+intent: "Formatting and streaming — the fmt verbs you'll actually use, width/precision flags, the Stringer/Formatter hooks, and the tiny io.Reader/io.Writer interfaces (plus io.Copy, MultiWriter, TeeReader) that everything plugs into."
 related:
   - strings-and-bytes
   - encoding-json
   - interfaces
 quiz:
-  - q: "What's the difference between %v and %+v in fmt?"
+  - q: "What's the difference between %v, %+v and %#v in fmt?"
     options:
-      - text: "%+v adds field names for structs; %v prints just the values"
+      - text: "%v prints values; %+v adds struct field names; %#v prints Go-syntax (type + fields)"
         correct: true
-      - text: "%+v is for pointers, %v for values"
+      - text: "%+v is for pointers, %v for values, %#v for maps"
         correct: false
       - text: "They're identical"
         correct: false
-      - text: "%+v prints the type name"
+      - text: "%+v prints the type name, %#v the address"
         correct: false
-    explain: "%v is the default format; %+v adds struct field names ({X:1 Y:2}); %#v prints Go-syntax (main.Point{X:1, Y:2}); %T prints the type."
+    explain: "%v is the default; %+v adds struct field names ({X:1 Y:2}); %#v prints Go-syntax (main.Point{X:1, Y:2}); and %T prints the type itself."
   - q: "Why are io.Reader and io.Writer so central to Go?"
     options:
       - text: "They're tiny one-method interfaces, so files, network connections, buffers and strings all interchange"
@@ -43,92 +43,272 @@ quiz:
         correct: false
       - text: "It can't; you must format manually"
         correct: false
-    explain: "If a value's type has a `String() string` method (the fmt.Stringer interface), fmt uses it for %v and Println. Implement it to control how your type prints."
+    explain: "If a value's type has a `String() string` method (the fmt.Stringer interface), fmt uses it for %v, %s and Println. Implement it to control how your type prints."
+  - q: "What does `fmt.Errorf(\"...: %w\", err)` do that `%v` does not?"
+    options:
+      - text: "It wraps err so errors.Is / errors.As can still find it in the chain"
+        correct: true
+      - text: "Nothing — %w and %v are aliases"
+        correct: false
+      - text: "It prints the stack trace"
+        correct: false
+      - text: "It converts the error to a string permanently"
+        correct: false
+    explain: "%w embeds the original error in the returned error's chain, so errors.Is/As can unwrap and match it. %v only formats the text, losing the wrapped error for matching."
+  - q: "A function should produce text that might go to the screen, a file, or a test buffer. What should it take?"
+    options:
+      - text: "An io.Writer parameter (and use fmt.Fprintf), so the destination is the caller's choice"
+        correct: true
+      - text: "Always call fmt.Println directly"
+        correct: false
+      - text: "Return one giant string and let the caller print it"
+        correct: false
+      - text: "A *os.File, since that's the only real writer"
+        correct: false
+    explain: "Accepting an io.Writer lets the same code write to os.Stdout, a file, an http.ResponseWriter, or a bytes.Buffer in a test — no changes. That decoupling is the whole point of the interface."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🔌 Analogy">
-`fmt` is the label-maker: it turns values into readable text. `io.Reader` and `io.Writer` are the **universal plugs** — every source of bytes (a file, a socket, a string) is a Reader, every sink (a file, the terminal, a buffer) is a Writer, and because the plugs are standard, anything connects to anything.
+`fmt` is the label-maker: it turns values into readable text. `io.Reader` and `io.Writer` are the **universal plugs** — every source of bytes (a file, a socket, a string) is a Reader, every sink (a file, the terminal, a buffer) is a Writer, and because the plugs are standard, anything connects to anything. Master those two interfaces and most of the standard library suddenly fits together.
 </Callout>
 
 ## Printing with fmt
 
-`Println` is for quick output; `Printf` gives you **verbs** for control; `Sprintf` returns a string instead of printing:
+`fmt` has three families, and the suffix tells you the destination: the bare name (`Print`, `Println`) writes to `os.Stdout`; the `S` prefix (`Sprintf`) **returns a string**; the `F` prefix (`Fprintf`) writes to **any `io.Writer`** you pass. Within each family, `Printf` takes a format string of **verbs**, `Println` space-separates its arguments and adds a newline, and `Print` just concatenates.
 
 <Playground client:visible title="fmt.go" code={String.raw`package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 type Point struct{ X, Y int }
 
 func main() {
 	p := Point{1, 2}
-	fmt.Printf("%v\n", p)   // {1 2}           — default
-	fmt.Printf("%+v\n", p)  // {X:1 Y:2}        — with field names
-	fmt.Printf("%#v\n", p)  // main.Point{X:1, Y:2} — Go syntax
-	fmt.Printf("%T\n", p)   // main.Point       — the type
+	fmt.Printf("%v\n", p)   // {1 2}                 — default
+	fmt.Printf("%+v\n", p)  // {X:1 Y:2}             — with field names
+	fmt.Printf("%#v\n", p)  // main.Point{X:1, Y:2}  — Go syntax
+	fmt.Printf("%T\n", p)   // main.Point            — the type
 
-	fmt.Printf("%d  %s  %q  %.2f\n", 42, "hi", "hi", 3.14159)
-	//          42  hi  "hi"  3.14
+	fmt.Printf("%d  %s  %q  %.2f  %t\n", 42, "hi", "hi", 3.14159, true)
+	//          42  hi  "hi"  3.14  true
 
-	s := fmt.Sprintf("(%d, %d)", p.X, p.Y) // build, don't print
+	s := fmt.Sprintf("(%d, %d)", p.X, p.Y) // build a string, don't print
 	fmt.Println("built:", s)
+
+	fmt.Fprintln(os.Stderr, "this line goes to stderr, not stdout")
 }`} />
 
-The verbs you'll use most: `%v` (anything), `%d` (integer), `%s` (string), `%q` (quoted), `%f`/`%.2f` (float), `%t` (bool), `%T` (type), `%w` (wrap an [error](/fundamentals/errors/)).
+### The verb reference
+
+You can get a long way with a handful of verbs. These are the ones worth memorizing:
+
+| Verb | Prints | Example → output |
+|---|---|---|
+| `%v` | the value, default format | `{1 2}` |
+| `%+v` | struct with field names | `{X:1 Y:2}` |
+| `%#v` | Go-syntax representation | `main.Point{X:1, Y:2}` |
+| `%T` | the **type** of the value | `main.Point` |
+| `%d` | integer (base 10) | `42` |
+| `%b` `%o` `%x` | binary / octal / hex | `101010` `52` `2a` |
+| `%f` `%.2f` `%e` `%g` | float: fixed / precision / scientific / compact | `3.14` |
+| `%s` | string or `[]byte` | `hi` |
+| `%q` | double-quoted, escaped string | `"hi"` |
+| `%c` `%U` | rune as character / Unicode point | `世` `U+4E16` |
+| `%p` | pointer address | `0xc000012345` |
+| `%t` | boolean | `true` |
+| `%w` | wrap an [error](/fundamentals/errors/) (only in `Errorf`) | — |
+
+### Width, precision, and flags
+
+Between the `%` and the verb you can put **flags, a width, and a precision** — the same grammar as C's `printf`. Width pads the field; precision controls decimals (for floats) or max length (for strings). A `-` left-aligns, `0` zero-pads, `+` always shows the sign, and `*` reads the width/precision from an argument. This is what makes aligned, tabular output possible:
+
+<Playground client:visible title="format.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	items := []struct {
+		name  string
+		price float64
+	}{{"Coffee", 3.5}, {"Sandwich", 12}, {"Tea", 2.25}}
+
+	for _, it := range items {
+		// %-10s left-aligns in a 10-wide field; %8.2f is 8 wide, 2 decimals
+		fmt.Printf("%-10s $%8.2f\n", it.name, it.price)
+	}
+
+	fmt.Printf("|%6d|%-6d|%06d|\n", 42, 42, 42) // |    42|42    |000042|
+	fmt.Printf("padded hex: %#04x\n", 255)       // padded hex: 0x00ff
+
+	// %*d takes the width from an argument
+	for _, w := range []int{4, 8} {
+		fmt.Printf("%*d\n", w, 7)
+	}
+}`} />
+
+<Callout type="tip" title="🧪 go vet checks your format strings">
+A wrong verb (`%d` for a string, too few arguments) compiles fine but prints garbage like `%!d(string=hi)` at runtime. `go vet` — which `go test` runs automatically — statically checks `Printf`-style calls and flags the mismatch before it ships. If you write your own formatting helper, name its variadic `Printf`-style wrapper accordingly and `vet` will check it too.
+</Callout>
+
+## Stringer: controlling how your type prints
+
+When `fmt` formats a value with `%v`, `%s`, or `Println`, it first checks whether the type implements **`fmt.Stringer`** — a single method `String() string`. If so, `fmt` calls it. This is the idiomatic way to give a type a human-readable form, and it's why `time.Duration` prints as `1h30m0s` instead of a raw nanosecond count.
+
+<Playground client:visible title="stringer.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Celsius controls its own display via Stringer.
+type Celsius float64
+
+func (c Celsius) String() string { return fmt.Sprintf("%.1f°C", float64(c)) }
+
+// Level uses Stringer to turn an enum into a name.
+type Level int
+
+const (
+	Debug Level = iota
+	Info
+	Error
+)
+
+func (l Level) String() string {
+	return [...]string{"DEBUG", "INFO", "ERROR"}[l]
+}
+
+func main() {
+	fmt.Println("temp:", Celsius(36.6)) // temp: 36.6°C — String() called
+	fmt.Printf("%v / %v / %v\n", Debug, Info, Error)
+
+	// Stringer composes: a slice of Stringers prints each via String()
+	levels := []Level{Info, Error, Debug}
+	fmt.Println(strings.Trim(fmt.Sprint(levels), "[]")) // INFO ERROR DEBUG
+}`} />
+
+<Callout type="gotcha" title="⚠️ A String() that calls fmt on itself recurses forever">
+If `String()` formats the receiver with `%v` (or `Sprint(c)`), `fmt` calls `String()` again — infinite recursion, then a stack overflow. **Convert to the underlying type first**: `fmt.Sprintf("%.1f°C", float64(c))`, not `fmt.Sprintf("%v°C", c)`. The same trap applies to a type's `Error() string` method. For Go-syntax output (`%#v`) implement `GoStringer`; for full control over flags and width implement `fmt.Formatter`.
+</Callout>
 
 ## The io interfaces
 
-Two one-method interfaces underpin all of Go's I/O:
+Two one-method interfaces underpin **all** of Go's I/O:
+
+```go
+type Reader interface { Read(p []byte) (n int, err error) }
+type Writer interface { Write(p []byte) (n int, err error) }
+```
+
+`Read` fills the caller's buffer and reports how many bytes it got (plus `io.EOF` when the stream ends); `Write` consumes a buffer. That's the entire contract. Because files, network connections, `strings.Reader`, `bytes.Buffer`, `os.Stdout`, gzip streams, and HTTP bodies all satisfy these, anything that reads can be connected to anything that writes:
 
 <Mermaid code={String.raw`graph LR
-  SRC["any source<br/>file · socket · string"] -->|"Read(p []byte)"| R["io.Reader"]
+  SRC["any source<br/>file · socket · string · gzip"] -->|"Read(p []byte)"| R["io.Reader"]
   R -->|"io.Copy"| W["io.Writer"]
-  W -->|"Write(p []byte)"| DST["any sink<br/>file · terminal · buffer"]`} />
+  W -->|"Write(p []byte)"| DST["any sink<br/>file · terminal · buffer · HTTP"]`} />
 
-Because files, network connections, `strings.Reader` and `bytes.Buffer` all satisfy them, `io.Copy` streams from **any** Reader to **any** Writer — and `fmt` uses a type's `String()` method (the **Stringer** interface) automatically:
+The payoff is `io.Copy(dst, src)`: a single function that streams from **any** Reader to **any** Writer in a fixed-size buffer, never loading the whole stream into memory. Around it, the `io` package ships a small kit of adapters — `io.MultiWriter` (tee to several sinks at once), `io.TeeReader` (read while copying a side-channel), `io.LimitReader` (cap how much is read), and `io.ReadAll` (slurp into memory when you really do want the whole thing):
 
 <Playground client:visible title="io.go" code={String.raw`package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
-// Implementing Stringer controls how fmt prints this type.
-type Celsius float64
-
-func (c Celsius) String() string {
-	return fmt.Sprintf("%.1f°C", float64(c))
-}
-
 func main() {
-	// any io.Reader copied into any io.Writer
-	src := strings.NewReader("hello, io")
+	// io.Copy: any Reader -> any Writer, streamed.
+	src := strings.NewReader("hello, io\n")
 	var dst strings.Builder // strings.Builder is an io.Writer
 	n, _ := io.Copy(&dst, src)
 	fmt.Printf("copied %d bytes: %q\n", n, dst.String())
 
-	fmt.Println("temp:", Celsius(36.6)) // calls String() -> 36.6°C
+	// io.MultiWriter: write once, land in several places (e.g. screen + log buffer).
+	var logBuf bytes.Buffer
+	w := io.MultiWriter(os.Stdout, &logBuf)
+	fmt.Fprintln(w, "goes to stdout AND the buffer")
+	fmt.Printf("buffer captured %d bytes\n", logBuf.Len())
+
+	// io.LimitReader: read at most N bytes from a longer stream.
+	limited := io.LimitReader(strings.NewReader("abcdefghij"), 4)
+	got, _ := io.ReadAll(limited)
+	fmt.Printf("limited read: %q\n", got) // "abcd"
 }`} />
 
-## Buffer I/O for speed
+## Buffering with bufio
 
-Wrapping a Reader/Writer in `bufio` batches tiny reads and writes. `bufio.Scanner` is the idiomatic way to read input line by line:
+A raw `Read`/`Write` can mean one syscall per call — fine for big chunks, ruinous for byte-at-a-time work. `bufio` wraps a Reader or Writer and batches the underlying I/O. The most common face of it is **`bufio.Scanner`**, the idiomatic way to read input line by line (or word by word, via `Split`):
 
-```go
-scanner := bufio.NewScanner(os.Stdin)
-for scanner.Scan() {
-	line := scanner.Text()
-	// ... process line
-}
-```
+<Playground client:visible title="bufio.go" code={String.raw`package main
 
-<Callout type="tip" title="🐹 Write to an io.Writer, not to the screen">
-Functions that produce text should take an `io.Writer` (or use `fmt.Fprintf(w, …)`) instead of calling `fmt.Println` directly. Then the same code writes to the terminal, a file, an HTTP response, or a `bytes.Buffer` in a test — no changes. This is the whole reason `os.Stdout` is just an `*os.File` that happens to be a Writer.
+import (
+	"bufio"
+	"fmt"
+	"strings"
+)
+
+func main() {
+	input := "first line\nsecond line\nthird line"
+
+	// Scan line by line. In a real program the source is os.Stdin or a file;
+	// any io.Reader works, so we use a strings.Reader here for a deterministic demo.
+	sc := bufio.NewScanner(strings.NewReader(input))
+	n := 0
+	for sc.Scan() {
+		n++
+		fmt.Printf("%d: %q\n", n, sc.Text())
+	}
+
+	// Switch the split function to count words instead of lines.
+	sc2 := bufio.NewScanner(strings.NewReader(input))
+	sc2.Split(bufio.ScanWords)
+	words := 0
+	for sc2.Scan() {
+		words++
+	}
+	fmt.Println("words:", words) // 6
+}`} />
+
+In production you would read `os.Stdin` the same way: `bufio.NewScanner(os.Stdin)`. For output, wrap with `bufio.NewWriter(f)` and remember to **`Flush()`** — buffered bytes sit in memory until you do.
+
+## Under the hood: why everything is a Writer
+
+`fmt.Println` is just `fmt.Fprintln(os.Stdout, ...)`, and `os.Stdout` is an ordinary `*os.File` that happens to satisfy `io.Writer`. There is nothing special about "the screen" — it's one Writer among many. That's why the same `fmt.Fprintf(w, ...)` call can target a file, a network socket, an `http.ResponseWriter`, a `bytes.Buffer`, a gzip writer, or `io.Discard` (the `/dev/null` of writers) without the calling code knowing or caring. Internally `fmt` reuses a pooled buffer to build the output, then makes a single `Write` to the destination — so formatting cost is paid in memory, and the sink only sees finished bytes.
+
+## When to use what
+
+| You want to… | Reach for |
+|---|---|
+| Print to the screen | `fmt.Println` / `fmt.Printf` |
+| Build a string in memory | `fmt.Sprintf` (or `strings.Builder` in a loop) |
+| Write to a file/socket/response | `fmt.Fprintf(w, …)` with an `io.Writer` |
+| Control how your type prints | implement `String() string` (`fmt.Stringer`) |
+| Copy a stream | `io.Copy(dst, src)` |
+| Send output to several sinks | `io.MultiWriter(a, b, …)` |
+| Read input line by line | `bufio.NewScanner(r)` |
+| Slurp a whole stream | `io.ReadAll(r)` (mind the memory) |
+| Discard output | `io.Discard` |
+
+<Callout type="go" title="🐹 Accept io.Reader/Writer; return concrete types">
+The Go proverb is "accept interfaces, return structs." A function that *produces* text should take an `io.Writer` so the caller chooses the destination; a function that *consumes* input should take an `io.Reader`. Keep your own functions at that altitude and they compose with the entire standard library for free — testable with a `bytes.Buffer`, retargetable to a file or a socket, with zero changes. Don't hard-code `os.Stdout` deep in your logic.
 </Callout>
+
+## See also
+
+- [strings & bytes](/stdlib/strings-and-bytes/) — the text toolkit, `strings.Builder`, and the `bytes` mirror (`bytes.Buffer` is an `io.Writer`).
+- [encoding/json](/stdlib/encoding-json/) — `Encoder`/`Decoder` are built directly on `io.Writer`/`io.Reader`.
+- [interfaces](/fundamentals/interfaces/) — why one-method interfaces like Reader/Writer are the backbone of Go's design.
+- [errors](/fundamentals/errors/) — `%w` wrapping and the `Error() string` method (a sibling of Stringer).
+- [files & os](/stdlib/files-and-os/) — `*os.File` is the canonical Reader and Writer.
 
 Next: slicing and building text — [strings & bytes](/stdlib/strings-and-bytes/).

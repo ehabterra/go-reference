@@ -1,0 +1,215 @@
+---
+title: "text/template & html/template"
+category: essentials
+kind: topic
+order: 3.5
+difficulty: "Intermediate"
+status: ready
+intent: "Data-driven text generation — actions, fields and pipelines, if/range/with control flow, custom funcs, and why html/template's context-aware auto-escaping is the one you must use for the web."
+related:
+  - encoding-json
+  - strings-and-bytes
+  - http-server
+quiz:
+  - q: "What is the single most important reason to use html/template instead of text/template for web pages?"
+    options:
+      - text: "html/template auto-escapes data per context (HTML, attribute, JS, URL), defending against XSS; text/template does not escape anything"
+        correct: true
+      - text: "html/template is faster"
+        correct: false
+      - text: "text/template can't use struct fields"
+        correct: false
+      - text: "They're identical; the name is just convention"
+        correct: false
+    explain: "html/template understands where in the document a value lands and escapes it appropriately, neutralizing injected <script> and similar. text/template emits bytes verbatim — using it for HTML is an XSS hole."
+  - q: "In a template, what does {{.Name}} mean?"
+    options:
+      - text: "Insert the Name field/key/method of the current data value (the dot)"
+        correct: true
+      - text: "Call a function named Name"
+        correct: false
+      - text: "Declare a variable Name"
+        correct: false
+      - text: "A comment"
+        correct: false
+    explain: "The dot (.) is the current data context. {{.Name}} accesses the Name exported field of a struct, the \"Name\" key of a map, or a zero-arg method Name. Inside {{range}} or {{with}}, the dot is rebound to the element."
+  - q: "Why is template.Must(template.New(...).Parse(...)) a common idiom?"
+    options:
+      - text: "Must panics if parsing fails, so a template literal known at startup fails fast instead of returning an error you'd have to check"
+        correct: true
+      - text: "Must makes the template render faster"
+        correct: false
+      - text: "It's required for all templates"
+        correct: false
+      - text: "It enables auto-escaping"
+        correct: false
+    explain: "Templates defined as constants in source either parse or they don't — there's no runtime recovery. template.Must wraps the (\\*Template, error) pair and panics on error, so a typo surfaces at program start, not on first request."
+  - q: "What does {{range .Items}} … {{end}} do?"
+    options:
+      - text: "Iterates the slice/map/array Items, re-binding the dot to each element inside the block"
+        correct: true
+      - text: "Selects a range of characters"
+        correct: false
+      - text: "Defines a loop variable named Items"
+        correct: false
+      - text: "Repeats the block a fixed number of times"
+        correct: false
+    explain: "range iterates a slice, array, map, or channel. Inside the block, . becomes the current element (use {{.}} or {{.Field}}). An optional {{else}} runs when the collection is empty."
+  - q: "How do you add a custom function (e.g. uppercase) usable inside a template?"
+    options:
+      - text: "Register it with .Funcs(template.FuncMap{...}) before parsing, then call it in a pipeline: {{.Name | upper}}"
+        correct: true
+      - text: "You can't; only built-in functions exist"
+        correct: false
+      - text: "Pass it as part of the data struct"
+        correct: false
+      - text: "Define it inside the template with {{func}}"
+        correct: false
+    explain: "template.FuncMap maps names to Go functions; attach it with .Funcs(...) BEFORE Parse (the parser must know the names). Then invoke as {{upper .Name}} or via a pipeline {{.Name | upper}}."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📝 Analogy">
+A template is a **fill-in-the-blanks form**: you write the fixed text once, mark the blanks with `{{…}}` actions, then hand the engine a data value to fill them. The `text/template` engine fills any text; its twin `html/template` fills HTML *and* checks the ink — escaping anything that could turn data into executable markup. For the web you always want the careful twin.
+</Callout>
+
+## text/template basics
+
+You **parse** a template string into a `*template.Template`, then **execute** it against a data value, writing the result to any [`io.Writer`](/stdlib/fmt-and-io/). Actions in `{{…}}` pull from the current data context, written as the dot (`.`). `{{.Field}}` reads an exported struct field, a map key, or a zero-argument method:
+
+<Playground client:visible title="template.go" code={String.raw`package main
+
+import (
+	"os"
+	"text/template"
+)
+
+type Invoice struct {
+	Customer string
+	Total    float64
+}
+
+func main() {
+	// Must panics on a parse error — good for templates known at startup.
+	t := template.Must(template.New("inv").Parse(
+		"Dear {{.Customer}}, your total is {{printf \"$%.2f\" .Total}}.\n",
+	))
+
+	t.Execute(os.Stdout, Invoice{Customer: "Ada", Total: 123.456})
+	// Dear Ada, your total is $123.46.
+}`} />
+
+## Control flow: if, range, with
+
+Templates have just enough logic to shape output: `{{if}}`/`{{else}}` for conditionals, `{{range}}` to iterate (re-binding the dot to each element), and `{{with}}` to narrow the dot to a sub-value. There are no arbitrary expressions — that's deliberate; logic belongs in Go, presentation in the template:
+
+<Playground client:visible title="control.go" code={String.raw`package main
+
+import (
+	"os"
+	"text/template"
+)
+
+type Cart struct {
+	User  string
+	Items []string
+}
+
+func main() {
+	const page = "{{.User}}'s cart:\n" +
+		"{{range .Items}}  - {{.}}\n{{else}}  (empty)\n{{end}}" +
+		"{{if .Items}}Total items: {{len .Items}}\n{{end}}"
+
+	t := template.Must(template.New("cart").Parse(page))
+
+	t.Execute(os.Stdout, Cart{User: "Bob", Items: []string{"pen", "ink"}})
+	t.Execute(os.Stdout, Cart{User: "Cleo"}) // empty cart hits {{else}}
+}`} />
+
+## Functions and pipelines
+
+A template can call functions. Built-ins include `len`, `printf`, `index`, and comparisons (`eq`, `lt`, …). You add your own via a `template.FuncMap` — attached with `.Funcs(...)` **before** parsing, because the parser must recognize the names. The **pipeline** operator `|` feeds one result into the next, just like a shell:
+
+<Playground client:visible title="funcs.go" code={String.raw`package main
+
+import (
+	"os"
+	"strings"
+	"text/template"
+)
+
+func main() {
+	funcs := template.FuncMap{
+		"upper": strings.ToUpper,
+		"repeat": strings.Repeat,
+	}
+
+	t := template.Must(
+		template.New("f").Funcs(funcs).Parse(
+			"{{.Name | upper}} {{repeat \"!\" 3}}\n",
+		),
+	)
+	t.Execute(os.Stdout, map[string]string{"Name": "go"})
+	// GO !!!
+}`} />
+
+## html/template: auto-escaping for safety
+
+Switching the import to `html/template` keeps the **identical API** but adds the feature that matters for the web: **context-aware auto-escaping**. The engine tracks whether a value is landing in HTML text, an attribute, a URL, or a `<script>` block, and escapes it the right way for that spot. This is what stops user input like `<script>steal()</script>` from becoming executable — the [cross-site scripting (XSS)](/web/tls-and-https/) defense you get for free:
+
+<Playground client:visible title="html.go" code={String.raw`package main
+
+import (
+	"html/template"
+	"os"
+)
+
+func main() {
+	t := template.Must(template.New("p").Parse(
+		"<p>Hello, {{.}}</p>\n",
+	))
+
+	// Hostile input is neutralized automatically.
+	t.Execute(os.Stdout, "<script>steal()</script>")
+	// <p>Hello, &lt;script&gt;steal()&lt;/script&gt;</p>
+
+	t.Execute(os.Stdout, "Ada & Bob")
+	// <p>Hello, Ada &amp; Bob</p>
+}`} />
+
+The same data through `text/template` would emit the raw `<script>` tag verbatim — a live XSS hole. That difference is the whole reason both packages exist.
+
+<Mermaid code={String.raw`graph LR
+  D["data value"] --> T{"which package?"}
+  T -->|text/template| RAW["bytes emitted verbatim<br/>(reports, configs, code-gen)"]
+  T -->|html/template| ESC["context-aware escaping<br/>(HTML · attr · JS · URL)"]
+  ESC --> SAFE["safe HTML — XSS neutralized"]`} />
+
+## text/template vs html/template
+
+| | `text/template` | `html/template` |
+|---|---|---|
+| API | identical | identical (drop-in) |
+| Escaping | **none** — verbatim | **automatic, context-aware** |
+| Use for | emails, configs, code generation, CLI output | any HTML served to a browser |
+| XSS safety | your responsibility | handled by the engine |
+| Underlying | `text/template` | wraps `text/template` + escaper |
+
+## Under the hood: parse once, execute many
+
+Parsing compiles the template text into an internal tree; **executing** walks that tree against your data. Parsing is the expensive part, so do it **once** — at package init or server startup — and execute per request. A `*template.Template` is safe for concurrent `Execute` calls once parsed, so one parsed template serves all your goroutines. Real apps usually `template.ParseGlob("templates/*.html")` to load a whole directory into one template set, then `ExecuteTemplate(w, "page.html", data)` to render a named one — letting templates `{{define}}` and `{{template}}` include each other for layouts.
+
+<Callout type="gotcha" title="⚠️ Use html/template for the web, and parse before serving">
+Two rules. **(1)** For anything a browser renders, use **`html/template`** — `text/template` does zero escaping and turns user data into an injection vector. Don't defeat the escaper by marking untrusted data `template.HTML`. **(2)** Parse templates **once** at startup with `template.Must`, not on every request — re-parsing per request is slow and a missing-file error would surface mid-request instead of at boot. Also: only **exported** struct fields are visible to templates (same reflection rule as [JSON](/stdlib/encoding-json/)).
+</Callout>
+
+## See also
+
+- [encoding/json](/stdlib/encoding-json/) — the other way to turn Go data into a wire format; both rely on exported fields.
+- [http-server](/web/http-server/) — render `html/template` output straight to the `http.ResponseWriter`.
+- [strings & bytes](/stdlib/strings-and-bytes/) — `strings.Builder` is a handy `Execute` target when you want a string.
+- [fmt & io](/stdlib/fmt-and-io/) — `Execute` writes to any `io.Writer`.
+
+Next: working with dates, durations and timers — [time](/stdlib/time/).

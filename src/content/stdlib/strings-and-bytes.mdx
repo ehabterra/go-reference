@@ -5,7 +5,7 @@ kind: topic
 order: 2
 difficulty: "Beginner"
 status: ready
-intent: "The text toolkit — the strings package, efficient building with strings.Builder, the parallel bytes package, and strconv for number/string conversion."
+intent: "The text toolkit — searching and transforming with the strings package, O(n) assembly via strings.Builder, the parallel bytes package and bytes.Buffer, strconv for number⇄string conversion, and the unicode/utf8 view of multibyte text."
 related:
   - fmt-and-io
   - strings-and-runes
@@ -44,18 +44,40 @@ quiz:
       - text: "A float64"
         correct: false
     explain: "strconv converts between strings and other types. Atoi returns (int, error) — always check the error, because parsing user input can fail. Itoa goes the other way."
+  - q: "len(\"héllo\") on a UTF-8 string with one accented letter returns…"
+    options:
+      - text: "6 — len counts bytes, and é is two bytes in UTF-8"
+        correct: true
+      - text: "5 — len counts characters"
+        correct: false
+      - text: "5 — accents don't count"
+        correct: false
+      - text: "It panics on non-ASCII"
+        correct: false
+    explain: "len on a string is the byte length. 'é' encodes as two UTF-8 bytes, so the string is 6 bytes though it's 5 runes. Use utf8.RuneCountInString for the character count."
+  - q: "Why does strings.Replace return a new string instead of modifying in place?"
+    options:
+      - text: "Strings are immutable in Go — every transform allocates a new string"
+        correct: true
+      - text: "It does modify in place; the return value is a convenience"
+        correct: false
+      - text: "To support concurrent access"
+        correct: false
+      - text: "Because strings are pointers"
+        correct: false
+    explain: "A Go string is read-only; you can never change its bytes. Every strings.* transform (Replace, ToUpper, Trim, …) produces a fresh string. If you need in-place mutation, convert to []byte and use the bytes package."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="✂️ Analogy">
-If a `string` is a sealed, read-only ribbon of text, the `strings` package is the toolbox that *measures and cuts copies* of it — find, split, replace, trim — without ever altering the original. When you need to **assemble** text instead, `strings.Builder` is the workbench; when you're holding mutable bytes, `bytes` is the same toolbox for a different material.
+If a `string` is a sealed, read-only ribbon of text, the `strings` package is the toolbox that *measures and cuts copies* of it — find, split, replace, trim — without ever altering the original. When you need to **assemble** text instead, `strings.Builder` is the workbench; when you're holding mutable bytes from a file or socket, `bytes` is the same toolbox for a different material.
 </Callout>
 
 ## The strings package
 
-A flat set of functions over immutable strings — search, split, transform:
+`strings` is a flat set of pure functions over immutable strings: search, test, split, transform. None of them mutate — each returns a new value or a result — because a Go string's bytes are read-only. The functions group into a few families:
 
 <Playground client:visible title="strings.go" code={String.raw`package main
 
@@ -66,19 +88,34 @@ import (
 
 func main() {
 	s := "  Go is fun  "
-	fmt.Printf("%q\n", strings.TrimSpace(s))          // "Go is fun"
-	fmt.Println(strings.ToUpper("go"))                // GO
-	fmt.Println(strings.Contains(s, "fun"))           // true
-	fmt.Println(strings.Split("a,b,c", ","))          // [a b c]
-	fmt.Println(strings.Join([]string{"x", "y"}, "-")) // x-y
-	fmt.Println(strings.ReplaceAll("aaa", "a", "b"))  // bbb
-	fmt.Println(strings.HasPrefix("gopher", "go"))    // true
-	fmt.Println(strings.Count("banana", "a"))         // 3
+
+	// trim & case
+	fmt.Printf("%q\n", strings.TrimSpace(s))             // "Go is fun"
+	fmt.Println(strings.ToUpper("go"), strings.Title("go lang"))
+
+	// test
+	fmt.Println(strings.Contains(s, "fun"))              // true
+	fmt.Println(strings.HasPrefix("gopher", "go"))       // true
+	fmt.Println(strings.Count("banana", "a"))            // 3
+	fmt.Println(strings.Index("gopher", "ph"))           // 2 (-1 if absent)
+
+	// split & join
+	fmt.Println(strings.Split("a,b,c", ","))             // [a b c]
+	fmt.Println(strings.Fields("  spread   out  "))      // [spread out]
+	fmt.Println(strings.Join([]string{"x", "y"}, "-"))   // x-y
+
+	// transform
+	fmt.Println(strings.ReplaceAll("aaa", "a", "b"))     // bbb
+	fmt.Println(strings.Repeat("ab", 3))                 // ababab
 }`} />
+
+<Callout type="tip" title="🧪 strings.Cut is the modern split-on-first">
+For "split a key=value pair on the first `=`," reach for `strings.Cut` (Go 1.18+): `k, v, ok := strings.Cut("a=b=c", "=")` gives `k="a"`, `v="b=c"`, `ok=true`. It's clearer and faster than `SplitN(..., 2)` plus index checks, and the `ok` boolean tells you whether the separator was even present.
+</Callout>
 
 ## Build, don't concatenate
 
-A `string` is **immutable**, so `s += more` allocates a whole new string every time — quadratic in a loop. `strings.Builder` writes into one growing buffer:
+A `string` is **immutable**, so `s += more` can't extend the existing string — it must allocate a brand-new string and copy everything so far. Do that in a loop and you get **O(n²)** behavior: the millionth append copies a million-character string. `strings.Builder` instead writes into one buffer that grows geometrically, producing the final string once — **O(n)**:
 
 <Playground client:visible title="builder.go" code={String.raw`package main
 
@@ -89,32 +126,139 @@ import (
 
 func main() {
 	var b strings.Builder
+	b.Grow(64) // optional: preallocate if you know the rough size
+
 	for i := 0; i < 5; i++ {
 		fmt.Fprintf(&b, "item-%d ", i) // Builder is an io.Writer
 	}
+	// WriteString / WriteByte / WriteRune avoid fmt's overhead on hot paths
+	b.WriteString("done")
+
 	out := b.String()
-	fmt.Printf("%q (len %d)\n", strings.TrimSpace(out), b.Len())
+	fmt.Printf("%q (len %d)\n", out, b.Len())
 }`} />
 
-## bytes and strconv
+<Callout type="gotcha" title="⚠️ Don't copy a strings.Builder">
+A `Builder` holds an internal slice; copying it (passing by value, reassigning) and then writing to the copy panics with *"illegal use of non-zero Builder copied by value."* Always pass a `*strings.Builder`, and never reuse a Builder after calling `String()` if you also keep using the old one. The same applies to `bytes.Buffer`'s zero-value-but-don't-copy rule.
+</Callout>
+
+## bytes: the same toolbox for []byte
+
+The `bytes` package mirrors `strings` function-for-function — `bytes.Contains`, `bytes.Split`, `bytes.TrimSpace`, … — but operates on `[]byte`. Use it whenever you already hold a byte slice (a file read, a network buffer, the body of an HTTP request) so you don't pay to convert to `string` and back. Its `bytes.Buffer` is the mutable, readable+writable cousin of `strings.Builder` — it implements **both** `io.Reader` and `io.Writer`, which makes it the universal scratch space for tests and pipelines:
+
+<Playground client:visible title="bytes.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"fmt"
+)
+
+func main() {
+	// bytes.Buffer is an io.Writer AND an io.Reader.
+	var buf bytes.Buffer
+	buf.WriteString("log: ")
+	fmt.Fprintf(&buf, "%d events\n", 3)
+	fmt.Print(buf.String()) // log: 3 events
+
+	// bytes mirrors strings, but on []byte (no conversion needed).
+	data := []byte("name=Ada;role=admin;name=Bob")
+	fmt.Println(bytes.Count(data, []byte("name")))     // 2
+	fmt.Printf("%q\n", bytes.Split(data, []byte(";"))) // ["name=Ada" "role=admin" "name=Bob"]
+
+	// []byte is mutable — you can edit in place (strings cannot).
+	b := []byte("hello")
+	b[0] = 'H'
+	fmt.Println(string(b)) // Hello
+}`} />
+
+## strconv: strings ⇄ numbers and booleans
+
+Converting `"42"` to the integer `42` is **not** the same as the type conversion `int('4')`. Text-to-number parsing lives in `strconv`, and because parsing can fail on bad input, the parse functions return an `error` you must check:
+
+<Playground client:visible title="strconv.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"strconv"
+)
+
+func main() {
+	n, err := strconv.Atoi("42") // string -> int
+	fmt.Println(n, err)          // 42 <nil>
+
+	_, err = strconv.Atoi("4two")
+	fmt.Println("bad input ->", err) // strconv.Atoi: parsing "4two": invalid syntax
+
+	f, _ := strconv.ParseFloat("3.14", 64)
+	ok, _ := strconv.ParseBool("true")
+	fmt.Println(f, ok) // 3.14 true
+
+	// the other direction
+	fmt.Println(strconv.Itoa(255))            // "255"
+	fmt.Println(strconv.FormatInt(255, 16))   // "ff" (base 16)
+	fmt.Println(strconv.Quote("he said \"hi\"")) // "\"he said \\\"hi\\\"\""
+}`} />
+
+## Bytes, runes, and the UTF-8 view
+
+A Go string is a read-only slice of **bytes**, and Go source is UTF-8, so `len(s)` and `s[i]` work in *bytes*, not characters. Any non-ASCII character occupies more than one byte, which is the single most common surprise in Go text handling:
 
 <Mermaid code={String.raw`graph LR
-  STR["string (immutable)"] <-->|"[]byte(s) / string(b)"| BYT["[]byte (mutable)"]
+  STR["string (immutable UTF-8 bytes)"] <-->|"[]byte(s) / string(b)"| BYT["[]byte (mutable)"]
+  STR <-->|"[]rune(s) / string(r)"| RUN["[]rune (code points)"]
   STR -->|"strconv.Atoi / Itoa"| NUM["int, float, bool"]
   STR --- P1["strings.* funcs"]
   BYT --- P2["bytes.* funcs (mirror)"]`} />
 
-The `bytes` package mirrors `strings` for `[]byte` (handy for I/O buffers, where `bytes.Buffer` is the mutable cousin of `strings.Builder`). `strconv` converts between strings and numbers — and always returns an error to check:
+<Playground client:visible title="utf8.go" code={String.raw`package main
 
-```go
-n, err := strconv.Atoi("42")   // string -> int
-s := strconv.Itoa(42)          // int -> string
-f, err := strconv.ParseFloat("3.14", 64)
-b, err := strconv.ParseBool("true")
-```
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
-<Callout type="gotcha" title="⚠️ Converting string ↔ []byte copies">
-`[]byte(s)` and `string(b)` each **allocate and copy** — strings are immutable, so Go can't share the memory safely. That's usually fine, but in a hot loop, work in one representation (stay in `[]byte` for I/O, `string` for keys) rather than converting back and forth. For character-by-character work, remember `string` indexing gives **bytes**, not characters — see [strings & runes](/fundamentals/strings-and-runes/).
+func main() {
+	s := "héllo, 世界"
+
+	fmt.Println("bytes:", len(s))                    // 13 — byte length
+	fmt.Println("runes:", utf8.RuneCountInString(s)) // 9 — character count
+
+	// range over a string yields (byte index, rune) — decoding UTF-8 for you
+	for i, r := range s {
+		if r == '世' {
+			fmt.Printf("'%c' starts at byte %d\n", r, i) // byte 8, not 7
+		}
+	}
+
+	// []rune indexes by character; []byte by byte
+	r := []rune(s)
+	fmt.Printf("3rd character: %c\n", r[2]) // l
+}`} />
+
+See [strings & runes](/fundamentals/strings-and-runes/) for the full rune story.
+
+## When to use what
+
+| You have / want | Use |
+|---|---|
+| Search/transform immutable text | `strings.*` |
+| Assemble a string in a loop | `strings.Builder` |
+| Already hold `[]byte` (I/O, network) | `bytes.*` |
+| A read+write in-memory buffer | `bytes.Buffer` (it's a Reader **and** Writer) |
+| Parse text into a number/bool | `strconv.Atoi` / `ParseFloat` / `ParseBool` |
+| Format a number as text | `strconv.Itoa` / `FormatInt` / `FormatFloat` |
+| Count/iterate characters | `unicode/utf8`, `[]rune`, or `range` |
+| Split on the first separator | `strings.Cut` |
+
+<Callout type="go" title="🐹 Stay in one representation on hot paths">
+`[]byte(s)` and `string(b)` each **allocate and copy** — strings are immutable, so Go can't safely share the memory. One conversion is nothing; thousands in a loop show up in profiles. Pick the representation that matches your data source — stay in `[]byte` for I/O and parsing, `string` for map keys and APIs — and convert at the boundary, once. And remember: `string` indexing gives **bytes**, not characters.
 </Callout>
 
-Next: turning structs into JSON and back — [encoding/json](/stdlib/encoding-json/).
+## See also
+
+- [fmt & io](/stdlib/fmt-and-io/) — `strings.Builder` and `bytes.Buffer` are both `io.Writer`s.
+- [strings & runes](/fundamentals/strings-and-runes/) — bytes vs runes, UTF-8 decoding, and the indexing trap in depth.
+- [encoding/json](/stdlib/encoding-json/) — JSON marshaling builds strings the efficient way for you.
+- [regexp](/stdlib/regexp/) — when fixed-string search isn't enough and you need patterns.
+
+Next: matching and extracting with patterns — [regexp](/stdlib/regexp/).

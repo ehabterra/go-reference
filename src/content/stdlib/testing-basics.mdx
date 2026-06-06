@@ -44,6 +44,28 @@ quiz:
       - text: "Retries the test on failure"
         correct: false
     explain: "Calling t.Helper() at the top of an assertion helper tells the testing package to skip that frame when printing the failure location, so the error points at the real test line that called it."
+  - q: "What does t.Cleanup(fn) do that's better than a bare defer in the test?"
+    options:
+      - text: "Registers fn to run when the test AND its subtests finish — so cleanup composes across helpers and still runs after t.Fatal"
+        correct: true
+      - text: "It runs fn before the test starts"
+        correct: false
+      - text: "It's identical to defer in every way"
+        correct: false
+      - text: "It only works in benchmarks"
+        correct: false
+    explain: "t.Cleanup registers teardown that runs in LIFO order when the test (and any subtests) complete — including after t.Fatal/Goexit. Unlike defer, it can be registered from inside a setup helper, so a helper owns both its setup and teardown."
+  - q: "How do you get a temp directory that's removed automatically when the test ends?"
+    options:
+      - text: "t.TempDir() — returns a unique directory the testing package deletes for you afterward"
+        correct: true
+      - text: "os.TempDir() — but you must rm it yourself"
+        correct: false
+      - text: "There's no built-in; use ioutil"
+        correct: false
+      - text: "t.Dir()"
+        correct: false
+    explain: "t.TempDir() creates a fresh directory unique to the test and registers cleanup to remove it. Each test (and subtest) gets its own, so file-based tests stay isolated with zero manual teardown."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -176,5 +198,58 @@ FAIL    example/math    0.002s
 <Callout type="tip" title="🐹 Test the behaviour, not the implementation">
 Write assertions against what a function should **return or do**, not how it does it internally. Then you can refactor the body freely and the test still guards the contract. And prefer many small focused tests over one giant test — when several `t.Errorf` checks are independent, you learn about *all* the breakages in a single run instead of fixing them one at a time.
 </Callout>
+
+## Setup, cleanup, and temp dirs
+
+Tests that touch files, databases, or servers need setup and teardown. Two `testing` features make this clean and leak-free. **`t.Cleanup(fn)`** registers teardown that runs when the test (and its subtests) finish — in LIFO order, even after a `t.Fatal`. Unlike a `defer` in the test body, it can be registered *inside a helper*, so a helper owns both ends of a resource. **`t.TempDir()`** hands you a fresh directory that's deleted automatically:
+
+```go
+func TestWritesFile(t *testing.T) {
+	dir := t.TempDir() // unique; auto-removed when the test ends
+	path := filepath.Join(dir, "out.txt")
+
+	if err := Save(path, "data"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "data" {
+		t.Errorf("file = %q, want %q", got, "data")
+	}
+}
+
+// A helper that owns its own teardown via t.Cleanup.
+func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	s := startServer()
+	t.Cleanup(s.Stop) // runs automatically at test end
+	return s
+}
+```
+
+Related controls: **`t.Skip`/`t.Skipf`** bail out of a test that can't run here (e.g. `if testing.Short() { t.Skip(...) }` under `go test -short`); **`t.Setenv`** sets an env var for the duration of the test; and a package-level **`TestMain(m *testing.M)`** wraps one-time setup/teardown around the whole package's run (`os.Exit(m.Run())`).
+
+## The t toolbox
+
+| Method | Effect |
+|---|---|
+| `t.Errorf(...)` | mark failed, **keep going** |
+| `t.Fatalf(...)` | mark failed, **stop this test** |
+| `t.Log/Logf` | record output (shown with `-v` or on failure) |
+| `t.Helper()` | report failures at the caller's line |
+| `t.Run(name, fn)` | a named **subtest** |
+| `t.Parallel()` | run this test alongside other parallel ones |
+| `t.Cleanup(fn)` | deferred teardown (composable) |
+| `t.TempDir()` | auto-removed temp directory |
+| `t.Setenv(k, v)` | scoped environment variable |
+| `t.Skip(...)` | skip the rest of the test |
+
+Run with the race detector during development — `go test -race ./...` — to catch concurrency bugs the assertions alone won't (see [the race detector](/stdlib/race-detector/)).
+
+## See also
+
+- [table-driven tests & subtests](/stdlib/table-driven-tests/) — scale one test to dozens of cases with `t.Run`.
+- [benchmarks](/stdlib/benchmarks/) — `func BenchmarkXxx(b *testing.B)` for performance.
+- [fuzzing](/stdlib/fuzzing/) — let the toolchain generate inputs you didn't think of.
+- [the race detector](/stdlib/race-detector/) — `go test -race` to surface data races.
 
 Next: scaling one test into many cases — [table-driven tests & subtests](/stdlib/table-driven-tests/).

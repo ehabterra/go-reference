@@ -5,7 +5,7 @@ kind: topic
 order: 4
 difficulty: "Beginner"
 status: ready
-intent: "Instants, durations and the famous reference layout — formatting and parsing, time arithmetic, measuring elapsed time, and timers vs tickers."
+intent: "Instants, durations and the famous reference layout — formatting and parsing, time arithmetic and zones, the monotonic clock, measuring elapsed time, and timers vs tickers (and how to stop them)."
 related:
   - fmt-and-io
   - encoding-json
@@ -43,19 +43,41 @@ quiz:
         correct: false
       - text: "There's no way in the standard library"
         correct: false
-    explain: "time.Now() captures an instant; time.Since(start) returns the Duration elapsed (shorthand for time.Now().Sub(start)). Go's Time carries a monotonic clock reading so this stays correct even if the wall clock changes."
+    explain: "time.Now() captures an instant; time.Since(start) returns the Duration elapsed. Go's Time carries a monotonic clock reading so this stays correct even if the wall clock changes."
+  - q: "Why should you compare instants with t.Equal(u) instead of t == u?"
+    options:
+      - text: "Two Times for the same moment can differ in location or monotonic reading, so == may say false; Equal compares the actual instant"
+        correct: true
+      - text: "== doesn't compile for time.Time"
+        correct: false
+      - text: "Equal is just faster"
+        correct: false
+      - text: "There's no difference"
+        correct: false
+    explain: "A time.Time bundles wall clock, monotonic reading, and *Location. Two values can name the same instant in different zones, or one may carry a monotonic reading the other lacks, so == can be false. t.Equal(u) compares the instant itself."
+  - q: "What happens to a time.Ticker you never Stop()?"
+    options:
+      - text: "It keeps firing and leaks its underlying resources until the program exits"
+        correct: true
+      - text: "The garbage collector stops it when it goes out of scope"
+        correct: false
+      - text: "It stops after one tick"
+        correct: false
+      - text: "Nothing — tickers are free"
+        correct: false
+    explain: "A Ticker holds a runtime timer that keeps delivering on its channel; the GC will not reclaim it while it's active. Always defer ticker.Stop(). (time.After has the same trap in a loop — each call allocates a fresh timer.)"
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🕰️ Analogy">
-The `time` package gives you three instruments in one: a **calendar** (a `time.Time` instant — this date, this clock reading, this zone), a **ruler for spans** (`time.Duration` — how long between two instants), and a **stopwatch** (`time.Now` + `time.Since`). The famous oddity is how you tell it a date format — by *spelling out one specific reference moment*.
+The `time` package gives you three instruments in one: a **calendar** (a `time.Time` instant — this date, this clock reading, this zone), a **ruler for spans** (`time.Duration` — how long between two instants), and a **stopwatch** (`time.Now` + `time.Since`). The famous oddity is how you tell it a date format — not with `%Y%m%d` codes, but by *spelling out one specific reference moment*.
 </Callout>
 
 ## Time and Duration
 
-A `time.Time` is an instant; a `time.Duration` is a span of nanoseconds with friendly constants:
+A `time.Time` is an instant in time; a `time.Duration` is a span measured in nanoseconds, with friendly named constants (`time.Second`, `time.Hour`). Because a `Duration` is just an `int64`, you do arithmetic on it directly:
 
 <Playground client:visible title="time.go" code={String.raw`package main
 
@@ -68,30 +90,31 @@ func main() {
 	// a fixed instant keeps this output deterministic
 	t := time.Date(2026, time.June, 6, 15, 4, 5, 0, time.UTC)
 
-	fmt.Println("RFC3339:", t.Format(time.RFC3339))     // 2026-06-06T15:04:05Z
-	fmt.Println("custom: ", t.Format("2006-01-02 15:04")) // 2026-06-06 15:04
+	fmt.Println("RFC3339:", t.Format(time.RFC3339))       // 2026-06-06T15:04:05Z
+	fmt.Println("custom: ", t.Format("2006-01-02 15:04"))  // 2026-06-06 15:04
 
-	// parse a string into a Time using the same layout idea
-	p, _ := time.Parse("2006-01-02", "2025-12-25")
-	fmt.Println("weekday:", p.Weekday()) // Thursday
+	// component accessors
+	fmt.Println("year:", t.Year(), "month:", t.Month(), "day:", t.Day())
+	fmt.Println("weekday:", t.Weekday())                   // Saturday
 
 	// Duration is int64 nanoseconds — arithmetic just works
 	d := 90 * time.Minute
-	fmt.Println("hours:  ", d.Hours())                 // 1.5
-	fmt.Println("later:  ", t.Add(d).Format("15:04"))  // 16:34
+	fmt.Println("hours:  ", d.Hours())                     // 1.5
+	fmt.Println("later:  ", t.Add(d).Format("15:04"))      // 16:34
+	fmt.Println("until:  ", t.Add(24*time.Hour).Sub(t))    // 24h0m0s
 }`} />
 
 ## The reference layout
 
+This is the part everyone has to learn once. Rather than format codes, Go uses **one reference instant** and asks you to write it the way you want your dates to look. The reference is `Mon Jan 2 15:04:05 MST 2006` — chosen because its components are the sequence **1 2 3 4 5 6 7** (month=1, day=2, hour=3pm=15, minute=4, second=5, year=06, zone=−07):
+
 <Mermaid code={String.raw`graph LR
   REF["Mon Jan 2 15:04:05 MST 2006"] --> N["01 / 02   03:04:05 PM   2006   -0700"]
-  N --> SEQ["the sequence 1 2 3 4 5 6 7 — memorize it"]`} />
+  N --> SEQ["the sequence 1 2 3 4 5 6 7 — memorize this one moment"]`} />
 
-Rather than `%Y-%m-%d` codes, Go uses **one reference instant** — `01/02 03:04:05PM '06 -0700` — and you write your desired output using those exact numbers. `"2006-01-02"` → ISO date; `"15:04"` → 24-hour clock; `"Mon, 02 Jan 2006"` → a readable date.
+So `"2006-01-02"` is an ISO date, `"15:04"` is a 24-hour clock, `"Mon, 02 Jan 2006"` is a readable date, and `"3:04 PM"` is a 12-hour clock. **Parsing uses the same layout** — you describe the input's shape and `time.Parse` reads it:
 
-## Durations, timers and the stopwatch
-
-<Playground client:visible title="duration.go" code={String.raw`package main
+<Playground client:visible title="layout.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -99,31 +122,111 @@ import (
 )
 
 func main() {
-	d := 3*time.Hour + 25*time.Minute + 45*time.Second
-	fmt.Println("duration:", d)                        // 3h25m45s
-	fmt.Println("seconds: ", d.Seconds())              // 12345
-	fmt.Println("rounded: ", d.Round(time.Hour))       // 3h0m0s
-	fmt.Println("truncate:", d.Truncate(time.Minute))  // 3h25m0s
+	// Parse: describe the INPUT format with the reference numbers.
+	p, err := time.Parse("2006-01-02", "2025-12-25")
+	fmt.Println(p.Weekday(), err) // Thursday <nil>
 
-	// parse a human duration string
-	timeout, _ := time.ParseDuration("1500ms")
-	fmt.Println("timeout: ", timeout)                  // 1.5s
+	// A wrong layout is a runtime error, not a silent zero.
+	_, err = time.Parse("2006-01-02", "Dec 25, 2025")
+	fmt.Println("parse error:", err != nil) // true
+
+	// Format the same instant several ways.
+	t := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
+	for _, layout := range []string{"2006-01-02", "15:04", "Mon, 02 Jan 2006", "3:04 PM"} {
+		fmt.Printf("%-18s -> %s\n", layout, t.Format(layout))
+	}
 }`} />
 
-To measure real work, bracket it with the stopwatch; for periodic or delayed work, use timers:
-
-```go
-start := time.Now()
-doWork()
-fmt.Println("took", time.Since(start))
-
-time.Sleep(200 * time.Millisecond)   // pause this goroutine
-<-time.After(time.Second)            // a channel that fires once, later
-tick := time.NewTicker(time.Second)  // fires repeatedly; call tick.Stop()
-```
-
-<Callout type="gotcha" title="⚠️ Compare with Equal, and stop your tickers">
-Don't compare `Time` values with `==` — two instants can represent the same moment yet differ in monotonic reading or location; use `t.Equal(u)`. A `time.NewTicker` keeps firing until you call `Stop()`, so a forgotten ticker is a resource leak. And `time.After` in a hot loop allocates a fresh timer each iteration — reuse a `Timer` or a `Ticker` instead. Timers pair naturally with [`select`](/concurrency/select/) and [`context`](/concurrency/context/) for timeouts.
+<Callout type="tip" title="🧪 Use the predefined layout constants">
+Don't hand-roll common formats — `time` ships constants: `time.RFC3339` (the API/JSON default), `time.RFC1123` (HTTP headers), `time.Kitchen` (`3:04PM`), `time.DateOnly` and `time.TimeOnly` (Go 1.20+). `time.RFC3339` is what JSON marshaling uses and what most web APIs expect, so prefer it for anything that crosses a wire.
 </Callout>
+
+## Zones, the monotonic clock, and equality
+
+A `time.Time` bundles three things: a wall-clock reading, a `*time.Location` (zone), and — for values from `time.Now()` — a **monotonic clock** reading. That last one is why elapsed-time measurement is reliable even if NTP adjusts the wall clock mid-measurement. It's also why you should compare instants with `Equal` and never with `==`:
+
+<Playground client:visible title="zones.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	utc := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+
+	// Same instant, viewed in another zone.
+	ny, _ := time.LoadLocation("America/New_York")
+	there := utc.In(ny)
+	fmt.Println("UTC:", utc.Format("15:04 MST"))
+	fmt.Println("NY: ", there.Format("15:04 MST"))
+
+	// They are the SAME instant — == would say false (different Location),
+	// but Equal compares the moment itself.
+	fmt.Println("== :   ", utc == there)      // false
+	fmt.Println("Equal:", utc.Equal(there))   // true
+}`} />
+
+## The stopwatch, timers, and tickers
+
+To measure real work, bracket it with `time.Now()` / `time.Since()`. For delayed or periodic work, use timers and tickers — but remember tickers must be **stopped**:
+
+<Playground client:visible title="timers.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	// Stopwatch.
+	start := time.Now()
+	sum := 0
+	for i := 0; i < 1_000_000; i++ {
+		sum += i
+	}
+	fmt.Println("did work in under a second:", time.Since(start) < time.Second)
+
+	// Ticker: fires repeatedly. ALWAYS Stop it (deferred here).
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	ticks := 0
+	for range ticker.C {
+		ticks++
+		if ticks == 3 {
+			break // stop after three ticks
+		}
+	}
+	fmt.Println("ticks:", ticks) // 3
+}`} />
+
+The building blocks you'll combine: `time.Sleep(d)` pauses the current goroutine; `<-time.After(d)` is a channel that fires once after `d` (great in a [`select`](/concurrency/select/) for timeouts); `time.NewTimer(d)` is a one-shot you can `Stop`/`Reset`; `time.NewTicker(d)` fires on an interval until stopped.
+
+## When to use what
+
+| You want to… | Use |
+|---|---|
+| The current instant | `time.Now()` |
+| A specific date | `time.Date(...)` |
+| Format for an API/JSON | `t.Format(time.RFC3339)` |
+| Parse a known format | `time.Parse(layout, s)` |
+| Measure elapsed time | `time.Since(start)` |
+| Pause a goroutine | `time.Sleep(d)` |
+| Time out a `select` | `<-time.After(d)` |
+| Do something periodically | `time.NewTicker(d)` + `defer Stop()` |
+| Add/subtract time | `t.Add(d)` / `t.Sub(u)` |
+| Compare instants | `t.Equal(u)` / `t.Before(u)` / `t.After(u)` |
+
+<Callout type="gotcha" title="⚠️ Stop your tickers; don't loop time.After">
+A `time.NewTicker` keeps firing — and keeps its runtime timer alive — until you call `Stop()`, so a forgotten ticker leaks. Calling `time.After` **inside a hot loop** is the subtler version: each iteration allocates a brand-new timer that lives until it fires, which can pile up under load. Reuse a `Timer`/`Ticker`, and pair timeouts with [`context`](/concurrency/context/) (`context.WithTimeout`) so cancellation propagates instead of just elapsing.
+</Callout>
+
+## See also
+
+- [encoding/json](/stdlib/encoding-json/) — `time.Time` marshals as RFC 3339 out of the box.
+- [select](/concurrency/select/) — `time.After` as a timeout case.
+- [context](/concurrency/context/) — `context.WithTimeout`/`WithDeadline` build on `time` for cancellation.
+- [rate limiting](/concurrency/rate-limiting/) — tickers drive the simplest rate limiter.
 
 Next: reading and writing the filesystem — [files & os](/stdlib/files-and-os/).

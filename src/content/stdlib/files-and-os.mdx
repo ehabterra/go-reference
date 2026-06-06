@@ -5,11 +5,11 @@ kind: topic
 order: 5
 difficulty: "Beginner"
 status: ready
-intent: "Reading and writing files with os, streaming line-by-line with bufio, portable paths via path/filepath, and the os entry points to the world."
+intent: "Reading and writing files with os — whole-file vs streaming, OpenFile flags and permission bits, directories and FileInfo, portable paths via path/filepath (and filepath.WalkDir), and the os entry points (args, env, std streams, Exit)."
 related:
   - fmt-and-io
   - cli-with-flag
-  - encoding-json
+  - os-exec
 quiz:
   - q: "When should you reach for os.Open / bufio.Scanner instead of os.ReadFile?"
     options:
@@ -44,6 +44,28 @@ quiz:
       - text: "A map of bytes keyed by offset"
         correct: false
     explain: "*os.File satisfies io.Reader and io.Writer (among others). That's why os.Stdout works with fmt.Fprintf and why any open file streams through io.Copy — it's just another Reader/Writer."
+  - q: "To append to a file (creating it if absent), which os.OpenFile flags do you combine?"
+    options:
+      - text: "os.O_CREATE | os.O_WRONLY | os.O_APPEND"
+        correct: true
+      - text: "os.O_RDONLY"
+        correct: false
+      - text: "os.O_CREATE only"
+        correct: false
+      - text: "os.O_TRUNC | os.O_RDONLY"
+        correct: false
+    explain: "OpenFile takes a bitmask of flags plus a permission mode. O_CREATE makes it if missing, O_WRONLY opens for writing, O_APPEND seeks to the end before each write. O_TRUNC would instead empty an existing file."
+  - q: "How do you check whether a file exists / get its size and mode?"
+    options:
+      - text: "os.Stat returns a FileInfo (Size, Mode, IsDir, ModTime); errors.Is(err, os.ErrNotExist) tells you it's absent"
+        correct: true
+      - text: "os.Exists(path)"
+        correct: false
+      - text: "There's no way without opening it"
+        correct: false
+      - text: "filepath.Base reports the size"
+        correct: false
+    explain: "os.Stat(path) returns an fs.FileInfo with Size(), Mode(), IsDir(), ModTime(). If the file is missing you get an error that errors.Is(err, os.ErrNotExist) matches — the idiomatic existence check."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -129,28 +151,133 @@ func main() {
 `scanner.Scan()` returns `false` both at end-of-file **and** on a read error — the loop looks identical either way. After the loop, always check `scanner.Err()`; a silent failure (a broken pipe, a too-long line) is otherwise invisible. By default `bufio.Scanner` also caps lines at 64KB; for longer lines call `scanner.Buffer(...)`.
 </Callout>
 
+## Open flags and permission bits
+
+`os.ReadFile`/`WriteFile` cover the common cases, but **`os.OpenFile`** is the full control panel: a bitmask of flags plus a permission mode. The flags are OR-ed together — `O_CREATE` (make if missing), `O_WRONLY`/`O_RDWR`, `O_APPEND` (write at the end), `O_TRUNC` (empty first), `O_EXCL` (fail if it exists). Appending to a log file is the canonical example:
+
+<Playground client:visible title="openfile.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	path := filepath.Join(os.TempDir(), "app.log")
+	defer os.Remove(path)
+
+	// Open for appending, creating the file if it doesn't exist yet.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Println("open error:", err)
+		return
+	}
+	// *os.File is an io.Writer — fmt.Fprintf writes straight to it.
+	fmt.Fprintf(f, "first entry\n")
+	fmt.Fprintf(f, "second entry\n")
+	f.Close()
+
+	b, _ := os.ReadFile(path)
+	fmt.Print(string(b)) // both lines, in order
+}`} />
+
+The permission mode is a Unix octal: `0644` is `rw-r--r--`, `0600` keeps a secret owner-only, `0755` is an executable or directory. (On Windows only the owner-write bit is honored.)
+
+## Directories and file info
+
+`os.Stat` returns an `fs.FileInfo` — size, mode, modified time, and `IsDir`. A missing file yields an error you match with `errors.Is(err, os.ErrNotExist)` (the idiomatic "does it exist?"). `os.MkdirAll` makes a directory tree, and `os.ReadDir` lists a directory's entries:
+
+<Playground client:visible title="dirs.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	root := filepath.Join(os.TempDir(), "demo")
+	defer os.RemoveAll(root) // remove the whole tree
+
+	// Make a nested directory and a couple of files.
+	os.MkdirAll(filepath.Join(root, "sub"), 0755)
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("hi"), 0644)
+	os.WriteFile(filepath.Join(root, "sub", "b.txt"), []byte("there"), 0644)
+
+	// Stat: size + kind.
+	info, _ := os.Stat(filepath.Join(root, "a.txt"))
+	fmt.Printf("a.txt: %d bytes, dir=%v\n", info.Size(), info.IsDir())
+
+	// Existence check via errors.Is.
+	_, err := os.Stat(filepath.Join(root, "missing.txt"))
+	fmt.Println("missing.txt is absent:", errors.Is(err, os.ErrNotExist)) // true
+
+	// List a directory.
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		fmt.Printf("entry: %-6s dir=%v\n", e.Name(), e.IsDir())
+	}
+}`} />
+
+To walk a whole tree recursively, use **`filepath.WalkDir(root, fn)`** — it visits every file and subdirectory, calling your function with the path and entry. It's the efficient (Go 1.16+) replacement for the older `filepath.Walk`.
+
 ## Portable paths with filepath
 
 Never build paths by gluing strings with `"/"` — that breaks on Windows. The `path/filepath` package handles the OS-correct separator and gives you the pieces of a path:
 
 ```go
 p := filepath.Join("data", "logs", "app.log") // data/logs/app.log (or \ on Windows)
-filepath.Base(p)  // "app.log"
-filepath.Dir(p)   // "data/logs"
-filepath.Ext(p)   // ".log"
+filepath.Base(p)   // "app.log"
+filepath.Dir(p)    // "data/logs"
+filepath.Ext(p)    // ".log"
+filepath.Clean("a/../b/./c") // "b/c"
+abs, _ := filepath.Abs(p)    // absolute path from the cwd
+matches, _ := filepath.Glob("*.go") // shell-style matching
 ```
 
 ## The os doorway
 
-Beyond files, `os` is how a program reaches its environment:
+Beyond files, `os` is how a program reaches its environment and controls its own process:
 
-- **`os.Args`** — the command-line arguments (`os.Args[0]` is the program name).
-- **`os.Getenv("KEY")`** — an environment variable, or `""` if unset.
+- **`os.Args`** — the command-line arguments (`os.Args[0]` is the program name); parse them with [`flag`](/stdlib/cli-with-flag/).
+- **`os.Getenv("KEY")`** / **`os.Setenv`** / **`os.LookupEnv`** — environment variables (`LookupEnv` returns an `ok` bool so you can tell unset from empty).
 - **`os.Stdin` / `os.Stdout` / `os.Stderr`** — the three standard streams, each an `*os.File` (so an `io.Reader`/`io.Writer`). That's why `fmt.Fprintln(os.Stderr, …)` writes errors to the right place.
+- **`os.Exit(code)`** — exit immediately with a status code. **It does not run deferred functions** — reserve it for `main`, after cleanup.
 
 ```go
 fmt.Fprintln(os.Stderr, "warning: config not found")
-home := os.Getenv("HOME")
+home, ok := os.LookupEnv("HOME")
+_ = ok
 ```
+
+## Reference
+
+| Task | Call |
+|---|---|
+| Read a small file | `os.ReadFile(path)` |
+| Write a small file | `os.WriteFile(path, b, 0644)` |
+| Open for streaming read | `os.Open(path)` → `*os.File` |
+| Create/truncate for write | `os.Create(path)` |
+| Append / full control | `os.OpenFile(path, flags, perm)` |
+| File metadata | `os.Stat(path)` → `FileInfo` |
+| Exists? | `errors.Is(err, os.ErrNotExist)` |
+| Make directory tree | `os.MkdirAll(dir, 0755)` |
+| List a directory | `os.ReadDir(dir)` |
+| Walk a tree | `filepath.WalkDir(root, fn)` |
+| Delete file / tree | `os.Remove` / `os.RemoveAll` |
+| Build a path | `filepath.Join(...)` |
+
+<Callout type="gotcha" title="⚠️ Always close, check errors, and don't os.Exit past your defers">
+Three habits. **(1)** `defer f.Close()` the moment you open a file — a leaked descriptor eventually exhausts the OS limit. **(2)** Check the error on *every* file call, including `Close()` on a file you wrote (a deferred-then-buffered write can fail at close). **(3)** `os.Exit` and `log.Fatal` skip deferred functions, so cleanup never runs — call them only from `main` after your defers have done their work, never deep inside library code.
+</Callout>
+
+## See also
+
+- [fmt & io](/stdlib/fmt-and-io/) — `*os.File`, `os.Stdout`, and friends are all `io.Reader`/`io.Writer`.
+- [CLI Tools with flag](/stdlib/cli-with-flag/) — turn `os.Args` into typed options.
+- [os/exec](/stdlib/os-exec/) — run external programs and wire up their stdin/stdout.
+- [errors](/fundamentals/errors/) — `errors.Is(err, os.ErrNotExist)` and sentinel errors.
 
 Next: turn `os.Args` into real options — [CLI Tools with flag](/stdlib/cli-with-flag/).
