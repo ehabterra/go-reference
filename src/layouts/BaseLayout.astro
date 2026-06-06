@@ -14,9 +14,19 @@ const desc = description ?? SITE_DESC;
 // Build a lightweight search index for the ⌘K command palette.
 const patterns = await getCollection('patterns');
 const concurrency = await getCollection('concurrency');
+const dsa = await getCollection('dsa');
+const fundamentals = await getCollection('fundamentals');
+const stdlib = await getCollection('stdlib');
+const web = await getCollection('web');
+const internals = await getCollection('internals');
 const searchIndex = [
   ...patterns.map((p) => ({ t: p.data.title, u: `/patterns/${p.id}/`, c: p.data.category, s: 'Design Patterns', i: p.data.intent })),
   ...concurrency.map((p) => ({ t: p.data.title, u: `/concurrency/${p.id}/`, c: p.data.category, s: 'Concurrency', i: p.data.intent })),
+  ...fundamentals.map((p) => ({ t: p.data.title, u: `/fundamentals/${p.id}/`, c: p.data.category, s: 'Fundamentals', i: p.data.intent })),
+  ...dsa.map((p) => ({ t: p.data.title, u: `/dsa/${p.id}/`, c: p.data.category, s: 'DSA', i: p.data.intent })),
+  ...stdlib.map((p) => ({ t: p.data.title, u: `/stdlib/${p.id}/`, c: p.data.category, s: 'Stdlib', i: p.data.intent })),
+  ...web.map((p) => ({ t: p.data.title, u: `/web/${p.id}/`, c: p.data.category, s: 'Web', i: p.data.intent })),
+  ...internals.map((p) => ({ t: p.data.title, u: `/internals/${p.id}/`, c: p.data.category, s: 'Go Internals', i: p.data.intent })),
 ];
 ---
 <!doctype html>

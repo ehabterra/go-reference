@@ -1,0 +1,187 @@
+---
+title: "Reading Assembly"
+category: toolchain
+kind: topic
+order: 11
+difficulty: "Advanced"
+status: ready
+intent: "Reading what the compiler emits — go tool compile -S, Go's abstract assembly syntax, //go:noinline, intrinsics, and when looking at assembly actually pays off."
+related:
+  - compile-and-link
+  - escape-analysis
+  - memory-layout-and-alignment
+quiz:
+  - q: "How do you see the assembly the Go compiler generates for a package?"
+    options:
+      - text: "go tool compile -S file.go  (or go build -gcflags=-S ./...)"
+        correct: true
+      - text: "go disassemble"
+        correct: false
+      - text: "GODEBUG=asm=1"
+        correct: false
+      - text: "go tool pprof -asm"
+        correct: false
+    explain: "go tool compile -S prints the generated assembly to stderr; go build -gcflags=-S does the same as part of a build. The output is Go's own portable assembly notation, not raw platform assembly, though it maps closely to machine instructions."
+  - q: "Go's assembler uses a portable, abstract syntax with pseudo-registers like SP, FP, and PC. What does this mean?"
+    options:
+      - text: "It's a semi-abstract assembly shared across architectures, with pseudo-registers the assembler maps to real ones — not literal x86/ARM mnemonics"
+        correct: true
+      - text: "It's standard Intel x86 assembly"
+        correct: false
+      - text: "It's a high-level language"
+        correct: false
+      - text: "It's bytecode for a VM"
+        correct: false
+    explain: "Go's assembler (descended from Plan 9) uses an abstract syntax with pseudo-registers — FP (args/frame), SP (stack), PC, SB (globals) — that the toolchain lowers to each architecture. The mnemonics resemble but aren't exactly the platform's, so reading it takes a little acclimatization."
+  - q: "What does //go:noinline do and why use it when reading assembly?"
+    options:
+      - text: "It prevents the compiler from inlining that function, so it appears as a real CALL — making its assembly and behavior easy to isolate"
+        correct: true
+      - text: "It removes the function from the binary"
+        correct: false
+      - text: "It forces inlining"
+        correct: false
+      - text: "It disables optimization for the whole package"
+        correct: false
+    explain: "By default small functions are inlined, so they vanish into their callers in the assembly. //go:noinline keeps the function separate and emits a CALL, which is handy for benchmarking it in isolation or studying its standalone codegen. It's a compiler directive comment, not a general optimization switch."
+  - q: "What are compiler intrinsics?"
+    options:
+      - text: "Functions the compiler replaces with optimal inline instructions (e.g. math/bits, atomic ops, some math) instead of a real call"
+        correct: true
+      - text: "Built-in keywords like if and for"
+        correct: false
+      - text: "Assembly files you write by hand"
+        correct: false
+      - text: "Runtime library functions"
+        correct: false
+    explain: "Certain standard-library functions are recognized by the compiler and emitted as single optimal instructions — e.g. math/bits.TrailingZeros becomes a TZCNT/CTZ, sync/atomic ops become lock-prefixed instructions. In the assembly they appear as inline instructions, not CALLs, which is why they're so fast."
+  - q: "When is reading assembly actually worth it?"
+    options:
+      - text: "Rarely — to confirm a hot function inlined, a bounds check was eliminated, or an intrinsic fired, after profiling pointed you there"
+        correct: true
+      - text: "On every function you write"
+        correct: false
+      - text: "To find logic bugs"
+        correct: false
+      - text: "To choose variable names"
+        correct: false
+    explain: "Assembly is a last-mile tool for verified hot paths: did this inline? did the bounds check get eliminated? did the intrinsic kick in? did this allocate? You go there after pprof/benchmarks identify a hot spot — not as a routine practice, and never to debug correctness."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Reading the compiler's assembly is like a chef tasting the dish the kitchen actually plated, not the recipe they were handed. The recipe (your Go) says "add a helper function here"; the plated dish (the assembly) might show that helper *folded into the main course* ([inlining](/internals/compile-and-link/)), a redundant safety step skipped (bounds-check elimination), or a fancy technique done in one practiced motion (an **intrinsic**). You don't taste-test every plate — but when one dish is mysteriously slow, tasting it tells you what the kitchen *really* did, which the recipe alone can't.
+</Callout>
+
+## Seeing the output: `-S`
+
+The compiler will show you the code it generates. Two equivalent ways:
+
+```bash
+# Disassemble one file (prints to stderr).
+go tool compile -S main.go
+
+# As part of a build, for whole packages.
+go build -gcflags=-S ./...
+
+# Combine with -m to also see inline/escape decisions.
+go build -gcflags='-S -m' ./...
+```
+
+A snippet for a trivial `add` function looks roughly like this (amd64):
+
+```
+"".add STEXT nosplit size=4 args=0x10 locals=0x0
+  MOVQ  "".a+8(SP), AX   ; load arg a from the stack frame
+  ADDQ  "".b+16(SP), AX  ; add arg b
+  MOVQ  AX, "".~r0+24(SP) ; store the return value
+  RET
+```
+
+## It's Go's *abstract* assembly
+
+What you're reading is **not** literal x86/ARM — it's Go's own portable assembly notation (inherited from Plan 9), shared across architectures and then lowered to the real instruction set. The giveaways are the **pseudo-registers**:
+
+| Pseudo-register | Meaning |
+|---|---|
+| `FP` | Frame pointer — function arguments and locals by name (`a+8(FP)`) |
+| `SP` | Stack pointer — the local stack frame |
+| `PC` | Program counter |
+| `SB` | "Static base" — global symbols and functions |
+
+`nosplit` means the function skips the stack-growth check; `args`/`locals` give frame sizes. The mnemonics (`MOVQ`, `ADDQ`, `CALL`) resemble the platform's but go through Go's assembler, so don't expect a 1:1 match with `objdump`.
+
+## Anchoring with runtime function info
+
+You can't run `-S` inside a playground, but you *can* introspect compiled functions at runtime — names, entry addresses, and source positions — which is the same metadata the disassembler and stack traces use:
+
+<Playground client:visible title="funcinfo.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+//go:noinline
+func add(a, b int) int {
+	whoAmI()      // print this function's compiled metadata
+	return a + b  // ...the work the assembly implements
+}
+
+// whoAmI reports the name, file and line of its *caller* using the
+// same PC→function metadata that stack traces, panics and pprof use.
+func whoAmI() {
+	pc := make([]uintptr, 1)
+	n := runtime.Callers(2, pc) // skip Callers + whoAmI, capture the caller
+	if n == 0 {
+		return
+	}
+	fn := runtime.FuncForPC(pc[0])
+	file, line := fn.FileLine(pc[0])
+	fmt.Printf("running %-14s at %s:%d (entry 0x%x)\n",
+		fn.Name(), shortFile(file), line, fn.Entry())
+}
+
+func shortFile(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' {
+			return p[i+1:]
+		}
+	}
+	return p
+}
+
+func main() {
+	fmt.Println("add(2,3) =", add(2, 3))
+	fmt.Println("the entry address above is where add's assembly begins.")
+}`} />
+
+The clean, supported path is `runtime.FuncForPC` on a PC you already hold (here, from `runtime.Callers`). The takeaway: every compiled function carries name/file/line metadata and an entry address, which is exactly what `go tool compile -S`, panics, and pprof use to map machine code back to your source.
+
+## What to look for
+
+When you *do* read assembly, you're usually checking one of a few things:
+
+- **Did it inline?** A small hot function should *not* appear as a `CALL` in its caller. `-gcflags='-m'` says "can inline X"; `-S` confirms it's gone.
+- **Bounds-check elimination (BCE).** Loops over slices should drop the `CMP`/panic-branch when the compiler can prove the index is in range. `-gcflags='-d=ssa/check_bce/debug=1'` reports remaining checks.
+- **Did an intrinsic fire?** `math/bits.TrailingZeros`, `bits.OnesCount`, atomics — these should be single instructions, not calls.
+- **Did it allocate?** A `CALL runtime.newobject` in a "fast" path means something [escaped](/internals/escape-analysis/).
+
+<Callout type="go" title="🐹 Read assembly to confirm, not to optimize">
+Assembly is a **verification** tool, not a starting point. The workflow is always: [benchmark](/stdlib/benchmarks/) and [pprof](/stdlib/profiling-pprof/) find a genuine hot spot → you make a change (hoist an allocation, simplify a loop) → you read `-S` (or `-m`) to *confirm* the compiler did what you hoped (inlined, eliminated the bounds check, fired the intrinsic). Writing your own assembly (`.s` files) is a rare, expert move reserved for crypto and the runtime — for application code, guiding the compiler with cleaner Go almost always beats hand-rolling.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Assembly output is version- and arch-specific, and easy to misread">
+Don't over-invest. The generated code **changes between Go versions** (the compiler keeps improving), so conclusions you draw today may not hold next release — never hard-code assumptions about codegen. It's also **architecture-specific**: amd64 and arm64 output differ, and the abstract pseudo-registers don't map 1:1 to what a hardware disassembler (`objdump`) shows. And it is the **wrong tool for correctness** — a logic bug won't reveal itself in `-S`; use tests, the [race detector](/stdlib/race-detector/), and `go vet`. Read assembly to answer a *specific, measured* performance question, then close the file.
+</Callout>
+
+## See also
+
+- [compile & link](/internals/compile-and-link/) — the pipeline that produces this assembly.
+- [escape analysis](/internals/escape-analysis/) — spotting `runtime.newobject` calls that mean an allocation.
+- [memory layout & alignment](/internals/memory-layout-and-alignment/) — why field offsets show up as `(FP)` displacements.
+- [benchmarks (stdlib)](/stdlib/benchmarks/) — the measurement that should precede any assembly reading.
+
+Next: the whole track on one page — [the internals cheat-sheet](/internals/internals-cheatsheet/).

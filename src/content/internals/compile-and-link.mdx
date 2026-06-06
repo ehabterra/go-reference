@@ -1,0 +1,194 @@
+---
+title: "Compile & Link"
+category: toolchain
+kind: topic
+order: 10
+difficulty: "Intermediate"
+status: ready
+intent: "From source to a binary — the compiler stages (parse, type-check, SSA, codegen), the linker, build modes, and what actually ends up inside a Go executable."
+related:
+  - reading-assembly
+  - runtime-introspection
+  - garbage-collector
+quiz:
+  - q: "Roughly what stages does the Go compiler run on a package?"
+    options:
+      - text: "Parse → type-check → build SSA → optimize → generate machine code (object file), then the linker combines objects"
+        correct: true
+      - text: "It interprets the source directly with no compilation"
+        correct: false
+      - text: "It transpiles to C and calls gcc"
+        correct: false
+      - text: "It only checks syntax and ships the source"
+        correct: false
+    explain: "go build runs the compiler per package: lex/parse to an AST, type-check, lower to an intermediate form and then SSA (static single assignment) for optimization, and emit architecture-specific machine code into an object archive. The linker then stitches all package objects (plus the runtime) into one executable."
+  - q: "Why are Go binaries large and statically linked by default?"
+    options:
+      - text: "They embed the runtime (scheduler, GC, allocator) and all dependencies, so the binary is self-contained with no external shared libraries"
+        correct: true
+      - text: "Because Go doesn't optimize"
+        correct: false
+      - text: "Because they include the source code"
+        correct: false
+      - text: "Because of debug symbols only"
+        correct: false
+    explain: "A Go binary bundles your code, all imported packages, and the Go runtime into one static executable — there's no libgo.so to ship. That's why a tiny program is a few MB, and why deployment is just 'copy the binary'. CGO_ENABLED=0 keeps it fully static even when net/os/user might otherwise pull in libc."
+  - q: "What does the linker's dead-code elimination do?"
+    options:
+      - text: "Drops functions and data that are never reachable from main/init, shrinking the binary"
+        correct: true
+      - text: "Removes your dead code at runtime"
+        correct: false
+      - text: "Deletes unused source files"
+        correct: false
+      - text: "Frees memory during GC"
+        correct: false
+    explain: "The linker computes reachability from the entry points and discards unreferenced symbols, so importing a big package but using one function doesn't drag in the whole thing. (Reflection and some init side effects can keep code 'reachable' even if you don't call it directly.)"
+  - q: "How do you make a smaller release binary by stripping symbols?"
+    options:
+      - text: "go build -ldflags=\"-s -w\" (omit the symbol table and DWARF debug info)"
+        correct: true
+      - text: "go build -strip"
+        correct: false
+      - text: "go build -O3"
+        correct: false
+      - text: "There's no way to shrink it"
+        correct: false
+    explain: "-ldflags=\"-s -w\" tells the linker to drop the symbol table (-s) and DWARF debugging information (-w), cutting binary size noticeably. The trade-off is harder debugging and worse stack-trace symbolization, so it's a release-build choice."
+  - q: "What is CGO and why does CGO_ENABLED=0 matter for deployment?"
+    options:
+      - text: "CGO lets Go call C; disabling it produces a pure-Go static binary with no libc dependency, ideal for minimal/scratch containers"
+        correct: true
+      - text: "CGO is the Go garbage collector"
+        correct: false
+      - text: "CGO_ENABLED=0 disables optimizations"
+        correct: false
+      - text: "It controls the number of CPUs"
+        correct: false
+    explain: "cgo bridges Go and C, but it makes the build depend on a C toolchain and can dynamically link libc, breaking 'copy to a scratch image' deployment. Setting CGO_ENABLED=0 forces pure-Go implementations (e.g. the Go DNS resolver) and a fully static binary that runs anywhere."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Building a Go program is like producing a book from a manuscript. The **compiler** is the editor working chapter by chapter (package by package): it proofreads grammar (**parse + type-check**), rewrites for clarity into a clean working draft (**SSA + optimization**), and typesets each chapter into print-ready pages (**machine code**, one object file per package). The **linker** is the bindery: it gathers every typeset chapter *plus the standard front-matter everyone needs* (the **runtime** — scheduler, GC, allocator), drops the chapters nobody references (**dead-code elimination**), and binds it all into a single self-contained volume (**the static binary**) you can hand to anyone with no extra parts.
+</Callout>
+
+## `go build` is a pipeline
+
+`go build` orchestrates two tools: the **compiler** (`go tool compile`), which turns each package's source into an object file, and the **linker** (`go tool link`), which combines all object files — yours, your dependencies', and the runtime's — into one executable. The compiler runs per package, in dependency order, and caches results (`go build` is incremental).
+
+<Mermaid code={String.raw`graph LR
+  S["source .go"] --> P["parse → AST"]
+  P --> T["type-check"]
+  T --> I["IR → SSA"]
+  I --> O["optimize<br/>(inline, escape, etc.)"]
+  O --> M["machine code<br/>(object file)"]
+  M --> L["linker"]
+  R["runtime + deps"] --> L
+  L --> B["static binary"]`} />
+
+### Inside the compiler
+
+For each package the compiler:
+
+1. **Lexes and parses** the source into an abstract syntax tree (AST).
+2. **Type-checks** — the AST gets types; this is where most of your errors surface.
+3. **Lowers to an IR and then SSA** (static single assignment) — the form where optimizations are easy to express: [inlining](/internals/reading-assembly/), [escape analysis](/internals/escape-analysis/), dead-store elimination, bounds-check elimination, constant folding.
+4. **Generates machine code** for the target `GOARCH`, written into an object archive.
+
+### Inside the linker
+
+The linker resolves symbols across all objects, performs **dead-code elimination** (drops everything unreachable from `main`/`init`), lays out the final binary, and embeds the runtime and metadata. The result is **statically linked by default** — no shared Go library to ship.
+
+## What's in the binary
+
+A Go executable is a self-contained bundle:
+
+- your compiled code and every imported package's code,
+- the **runtime**: the [scheduler](/internals/scheduler-internals/), [garbage collector](/internals/garbage-collector/), and [allocator](/internals/memory-allocator/),
+- type metadata for reflection and interface dispatch,
+- the symbol table and DWARF debug info (strippable),
+- embedded files (`//go:embed`) and build info.
+
+That's why even "hello world" is a few megabytes — and why deployment is just *copy the binary*. You can read the embedded build info at runtime:
+
+<Playground client:visible title="buildinfo.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+	"runtime/debug"
+)
+
+func main() {
+	fmt.Println("compiler:", runtime.Compiler)
+	fmt.Println("go version:", runtime.Version())
+	fmt.Printf("target: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		fmt.Println("module path:", bi.Path)
+		fmt.Println("go directive:", bi.GoVersion)
+		fmt.Println("dependencies:", len(bi.Deps))
+		// Build settings (e.g. -ldflags, vcs info) live in bi.Settings.
+		for _, s := range bi.Settings {
+			if s.Key == "GOARCH" || s.Key == "GOOS" || s.Key == "-ldflags" {
+				fmt.Printf("  setting %s = %q\n", s.Key, s.Value)
+			}
+		}
+	}
+}`} />
+
+`debug.ReadBuildInfo` is how tools like `go version -m ./binary` show the module graph and VCS stamp baked into any Go binary.
+
+## Useful build commands
+
+```bash
+# Cross-compile: a Linux/arm64 binary from any host, no C toolchain.
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o app .
+
+# Smaller release binary: strip symbol table (-s) and DWARF (-w).
+go build -ldflags="-s -w" -o app .
+
+# Stamp a version into a variable at link time.
+go build -ldflags="-X main.version=1.4.2" -o app .
+
+# Inspect symbols and sizes.
+go tool nm app | head           # symbol table
+go version -m app               # module + build settings
+
+# See what the compiler decided (escape/inline), without linking.
+go build -gcflags='-m' ./...
+```
+
+## Reference
+
+| Stage / flag | Role |
+|---|---|
+| `go tool compile` | Source → object (per package) |
+| `go tool link` | Objects + runtime → binary |
+| SSA | Optimization IR (inline, escape, BCE) |
+| Dead-code elimination | Linker drops unreachable symbols |
+| `-gcflags` | Pass flags to the compiler (`-m`, `-l`, `-S`) |
+| `-ldflags` | Pass flags to the linker (`-s -w`, `-X`) |
+| `CGO_ENABLED=0` | Pure-Go, fully static build |
+| `GOOS` / `GOARCH` | Cross-compilation target |
+| `//go:embed` | Embed files into the binary |
+
+<Callout type="go" title="🐹 Static binaries are Go's deployment superpower">
+The headline win: `CGO_ENABLED=0 go build` gives you **one static file that runs on a `scratch` or `distroless` container** with nothing else installed — no libc, no interpreter, no dependency hell. Combine it with cross-compilation (`GOOS`/`GOARCH`) and you build a Linux/arm64 production image from your macOS laptop with one command. For releases, add `-ldflags="-s -w"` to shrink it and `-X` to stamp in a version. This is a big part of why Go dominates cloud-native tooling — see the [networking & web](/web/) track for building the services that get shipped this way.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ cgo, reflection, and stripped symbols have trade-offs">
+Three things bite people. **cgo silently re-enables dynamic linking** — importing a package that uses cgo (some DB drivers, anything `net` with the C resolver) can produce a binary that needs libc on the target; set `CGO_ENABLED=0` (and test on the deploy image) when you want true static. **Dead-code elimination can't see through reflection** — code only reached via `reflect` or registered in an `init` may be kept even when unused, or, conversely, plugins/`reflect.New` may need symbols the linker would otherwise drop. And **`-s -w` strips the symbol table and DWARF**, so production stack traces still work (Go embeds enough for that) but `dlv`/`pprof` symbolization and `go tool nm` degrade — keep an unstripped copy for debugging.
+</Callout>
+
+## See also
+
+- [reading assembly](/internals/reading-assembly/) — the machine code this pipeline emits.
+- [runtime introspection](/internals/runtime-introspection/) — `debug.ReadBuildInfo` and runtime config.
+- [escape analysis](/internals/escape-analysis/) — an SSA-stage decision you can inspect with `-gcflags=-m`.
+- [the go toolchain (stdlib)](/stdlib/go-toolchain/) — `go build`, modules, and the wider command set.
+
+Next: reading the machine code the compiler emits — [reading assembly](/internals/reading-assembly/).

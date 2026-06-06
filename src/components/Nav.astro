@@ -9,12 +9,21 @@ import { REPO_URL } from '../lib/consts';
     </a>
 
     <nav class="dp-nav__links" id="dp-nav-links">
-      <a href="/fundamentals/" data-i18n="nav.fundamentals">Fundamentals</a>
-      <a href="/patterns/" data-i18n="nav.patterns">Design Patterns</a>
-      <a href="/concurrency/" data-i18n="nav.concurrency">Concurrency</a>
-      <a href="/dsa/" data-i18n="nav.dsa">DSA</a>
-      <a href="/stdlib/" data-i18n="nav.stdlib">Stdlib</a>
-      <a href="/web/" data-i18n="nav.web">Web</a>
+      <div class="dp-nav__group">
+        <button class="dp-nav__trigger" aria-haspopup="true" aria-expanded="false">
+          <span data-i18n="nav.tracks">Tracks</span>
+          <svg class="dp-nav__caret" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+        <div class="dp-nav__menu">
+          <a href="/fundamentals/" data-i18n="nav.fundamentals">Fundamentals</a>
+          <a href="/patterns/" data-i18n="nav.patterns">Design Patterns</a>
+          <a href="/concurrency/" data-i18n="nav.concurrency">Concurrency</a>
+          <a href="/dsa/" data-i18n="nav.dsa">DSA</a>
+          <a href="/stdlib/" data-i18n="nav.stdlib">Stdlib</a>
+          <a href="/web/" data-i18n="nav.web">Web</a>
+          <a href="/internals/" data-i18n="nav.internals">Internals</a>
+        </div>
+      </div>
       <a href={REPO_URL} target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
 

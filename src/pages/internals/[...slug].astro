@@ -1,0 +1,26 @@
+---
+import { getCollection, render } from 'astro:content';
+import PageLayout from '../../layouts/PageLayout.astro';
+
+export async function getStaticPaths() {
+  const items = await getCollection('internals');
+  return items.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<PageLayout
+  entry={entry}
+  collection="internals"
+  base="/internals"
+  sectionTitle="Go Internals"
+  sectionHref="/internals/"
+  relatedHeading="Related topics"
+  topicLabel="Internals"
+>
+  <Content />
+</PageLayout>

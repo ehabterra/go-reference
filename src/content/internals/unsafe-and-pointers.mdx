@@ -1,0 +1,174 @@
+---
+title: "unsafe & Pointers"
+category: representation
+kind: topic
+order: 6
+difficulty: "Advanced"
+status: ready
+intent: "Using the unsafe package responsibly — unsafe.Pointer and uintptr, the four valid patterns, and why a moving garbage collector makes uintptr addresses dangerous."
+related:
+  - memory-layout-and-alignment
+  - interfaces-itab-eface
+  - garbage-collector
+quiz:
+  - q: "What is unsafe.Pointer?"
+    options:
+      - text: "A typeless pointer that can be converted to and from any *T, letting you reinterpret memory and bypass the type system"
+        correct: true
+      - text: "A pointer that is automatically freed"
+        correct: false
+      - text: "A nil pointer"
+        correct: false
+      - text: "A pointer to the unsafe package"
+        correct: false
+    explain: "unsafe.Pointer is Go's escape hatch from type safety: any *T converts to unsafe.Pointer and back to any *U. It's how you reinterpret the same bytes as a different type. The compiler stops type-checking through it, so correctness is entirely on you."
+  - q: "Why is converting unsafe.Pointer to uintptr and storing it in a variable dangerous?"
+    options:
+      - text: "A uintptr is just a number, not a reference — the GC won't keep the object alive or update the value if it moves, so the address can become invalid"
+        correct: true
+      - text: "uintptr is too small to hold an address"
+        correct: false
+      - text: "It always panics"
+        correct: false
+      - text: "uintptr can't hold pointers at all"
+        correct: false
+    explain: "unsafe.Pointer is a real pointer the GC tracks; uintptr is a plain integer. The GC doesn't treat a uintptr as keeping anything alive, and (for stacks, which can move) won't fix it up. Pointer↔uintptr arithmetic must happen in a single expression so no GC-visible moment sees a bare uintptr referencing live memory."
+  - q: "What's the correct way to compute a pointer to a struct field with unsafe?"
+    options:
+      - text: "Do the arithmetic in one expression: unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Offsetof(s.f))"
+        correct: true
+      - text: "Store uintptr(unsafe.Pointer(&s)) in a variable, then add the offset later"
+        correct: false
+      - text: "Cast &s directly to the field type"
+        correct: false
+      - text: "Use reflect only"
+        correct: false
+    explain: "The pointer→uintptr→add→Pointer conversion must be a single expression so there's no point where a uintptr alone references the object (which the GC could move or collect). Splitting it across statements is exactly the bug the unsafe rules warn against."
+  - q: "When is reaching for unsafe genuinely justified?"
+    options:
+      - text: "Zero-copy []byte↔string conversion in hot paths, mapping C/syscall structs, or reinterpreting same-layout types — when profiling shows it matters and you've verified the layout"
+        correct: true
+      - text: "Whenever you want a small speedup"
+        correct: false
+      - text: "To avoid writing interfaces"
+        correct: false
+      - text: "Never, under any circumstances"
+        correct: false
+    explain: "unsafe has legitimate uses: avoiding a copy in string/[]byte conversion, interoperating with C or syscalls, and reinterpreting bytes between layout-compatible types. The bar is high — measurable benefit, verified layout, and tests — because mistakes are memory-corruption bugs, not compile errors."
+  - q: "What do unsafe.Slice and unsafe.String (Go 1.17/1.20+) provide over the old reflect.SliceHeader trick?"
+    options:
+      - text: "Safer, documented helpers to build a slice/string from a data pointer and length without manual header construction"
+        correct: true
+      - text: "They make unsafe code type-checked"
+        correct: false
+      - text: "They allocate new memory"
+        correct: false
+      - text: "Nothing — they're identical"
+        correct: false
+    explain: "unsafe.Slice(ptr, len), unsafe.String(ptr, len), unsafe.SliceData, and unsafe.StringData replaced the error-prone reflect.SliceHeader/StringHeader pattern (whose fields were uintptr and easy to misuse). They express the same intent with fewer footguns and clearer GC semantics."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+`unsafe` is the **"staff only" door** behind the type system. Normally Go checks your ID at every doorway: you can't walk a `*User` through a door marked `*Order`. The `unsafe.Pointer` door has no check — you can carry any pointer through and re-label it as anything. That's powerful for the few jobs that need it (talking to the kernel, reinterpreting raw bytes), and it's exactly as dangerous as it sounds: there's no compiler standing guard, so a wrong turn is silent memory corruption, not a friendly error message. And one rule above all: **never set down your real pass (a `Pointer`) and carry only its number (a `uintptr`)** through the building — the janitor (the GC) might move the room while you're holding just the number.
+</Callout>
+
+## The escape hatch from the type system
+
+The `unsafe` package lets you do three things the language otherwise forbids:
+
+- ask a type's layout: `Sizeof`, `Alignof`, `Offsetof` (compile-time constants — see [memory layout](/internals/memory-layout-and-alignment/));
+- convert any `*T` to `unsafe.Pointer` and back to any `*U`, **reinterpreting** the same bytes as a different type;
+- convert `unsafe.Pointer` ↔ `uintptr` to do pointer arithmetic.
+
+The first is harmless. The second and third are where the power and the danger live. The compiler stops type-checking through an `unsafe.Pointer`, so the correctness of the reinterpretation is entirely yours to guarantee.
+
+## Pointer vs uintptr: the critical distinction
+
+This is the whole game:
+
+- **`unsafe.Pointer`** is a *real pointer*. The garbage collector knows about it — it keeps the pointed-to object alive and, for stack objects, updates it if the stack moves.
+- **`uintptr`** is just an *integer* that happens to hold an address. The GC treats it as a number: it does **not** keep anything alive, and does **not** fix it up if the object moves.
+
+So storing `uintptr(unsafe.Pointer(&x))` in a variable is a latent bug: between that statement and using it, the GC could move or collect `x`, leaving you with a stale number. The official `unsafe` rules require any `Pointer → uintptr → arithmetic → Pointer` round-trip to happen in a **single expression**, with no GC-observable pause in the middle.
+
+<Mermaid code={String.raw`graph LR
+  P["unsafe.Pointer<br/>(GC tracks it)"] -->|"in ONE expression"| U["uintptr + offset<br/>(just a number)"]
+  U -->|"back to"| P2["unsafe.Pointer<br/>(GC tracks again)"]
+  U -.->|"⚠ stored in a var"| Bad["stale address<br/>(GC may move/free)"]`} />
+
+## The valid patterns, runnable
+
+This program shows the three everyday legitimate uses: reinterpreting a same-layout type, reaching a struct field by offset (single expression!), and zero-copy `string`/`[]byte` conversion with the modern `unsafe.String`/`unsafe.Slice` helpers.
+
+<Playground client:visible title="unsafe_patterns.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+// Two structs with identical layout.
+type RGBA struct{ R, G, B, A uint8 }
+type Pixel struct{ R, G, B, A uint8 }
+
+type Vec struct {
+	X, Y, Z float64
+}
+
+func main() {
+	// 1. Reinterpret *RGBA as *Pixel (same layout, no copy).
+	c := RGBA{255, 128, 0, 255}
+	p := (*Pixel)(unsafe.Pointer(&c))
+	fmt.Printf("reinterpreted pixel: %+v\n", *p)
+
+	// 2. Pointer to a field via offset — all in ONE expression.
+	v := Vec{1, 2, 3}
+	zPtr := (*float64)(unsafe.Pointer(
+		uintptr(unsafe.Pointer(&v)) + unsafe.Offsetof(v.Z),
+	))
+	*zPtr = 99
+	fmt.Printf("v after writing Z via offset: %+v\n", v)
+
+	// 3. Zero-copy []byte -> string (no allocation) with Go 1.20 helpers.
+	b := []byte("hello, internals")
+	s := unsafe.String(unsafe.SliceData(b), len(b))
+	fmt.Println("zero-copy string:", s)
+
+	// ...and back, string -> []byte view (read-only! see the gotcha).
+	view := unsafe.Slice(unsafe.StringData(s), len(s))
+	fmt.Println("first byte:", view[0])
+}`} />
+
+Every conversion here is layout-safe and respects the single-expression rule for the `uintptr` arithmetic. Run it and you'll see the reinterpreted pixel, the field written through a raw offset, and a string that shares the slice's bytes with no copy.
+
+## Reference
+
+| Construct | Use |
+|---|---|
+| `unsafe.Sizeof / Alignof / Offsetof` | Layout constants (safe) |
+| `unsafe.Pointer` | Typeless pointer; GC-tracked |
+| `uintptr` | Address as integer; **not** GC-tracked |
+| `unsafe.Add(ptr, n)` | Pointer arithmetic (Go 1.17+) |
+| `unsafe.Slice(ptr, len)` | Build a slice from a data pointer |
+| `unsafe.String(ptr, len)` | Build a string from a data pointer |
+| `unsafe.SliceData / StringData` | Get the data pointer of a slice/string |
+
+<Callout type="go" title="🐹 The one optimization most people use unsafe for">
+The single most common justified `unsafe` use is **zero-copy `[]byte` ↔ `string`**. The normal conversion `string(b)` copies the bytes (so the immutable string can't be mutated via the slice). In a hot path that copy can dominate, so high-performance libraries use `unsafe.String`/`unsafe.StringData` to alias the bytes instead. It's safe *only* if you never mutate the slice afterward — a string must stay immutable. When you're not in a measured hot path, just use the plain conversion; the copy is cheap and correct.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ unsafe turns type errors into memory corruption">
+There's no safety net here. **Mismatched layouts** (reinterpreting types that aren't actually identical, or assuming a layout that differs by `GOARCH`) read or write the wrong bytes — silently. **Mutating a string's backing bytes** through an `unsafe.Slice` view is undefined behavior and can corrupt interned strings or constants. **A `uintptr` held across a statement** can dangle when the GC moves a stack or frees an object. Treat every `unsafe` block as security-sensitive: keep it tiny, comment the invariant, cover it with tests, run it under the [race detector](/stdlib/race-detector/) and `go vet` (which flags some Pointer misuse), and prefer the safe API unless a profile proves you need this.
+</Callout>
+
+## See also
+
+- [memory layout & alignment](/internals/memory-layout-and-alignment/) — the `Sizeof`/`Offsetof` constants and why layout must match.
+- [interfaces, itab & eface](/internals/interfaces-itab-eface/) — interface internals you can inspect with `unsafe`.
+- [the garbage collector](/internals/garbage-collector/) — why `uintptr` isn't a reference.
+- [framing & protocols (web)](/web/framing-and-protocols/) — use `encoding/binary`, not raw struct bytes, for the wire.
+
+Next: how interfaces are really represented — [interfaces, itab & eface](/internals/interfaces-itab-eface/).

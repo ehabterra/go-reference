@@ -37,6 +37,11 @@ const refSchema = z.object({
     'http',
     'apis',
     'data',
+    // go-internals categories
+    'memory',
+    'representation',
+    'execution',
+    'toolchain',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -97,4 +102,9 @@ const web = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web };
+const internals = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/internals' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals };

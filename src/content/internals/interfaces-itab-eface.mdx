@@ -1,0 +1,216 @@
+---
+title: "Interfaces: itab & eface"
+category: representation
+kind: topic
+order: 7
+difficulty: "Advanced"
+status: ready
+intent: "How interfaces are really represented — the iface and eface structures, itab caching, dynamic dispatch and type-assertion cost — deeper than the fundamentals page."
+related:
+  - escape-analysis
+  - unsafe-and-pointers
+  - memory-layout-and-alignment
+quiz:
+  - q: "How is a non-empty interface value (e.g. io.Reader) represented at runtime?"
+    options:
+      - text: "A two-word pair: a pointer to an itab (type + method table) and a pointer to the underlying data"
+        correct: true
+      - text: "A single pointer to the concrete value"
+        correct: false
+      - text: "A copy of the concrete value inline"
+        correct: false
+      - text: "A string naming the type"
+        correct: false
+    explain: "A non-empty interface is an iface: two machine words — one pointing to an itab (which holds the dynamic type and the method-pointer table for this interface/type pair), and one pointing to the data. The empty interface (any) is an eface: a type pointer plus a data pointer."
+  - q: "What is an itab and why is it cached?"
+    options:
+      - text: "A per (interface type, concrete type) table of method pointers; it's built once and cached so repeated conversions and calls are cheap"
+        correct: true
+      - text: "A table of all types in the program"
+        correct: false
+      - text: "The interface's data pointer"
+        correct: false
+      - text: "A garbage-collection structure"
+        correct: false
+    explain: "An itab describes how one concrete type satisfies one interface: it stores the dynamic type and the resolved method pointers. The runtime computes it the first time a given (itype, type) pair is converted, then caches it in a global table, so subsequent conversions are a fast lookup and calls are an indirect jump."
+  - q: "How does a method call through an interface dispatch?"
+    options:
+      - text: "An indirect call: load the method pointer from the itab, then jump to it"
+        correct: true
+      - text: "A linear search of all methods by name at runtime"
+        correct: false
+      - text: "A hash-map lookup by method name every call"
+        correct: false
+      - text: "It's resolved entirely at compile time like a direct call"
+        correct: false
+    explain: "The itab holds method pointers in a fixed order known at compile time, so an interface call is just 'load itab.fun[k]; call it' — one indirection, no name lookup. It's slightly more expensive than a direct call and can block inlining, but it's far from a dictionary lookup."
+  - q: "Why can an interface be non-nil even when it holds a nil pointer?"
+    options:
+      - text: "The interface stores (type, data); a nil *T gives a non-nil type word, so the interface != nil even though the data is nil"
+        correct: true
+      - text: "It can't — that's impossible"
+        correct: false
+      - text: "Because nil pointers are actually non-nil"
+        correct: false
+      - text: "Because of the garbage collector"
+        correct: false
+    explain: "An interface is nil only when BOTH its type and data words are nil. Assigning a typed nil pointer (var p *T = nil; var i I = p) sets the type word to *T, so i != nil. This is the classic 'return err as a concrete *MyError that's nil' bug — the caller's err != nil check passes unexpectedly."
+  - q: "Why does putting a value into an interface often cause it to escape to the heap?"
+    options:
+      - text: "The interface's data word is a pointer, so the value generally needs an address that outlives the call — forcing a heap allocation"
+        correct: true
+      - text: "Interfaces copy the whole value every call"
+        correct: false
+      - text: "The GC requires it"
+        correct: false
+      - text: "It doesn't — interfaces never allocate"
+        correct: false
+    explain: "Because the data word holds a pointer to the underlying value, storing a concrete value in an interface usually requires taking its address; if the interface outlives the function, the value must too, so it's heap-allocated. This is why fmt and any-taking APIs show up constantly in escape-analysis output."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+An interface value is like a **shipping label stuck on a box**. The box (the **data**) holds the actual contents — a concrete value. The label (the **itab**) doesn't contain the goods; it records *what kind of thing this is* and *which handling instructions apply* — a little directory of "to do X, call this procedure." When you ask the interface to do something (`r.Read(...)`), you read the instruction off the label and follow it to the right procedure. Two boxes of the same kind share the same printed label design (the itab is cached per type), so labeling is cheap after the first one.
+</Callout>
+
+This page goes *below* the [fundamentals interfaces page](/fundamentals/interfaces/), which covers what interfaces are and how to use them. Here we open the box and look at the runtime representation.
+
+## Two words: iface and eface
+
+Every interface value is exactly **two machine words** (16 bytes on a 64-bit machine — confirm it yourself below). There are two internal shapes:
+
+- **`eface`** — the *empty* interface (`any` / `interface{}`). It's `(type pointer, data pointer)`: a `*_type` describing the dynamic type, and a pointer to the value.
+- **`iface`** — any *non-empty* interface (has methods, like `io.Reader`). It's `(itab pointer, data pointer)`: the data word is the same, but the type word points at an **itab**.
+
+<Mermaid code={String.raw`graph TD
+  subgraph eface["eface — any / interface{}"]
+    E1["_type *  →  dynamic type"]
+    E2["data  *  →  the value"]
+  end
+  subgraph iface["iface — io.Reader, etc."]
+    I1["itab  *  →  type + method table"]
+    I2["data  *  →  the value"]
+  end`} />
+
+## The itab: where methods live
+
+An **itab** describes how *one concrete type* satisfies *one interface*. It holds:
+
+- the interface type and the concrete (dynamic) type,
+- a hash for fast type switches,
+- and the **method table**: resolved pointers to the concrete type's implementations of the interface's methods, in a fixed compile-time order.
+
+The runtime builds an itab the **first time** a given `(interface, concrete type)` pair is converted, then **caches** it in a global table keyed by that pair. So the first `var r io.Reader = myFile` does real work; every subsequent conversion of an `*os.File` to `io.Reader` is a cheap cached lookup.
+
+## Dynamic dispatch, type assertions, and size
+
+This program proves the two-word size, exercises dynamic dispatch (the call goes through the itab's method pointer), and shows a type assertion and a type switch recovering the concrete type:
+
+<Playground client:visible title="iface.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+type Speaker interface{ Speak() string }
+
+type Dog struct{ Name string }
+func (d Dog) Speak() string { return d.Name + " says woof" }
+
+type Cat struct{ Name string }
+func (c Cat) Speak() string { return c.Name + " says meow" }
+
+func main() {
+	// Both interface kinds are two words wide.
+	var s Speaker
+	var e any
+	fmt.Println("sizeof(Speaker) =", unsafe.Sizeof(s)) // 16 on 64-bit
+	fmt.Println("sizeof(any)     =", unsafe.Sizeof(e)) // 16
+
+	// Dynamic dispatch: the concrete method is found via the itab.
+	speakers := []Speaker{Dog{"Rex"}, Cat{"Lily"}}
+	for _, sp := range speakers {
+		fmt.Println(sp.Speak())
+	}
+
+	// Type assertion: recover the concrete type from the interface.
+	var x Speaker = Dog{"Buddy"}
+	if d, ok := x.(Dog); ok {
+		fmt.Println("asserted Dog:", d.Name)
+	}
+
+	// Type switch: dispatch on the dynamic type.
+	for _, sp := range speakers {
+		switch v := sp.(type) {
+		case Dog:
+			fmt.Println("a dog named", v.Name)
+		case Cat:
+			fmt.Println("a cat named", v.Name)
+		}
+	}
+}`} />
+
+The call `sp.Speak()` doesn't search by name — it loads the `Speak` pointer from `sp`'s itab and jumps. One indirection, known offset.
+
+## The typed-nil trap
+
+Because an interface is `(type, data)`, it is `nil` **only when both words are nil**. Assign a typed nil pointer and the type word is set, so the interface compares **non-nil** — the single most infamous Go gotcha:
+
+<Playground client:visible title="typednil.go" code={String.raw`package main
+
+import "fmt"
+
+type MyError struct{ msg string }
+
+func (e *MyError) Error() string { return e.msg }
+
+// BUG: returns a concrete *MyError, not the error interface.
+func doWork(fail bool) error {
+	var e *MyError // nil pointer
+	if fail {
+		e = &MyError{"it failed"}
+	}
+	return e // even when nil, this wraps a non-nil (type=*MyError, data=nil) interface!
+}
+
+func main() {
+	err := doWork(false) // we expect "no error"
+	fmt.Println("err == nil?", err == nil) // false! 😱
+	fmt.Printf("but the value is: type=%T value=%v\n", err, err)
+
+	// The fix: return nil explicitly, or use the error type throughout.
+}`} />
+
+`err == nil` is **false** even though no error occurred, because the interface carries the type `*MyError`. The fix is to return a literal `nil` on the success path (or not funnel typed-nil pointers into interfaces).
+
+## Reference
+
+| Concept | Detail |
+|---|---|
+| `eface` | `any`: `(*_type, data)` — 2 words |
+| `iface` | method interface: `(*itab, data)` — 2 words |
+| itab | per (interface, concrete type); cached globally |
+| Method table | resolved method pointers, fixed order |
+| Dispatch | load itab method pointer → indirect call |
+| Type assertion `x.(T)` | compare itab/type; ok-form avoids panic |
+| nil interface | both words nil — typed nil ≠ nil interface |
+
+<Callout type="go" title="🐹 Interfaces cost a little — value types and generics cost less">
+An interface call is one indirection plus a possible heap allocation (the value usually [escapes](/internals/escape-analysis/)) and it blocks inlining. For the vast majority of code that's irrelevant — interfaces are how Go stays decoupled. But in a hot loop, two alternatives are cheaper: a **concrete type** (direct, inlinable calls, no boxing) or **generics** (`[T any]`), which monomorphize without the per-call indirection or the boxing escape. Reach for interfaces for flexibility at boundaries; reach for concrete types or generics in measured hot paths.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Typed nil, and interface comparison panics">
+Two sharp edges. The **typed-nil interface** above silently breaks `err != nil` checks — always return a bare `nil`, and be wary of assigning concrete pointer types into `error`/`any` returns. And **comparing interfaces can panic at runtime**: `==` on two interfaces whose dynamic type is *not comparable* (e.g. holds a slice, map, or func) panics with "comparing uncomparable type". This bites when interface values are used as map keys or compared in tests — guard with a type switch if the dynamic type might be uncomparable.
+</Callout>
+
+## See also
+
+- [interfaces (fundamentals)](/fundamentals/interfaces/) — what interfaces are and how to use them.
+- [escape analysis](/internals/escape-analysis/) — why interface assignment heap-allocates.
+- [unsafe & pointers](/internals/unsafe-and-pointers/) — peeking at the two-word representation.
+- [memory layout & alignment](/internals/memory-layout-and-alignment/) — the two-word, 16-byte size.
+
+Next: how goroutines actually get on a CPU — [scheduler internals](/internals/scheduler-internals/).

@@ -1,0 +1,194 @@
+---
+title: "The Garbage Collector"
+category: memory
+kind: topic
+order: 4
+difficulty: "Advanced"
+status: ready
+intent: "Go's concurrent garbage collector — tricolor mark-and-sweep, write barriers, the GOGC and GOMEMLIMIT knobs, and how to trade speed against footprint."
+related:
+  - memory-allocator
+  - stack-and-heap
+  - runtime-introspection
+quiz:
+  - q: "What algorithm does Go's garbage collector use?"
+    options:
+      - text: "Concurrent tricolor mark-and-sweep — it runs mostly alongside your program, not a stop-the-world compactor"
+        correct: true
+      - text: "Reference counting"
+        correct: false
+      - text: "Generational copying collection"
+        correct: false
+      - text: "Manual free() calls inserted by the compiler"
+        correct: false
+    explain: "Go uses a concurrent, non-moving, tricolor mark-and-sweep collector. It marks reachable objects (white/gray/black) concurrently with the program, then sweeps the unmarked ones. It is not generational and does not compact/move objects (which keeps interior pointers and cgo simpler)."
+  - q: "In the tricolor abstraction, what do white, gray, and black mean?"
+    options:
+      - text: "White = not yet proven reachable; gray = reachable but children unscanned; black = reachable and fully scanned"
+        correct: true
+      - text: "White = free; gray = stack; black = heap"
+        correct: false
+      - text: "Colors of GC pauses by severity"
+        correct: false
+      - text: "Three generations of objects"
+        correct: false
+    explain: "Marking starts from roots, coloring them gray. The collector scans a gray object's pointers (graying its children) then blackens it. When no gray objects remain, everything still white is unreachable garbage. The invariant: no black object may point to a white one."
+  - q: "Why does Go need a write barrier during concurrent marking?"
+    options:
+      - text: "Because the program mutates pointers while marking runs; the barrier records new references so a reachable object isn't missed and freed"
+        correct: true
+      - text: "To make writes slower on purpose"
+        correct: false
+      - text: "To compact the heap"
+        correct: false
+      - text: "To count references"
+        correct: false
+    explain: "If the mutator stores a pointer to a white object into an already-black object while marking is in progress, the white object could be wrongly collected. The write barrier (a small compiler-inserted hook on pointer writes) catches such stores and re-colors, preserving the tricolor invariant safely."
+  - q: "What does GOGC control?"
+    options:
+      - text: "The heap growth target between collections — GOGC=100 means collect when the live heap has grown ~100% (doubled) since the last GC"
+        correct: true
+      - text: "The number of GC threads"
+        correct: false
+      - text: "The maximum heap size in bytes"
+        correct: false
+      - text: "How often runtime.GC() is called"
+        correct: false
+    explain: "GOGC sets the trade-off between CPU and memory. At GOGC=100 (default), the GC aims to run when the heap has doubled relative to live data after the previous cycle. Higher GOGC = fewer GCs, more memory; lower = more GCs, less memory. GOGC=off disables it entirely."
+  - q: "What problem does GOMEMLIMIT (Go 1.19+) solve that GOGC alone can't?"
+    options:
+      - text: "A soft memory ceiling — the GC runs more aggressively as you approach it, preventing OOM in containers even with bursty allocation"
+        correct: true
+      - text: "It makes the GC faster"
+        correct: false
+      - text: "It disables the write barrier"
+        correct: false
+      - text: "It sets the goroutine stack size"
+        correct: false
+    explain: "GOGC is relative to live heap, so a spike can blow past a container memory limit before the next GC. GOMEMLIMIT sets a soft total-memory target; as usage nears it the GC works harder to stay under it. Best practice is to set GOMEMLIMIT (often with GOGC left default or off) in memory-constrained deployments."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Imagine a library where books nobody references anymore should be cleared, but you can't close the library to do it. So a clerk works *while patrons browse*: starting from the front desk's lists (the **roots**), they tag every book that's still reachable — first marking a shelf "to inspect" (**gray**), then following its cross-references to other shelves, then marking it "done" (**black**). Anything never tagged is unreferenced and gets recycled (**swept**). The catch: a patron might re-shelve a book mid-sweep, so there's a rule — *whenever you move a reference, tell the clerk* (the **write barrier**) — guaranteeing no still-used book is thrown away.
+</Callout>
+
+## Concurrent, tricolor, non-moving
+
+Go's collector is a **concurrent tricolor mark-and-sweep** GC. "Concurrent" is the headline: it runs mostly *alongside* your goroutines, so pauses are tiny (typically well under a millisecond) rather than the long stop-the-world halts of older collectors. It is **non-generational** and **non-moving** — it doesn't relocate objects, which keeps interior pointers, `unsafe`, and cgo straightforward at the cost of not compacting fragmentation.
+
+The collection has two phases:
+
+1. **Mark** — find everything reachable, concurrently.
+2. **Sweep** — reclaim everything not marked, lazily.
+
+## The tricolor invariant
+
+Marking colors every object one of three shades, starting from the **roots** (globals, and each goroutine's stack):
+
+- **White** — not yet proven reachable. At the end, white = garbage.
+- **Gray** — reachable, but its outgoing pointers haven't been scanned yet.
+- **Black** — reachable and fully scanned.
+
+<Mermaid code={String.raw`graph LR
+  W["WHITE<br/>maybe garbage"] -->|"found from a root<br/>or a gray object"| G["GRAY<br/>reachable, unscanned"]
+  G -->|"all its pointers scanned"| B["BLACK<br/>reachable, done"]`} />
+
+The collector repeatedly takes a gray object, grays everything it points to, then blackens it. When **no gray objects remain**, marking is done: every reachable object is black, everything still white is unreachable and can be swept. The safety rule — the **tricolor invariant** — is that *no black object may hold a pointer to a white object*.
+
+## The write barrier
+
+Here's the danger of marking concurrently: while the collector works, your program (the **mutator**) keeps rewriting pointers. If it stores a pointer to a *white* object into an *already-black* object, and deletes the only other path to that white object, the collector would never revisit the black object — and would wrongly free a live object.
+
+The fix is a **write barrier**: a tiny piece of code the compiler inserts on pointer writes during marking. It notices such stores and re-colors the object (greys it), preserving the invariant. The barrier is only active during a GC cycle, so its cost is paid only while collecting.
+
+## The knobs: GOGC and GOMEMLIMIT
+
+You rarely tune the GC, but two environment variables (and their `runtime/debug` equivalents) control the **CPU-vs-memory trade-off**:
+
+- **`GOGC`** (default `100`) — the heap-growth target. At `100`, the GC aims to run once the live heap has grown ~100% (doubled) since the last cycle. Raise it (`GOGC=200`) for fewer GCs and more memory use; lower it for the opposite. `GOGC=off` disables collection entirely.
+- **`GOMEMLIMIT`** (Go 1.19+) — a *soft* total-memory ceiling. Because `GOGC` is relative to live heap, a sudden burst can overshoot a container's hard limit before the next GC fires. `GOMEMLIMIT=512MiB` makes the GC work harder as usage approaches the limit, the standard defense against OOM-kills in Kubernetes.
+
+```bash
+# Watch every GC cycle: pause times, heap sizes, CPU%.
+GODEBUG=gctrace=1 ./myprogram
+# gc 1 @0.012s 2%: 0.018+0.69+0.005 ms clock, ... 4->4->1 MB, 5 MB goal
+
+# Common production setting: cap memory, let GOGC float.
+GOMEMLIMIT=900MiB GOGC=off ./myprogram
+```
+
+## Driving the GC from code
+
+You can read GC stats and trigger collection programmatically — useful for understanding behavior (and for tests), though you should almost never force GC in production:
+
+<Playground client:visible title="gcstats.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+	"runtime/debug"
+)
+
+func numGC() uint32 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.NumGC
+}
+
+func main() {
+	// Tighten GOGC so collections happen sooner (demo only).
+	debug.SetGCPercent(20)
+
+	start := numGC()
+	fmt.Println("GC cycles at start:", start)
+
+	// Generate garbage: allocate and immediately drop.
+	for i := 0; i < 200; i++ {
+		junk := make([]byte, 64*1024) // 64 KB, becomes unreachable next iteration
+		_ = junk
+	}
+
+	runtime.GC() // force one final cycle so the count is stable
+	fmt.Println("GC cycles after churning garbage:", numGC()-start, "(plus the forced one)")
+
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Printf("TotalAlloc=%d KB  NumGC=%d  GCCPUFraction=%.4f\n",
+		m.TotalAlloc/1024, m.NumGC, m.GCCPUFraction)
+}`} />
+
+`GCCPUFraction` is the share of CPU the GC has used — the single most useful "is the GC a problem?" number. If it's low (a few percent), the collector isn't your bottleneck.
+
+## Reference
+
+| Term / knob | Meaning |
+|---|---|
+| Mark / sweep | Find reachable objects, then reclaim the rest |
+| Tricolor | White (garbage), gray (reachable, unscanned), black (done) |
+| Roots | Globals + goroutine stacks; marking starts here |
+| Write barrier | Compiler hook keeping the invariant during concurrent marks |
+| `GOGC` | Heap-growth target (default 100); `off` disables GC |
+| `GOMEMLIMIT` | Soft total-memory ceiling (Go 1.19+) |
+| `GODEBUG=gctrace=1` | Print every GC cycle |
+| `runtime.GC()` | Force a blocking collection |
+| `debug.SetGCPercent` | `GOGC` from code |
+
+<Callout type="go" title="🐹 The GC is good — reduce garbage, don't fight the collector">
+Go's GC is tuned for **low latency**, and for the vast majority of services it's a non-issue — check `GCCPUFraction` before assuming otherwise. When it *does* hurt, the fix is almost never "call `runtime.GC()`" (that usually makes things worse); it's to **make less garbage**: cut [escapes](/internals/escape-analysis/), reuse buffers with [`sync.Pool`](/concurrency/sync-package/), preallocate slices with a capacity, and prefer value types over pointer-heavy graphs. In containers, set `GOMEMLIMIT`. Tune the *allocation rate*, not the collector.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Non-moving means no compaction; GOGC=off is rarely what you want">
+Because Go's GC **doesn't move objects**, it never compacts the heap — long-lived programs with varied object sizes can hold fragmented memory the OS doesn't get back quickly. And `GOGC=off` (or a huge `GOGC`) can look like a win in a microbenchmark while quietly marching toward an OOM-kill in production; prefer `GOMEMLIMIT` to cap memory safely. Finally, the GC reclaims **unreachable** memory — a "leak" in Go is almost always an object still *reachable* by accident (a goroutine that never exits, a map that's never pruned, a slice holding a giant backing array). The GC can't help with those; see [goroutine leaks](/concurrency/goroutines/).
+</Callout>
+
+## See also
+
+- [the memory allocator](/internals/memory-allocator/) — produces the spans the GC sweeps.
+- [the stack & the heap](/internals/stack-and-heap/) — only heap objects are collected.
+- [runtime introspection](/internals/runtime-introspection/) — `MemStats`, `runtime/metrics`, and `gctrace`.
+- [GC, stacks & escape analysis (concurrency)](/concurrency/gc-and-stacks/) — the GC from the goroutine-cost angle.
+
+Next: how Go lays values out in memory — [memory layout & alignment](/internals/memory-layout-and-alignment/).

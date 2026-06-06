@@ -176,4 +176,32 @@ export const WEB_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Go-internals categories (the journey on /internals/). */
+export const INTERNALS_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'memory',
+    title: 'Memory & Garbage Collection',
+    blurb:
+      'Where values live and die — stack vs heap, escape analysis, the size-class allocator, and the concurrent tricolor garbage collector.',
+  },
+  {
+    key: 'representation',
+    title: 'Value Representation',
+    blurb:
+      'How Go lays out data in memory — struct padding and alignment, unsafe.Pointer and the rules around it, and the itab/eface behind every interface.',
+  },
+  {
+    key: 'execution',
+    title: 'Execution & Runtime',
+    blurb:
+      'How your program actually runs — the M:N goroutine scheduler down to sysmon and preemption, and observing the live runtime with metrics and GODEBUG.',
+  },
+  {
+    key: 'toolchain',
+    title: 'Compiler & Toolchain',
+    blurb:
+      'From source to binary — the compile and link pipeline, build modes and binary anatomy, and reading the assembly the compiler emits.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';
