@@ -5,7 +5,7 @@ kind: topic
 order: 10
 difficulty: "Intermediate"
 status: ready
-intent: "Implicit satisfaction, polymorphism through small interfaces, the empty interface any, composition, and the nil-interface trap."
+intent: "Implicit satisfaction and structural typing, the (type,value) pair and dynamic dispatch, method sets, any and type switches, composition, stdlib interfaces, design, and the nil trap."
 related:
   - methods
   - embedding
@@ -22,9 +22,31 @@ quiz:
       - text: "By registering it at startup"
         correct: false
     explain: "Go uses structural typing: any type with the required method set satisfies the interface automatically, with no declaration. This lets you satisfy interfaces you didn't know existed, including ones from other packages."
+  - q: "What two things does an interface value hold?"
+    options:
+      - text: "A dynamic type (which concrete type it holds) and a value (the data, often a pointer)"
+        correct: true
+      - text: "Just the value"
+        correct: false
+      - text: "A name and a hash"
+        correct: false
+      - text: "A copy of every method body"
+        correct: false
+    explain: "An interface value is a (type, value) pair. The type half points at the concrete type's method table (used for dynamic dispatch); the value half holds the data or a pointer to it. Both halves being nil is what makes the interface == nil."
+  - q: "A method has a POINTER receiver: `func (d *Dog) Speak()`. Which satisfies the Speaker interface?"
+    options:
+      - text: "Only *Dog — a value Dog does not, because the method set of Dog excludes pointer-receiver methods"
+        correct: true
+      - text: "Both Dog and *Dog"
+        correct: false
+      - text: "Only Dog"
+        correct: false
+      - text: "Neither"
+        correct: false
+    explain: "The method set of *T includes both value- and pointer-receiver methods; the method set of T includes only value-receiver ones. So a pointer-receiver method means you must pass a pointer to satisfy the interface."
   - q: "What is the idiomatic Go guidance for interfaces at API boundaries?"
     options:
-      - text: "Accept interfaces, return structs — be liberal in inputs, concrete in outputs"
+      - text: "Accept interfaces, return structs — and define the interface where it's used, not where the type lives"
         correct: true
       - text: "Return interfaces, accept structs"
         correct: false
@@ -32,7 +54,7 @@ quiz:
         correct: false
       - text: "Define one giant interface per package"
         correct: false
-    explain: "Accepting an interface lets callers pass anything that fits; returning a concrete type gives them all its methods and fields. Small interfaces (often one method, like io.Writer) compose best."
+    explain: "Accepting a small interface lets callers pass anything that fits; returning a concrete type gives them its full surface. And interfaces belong to the consumer — define the minimal interface you need next to the code that uses it."
   - q: "An interface variable holds a *nil pointer* of a concrete type. Is the interface == nil?"
     options:
       - text: "No — the interface holds a (type, value) pair, so the type is non-nil even though the value is nil"
@@ -43,19 +65,19 @@ quiz:
         correct: false
       - text: "It panics on comparison"
         correct: false
-    explain: "An interface is nil only when BOTH its type and value are nil. A nil *T stored in an interface gives it a concrete type, so `iface != nil`. This is a classic bug, especially when returning a typed nil error."
+    explain: "An interface is nil only when BOTH its type and value are nil. A nil *T stored in an interface gives it a concrete type, so iface != nil. This is a classic bug, especially when returning a typed nil error."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🔌 Analogy">
-An interface is a wall socket. It promises a *shape* — two prongs and a voltage — not a brand. Any appliance that fits plugs in. Go never asks a type "do you declare yourself a Plug?"; it just checks "do you have the right prongs?" That check is the type's [method set](/fundamentals/methods/).
+An interface is a wall socket. It promises a *shape* — two prongs and a voltage — not a brand. Any appliance that fits plugs in. Go never asks a type "do you declare yourself a Plug?"; it just checks "do you have the right prongs?" That check is the type's [method set](/fundamentals/methods/). This one idea — describe behavior, not identity — is the backbone of idiomatic Go design.
 </Callout>
 
-## Implicit satisfaction
+## What an interface is
 
-An interface is just a **set of method signatures**. A type satisfies it by *having those methods* — there is no `implements` keyword and no explicit link:
+An interface is a **set of method signatures** — a named contract of behavior. A type satisfies it by *having those methods*; there is no `implements` keyword and no explicit link:
 
 ```go
 type Stringer interface {
@@ -70,11 +92,11 @@ func (p Point) String() string {
 }
 ```
 
-This **structural typing** means you can satisfy interfaces you've never heard of, including `fmt.Stringer` and `io.Writer` from the standard library.
+This is **structural typing** (often called *duck typing*, checked at compile time): if it has the methods, it fits. The payoff is decoupling — you can satisfy interfaces you've never heard of, including `fmt.Stringer` and `io.Writer` from the standard library, without those packages knowing your type exists. A producer of a type and a consumer that needs a behavior never have to agree on a shared base class; they only have to agree on a method shape.
 
-## Polymorphism through an interface parameter
+## Polymorphism through an interface
 
-Write a function over the interface, and every implementer flows through the same code:
+Write a function that takes the interface, and every implementer flows through the same code — no `switch`, no inheritance hierarchy:
 
 <Mermaid code={`graph TD
   SHAPE["Shape interface { Area() float64 }"]
@@ -82,7 +104,7 @@ Write a function over the interface, and every implementer flows through the sam
   RECT["Rectangle"] -->|satisfies| SHAPE
   SHAPE --> FN["totalArea(shapes []Shape)"]`} />
 
-<Playground client:visible title="interfaces.go" code={`package main
+<Playground client:visible title="polymorphism.go" code={`package main
 
 import (
 	"fmt"
@@ -102,51 +124,170 @@ type Rectangle struct{ W, H float64 }
 
 func (r Rectangle) Area() float64 { return r.W * r.H }
 
-// One function, any Shape. No type switches needed.
+// One function, any Shape — even types added later, in other packages.
 func totalArea(shapes []Shape) float64 {
 	var sum float64
 	for _, s := range shapes {
-		sum += s.Area()
+		sum += s.Area() // dynamic dispatch: the concrete Area() is chosen at runtime
 	}
 	return sum
 }
 
 func main() {
-	shapes := []Shape{
-		Circle{R: 2},
-		Rectangle{W: 3, H: 4},
-	}
+	shapes := []Shape{Circle{R: 2}, Rectangle{W: 3, H: 4}}
 	fmt.Printf("total area: %.2f\n", totalArea(shapes)) // 24.57
 }`} />
 
-## The empty interface, small interfaces, and composition
+## Under the hood: the (type, value) pair
 
-The empty interface `interface{}` — spelled **`any`** since Go 1.18 — has no methods, so *every* type satisfies it. It's the escape hatch for "value of unknown type" (you'll recover the real type with [type assertions](/fundamentals/type-assertions/)).
+An interface value isn't magic — it's a two-word structure: a **dynamic type** (a pointer to the concrete type's *method table*) and a **value** (the data, or a pointer to it). Calling a method looks up the implementation in that table — **dynamic dispatch**:
 
-Idiomatic Go favors **small** interfaces. The most powerful ones have a single method — `io.Writer`, `io.Reader`, `fmt.Stringer`. You compose them by embedding:
+<Mermaid code={`graph LR
+  IV["interface value (Shape)"] --> T["type → *Circle's method table"]
+  IV --> V["value → Circle{R:2}"]
+  T --> M["Area() implementation"]`} />
+
+Three consequences fall out of this model:
+
+- **Comparisons:** two interface values are equal when their types and values are equal. An interface is `nil` only when *both* halves are nil (the [trap below](#the-nil-interface-trap)).
+- **Boxing:** storing a concrete value in an interface may copy it to the heap so the pointer is stable — a small allocation. In tight loops this can matter.
+- **Dispatch cost:** an interface call is an indirect call through the table, slightly more expensive than a direct call and not inlinable. Real, but rarely your bottleneck.
+
+## Method sets decide who satisfies
+
+Whether a type satisfies an interface depends on its **method set**, and that differs for `T` versus `*T`. The rule: the method set of `*T` includes **both** value- and pointer-receiver methods; the method set of `T` includes **only** value-receiver methods. So a pointer-receiver method means *only a pointer* satisfies the interface:
+
+<Playground client:visible title="method-sets.go" code={`package main
+
+import "fmt"
+
+type Speaker interface{ Speak() string }
+
+type Dog struct{ Name string }
+
+// POINTER receiver — so only *Dog is in Speaker's method set
+func (d *Dog) Speak() string { return d.Name + " says woof" }
+
+func main() {
+	d := Dog{Name: "Rex"}
+
+	var s Speaker = &d // OK: *Dog has Speak
+	fmt.Println(s.Speak())
+
+	// var bad Speaker = d  // compile error:
+	//   Dog does not implement Speaker (Speak has pointer receiver)
+
+	// the practical rule: if any method needs a pointer receiver,
+	// pass pointers when you store the type in an interface.
+	fmt.Println("does value Dog satisfy Speaker?", false)
+}`} />
+
+This is the single most common "why won't this compile?" with interfaces — see [methods](/fundamentals/methods/) for when to choose each receiver.
+
+## The empty interface and type switches
+
+The empty interface `interface{}` — spelled **`any`** since Go 1.18 — has no methods, so *every* type satisfies it. It's the escape hatch for "a value whose type I don't know yet": JSON decoding, `fmt.Println`'s arguments, generic containers before generics. You recover the concrete type with a **type assertion** or a **type switch**:
+
+<Playground client:visible title="any.go" code={`package main
+
+import "fmt"
+
+// describe inspects a value of unknown type at runtime.
+func describe(v any) string {
+	switch x := v.(type) { // x is typed inside each case
+	case nil:
+		return "nil"
+	case int:
+		return fmt.Sprintf("int: %d", x)
+	case string:
+		return fmt.Sprintf("string of length %d", len(x))
+	case fmt.Stringer:
+		return "Stringer: " + x.String() // interfaces work as cases too
+	default:
+		return fmt.Sprintf("other type %T", x)
+	}
+}
+
+func main() {
+	for _, v := range []any{42, "go", 3.14, nil} {
+		fmt.Println(describe(v))
+	}
+}`} />
+
+Reach for `any` sparingly — it discards the type system. With Go 1.18+ [generics](/fundamentals/generics/), many old uses of `any` (containers, utility functions) are better expressed with type parameters; see [type assertions](/fundamentals/type-assertions/) for the full mechanics.
+
+## Composing small interfaces
+
+Idiomatic Go favors **small** interfaces — the most powerful have a single method (`io.Writer`, `io.Reader`, `fmt.Stringer`, `error`). You build bigger contracts by **embedding** them:
 
 ```go
-// io.ReadWriter is literally two small interfaces glued together
+// io.ReadWriter is literally two one-method interfaces glued together
 type ReadWriter interface {
-	Reader
-	Writer
+	Reader // Read(p []byte) (int, error)
+	Writer // Write(p []byte) (int, error)
 }
 ```
 
-And remember the boundary rule: **accept interfaces, return structs.** Take the smallest interface you actually need; hand back a concrete type so callers keep its full surface.
+A type satisfies the composed interface exactly when it satisfies each embedded one. This is why so much of the standard library interoperates: a `*os.File`, a `*bytes.Buffer`, and a `net.Conn` are all `io.ReadWriter`s, so anything written against that interface works with all of them. See [embedding](/fundamentals/embedding/) for the full mechanics.
+
+## Implementing a standard-library interface
+
+The real power of structural typing: implement a stdlib interface and instantly plug into stdlib machinery. Give a type `Len`, `Less`, and `Swap` and `sort.Sort` will sort it:
+
+<Playground client:visible title="sort-interface.go" code={`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+// ByLen is []string with the three methods sort.Interface requires.
+type ByLen []string
+
+func (s ByLen) Len() int           { return len(s) }
+func (s ByLen) Less(i, j int) bool { return len(s[i]) < len(s[j]) }
+func (s ByLen) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+func main() {
+	words := ByLen{"banana", "kiwi", "fig", "apple"}
+	sort.Sort(words) // sort.Sort works on ANY sort.Interface — no generics needed
+	fmt.Println(words) // [fig kiwi apple banana]
+}`} />
+
+The interfaces worth knowing by heart:
+
+| Interface | Method(s) | You get |
+|---|---|---|
+| `fmt.Stringer` | `String() string` | custom `%v`/`Println` formatting |
+| `error` | `Error() string` | a value usable as an [error](/fundamentals/errors/) |
+| `io.Reader` / `io.Writer` | `Read` / `Write([]byte)` | works with `io.Copy`, buffers, files, sockets |
+| `io.Closer` | `Close() error` | `defer x.Close()` |
+| `sort.Interface` | `Len`/`Less`/`Swap` | `sort.Sort` |
+| `http.Handler` | `ServeHTTP(w, r)` | mount on any router |
+
+## Designing good interfaces
+
+- **Keep them small.** One or two methods compose and mock far better than a twelve-method "manager." The bigger an interface, the fewer types satisfy it and the more it couples.
+- **Define them at the consumer.** An interface belongs next to the code that *needs* the behavior, not next to the type that provides it. The provider returns a concrete struct; the consumer declares the little interface it depends on.
+- **Accept interfaces, return structs.** Be liberal in what you take, concrete in what you give back — so callers keep the full method set and you keep freedom to extend.
+- **Don't add an interface "just in case."** A single implementation needs no interface; introduce one when a second implementation or a test seam actually appears. Premature interfaces ("interface pollution") add indirection with no payoff.
+
+<Callout type="tip" title="🧪 Interfaces are the seam for testing">
+Because satisfaction is implicit, a small interface is the natural place to swap a real dependency for a fake. Have your service depend on a `Store` interface with the two methods it uses; pass the real database in `main` and an in-memory fake in tests — no mocking framework required. This is the same idea as [dependency injection](/web/project-layout-and-di/), and it's why "depend on a narrow interface" pays off the moment you write a test.
+</Callout>
 
 ## The nil-interface trap
 
 <Callout type="gotcha" title="⚠️ A typed nil is not a nil interface">
-An interface value is a **(type, value) pair**. It equals `nil` only when *both* halves are nil. Store a nil `*T` in an interface and the type slot is filled — so the interface is **not** nil:
+An interface value is a **(type, value) pair**, so it equals `nil` only when *both* halves are nil. Store a nil `*T` in an interface and the type slot is filled — the interface is **not** nil:
 
 ```go
 var p *MyError = nil
-var err error = p   // err holds (*MyError, nil)
+var err error = p       // err holds (*MyError, nil)
 fmt.Println(err == nil) // false! — the famous typed-nil bug
 ```
 
-This bites hardest when a function declares `var err *MyError` and returns it as `error`: callers see a non-nil error even on success. Fix: return the interface type directly, or `return nil` explicitly.
+This bites hardest when a function declares `var err *MyError`, maybe-assigns it, and returns it as `error`: callers see a non-nil error even on the success path. **Fix:** return the `error` interface type directly and `return nil` explicitly on success — never return a concrete pointer type for errors.
 </Callout>
 
-Next: how types reuse behavior by embedding others — [struct & interface embedding](/fundamentals/embedding/).
+Next: how types borrow behavior by embedding others — [struct & interface embedding](/fundamentals/embedding/).
