@@ -44,6 +44,28 @@ quiz:
       - text: "Swap two pointers from the ends"
         correct: false
     explain: "Backtracking builds a partial solution incrementally; after exploring a branch it undoes that step so the shared state is clean for the next branch. Choose / explore / un-choose."
+  - q: "What is pruning in backtracking, and why does it matter?"
+    options:
+      - text: "Abandoning a branch the moment a constraint is already violated, so you skip exploring everything below it — often the difference between feasible and hopeless"
+        correct: true
+      - text: "Removing the base case to go deeper"
+        correct: false
+      - text: "Caching results in a map"
+        correct: false
+      - text: "Sorting the choices first"
+        correct: false
+    explain: "Pure backtracking can explore an exponential tree. Pruning checks validity before recursing (e.g. in N-queens, reject a column/diagonal already attacked) and cuts whole subtrees early. The choose/explore/un-choose skeleton stays the same; a feasibility test gates the recurse step."
+  - q: "Does Go optimize tail recursion (TCO)? What's the practical implication?"
+    options:
+      - text: "No — Go has no tail-call optimization, so deep recursion can overflow the stack; convert hot/deep recursions to a loop or an explicit stack"
+        correct: true
+      - text: "Yes, so any recursion runs in O(1) stack"
+        correct: false
+      - text: "Only for functions named tail*"
+        correct: false
+      - text: "Yes, but only with -gcflags"
+        correct: false
+    explain: "Some languages turn a tail call into a jump (constant stack). Go does not, so even tail-recursive code keeps stacking frames. For depths that could reach hundreds of thousands, rewrite as an iterative loop or drive an explicit stack/queue to avoid 'stack overflow'."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -175,5 +197,12 @@ Two classic backtracking bugs. First, **storing the shared slice directly** — 
 <Callout type="tip" title="🐹 When subproblems repeat, memoize">
 Plain recursion redoes work: naive `fib(n)` recomputes the same `fib(k)` exponentially many times. When the call tree has **overlapping subproblems**, cache each result in a `map` or slice and the exponential collapses to linear. That's the bridge from recursion to [dynamic programming](/dsa/dynamic-programming/).
 </Callout>
+
+## See also
+
+- [dynamic programming](/dsa/dynamic-programming/) — memoize overlapping subproblems to kill the exponential blowup.
+- [binary trees](/dsa/binary-trees/) — traversals are the purest recursion.
+- [graphs](/dsa/graphs/) — DFS is recursion + a visited set; backtracking on a graph.
+- [stacks & queues](/dsa/stacks-and-queues/) — the explicit stack that replaces deep recursion.
 
 Next: caching overlapping subproblems to turn exponential recursion into polynomial — [dynamic programming](/dsa/dynamic-programming/).

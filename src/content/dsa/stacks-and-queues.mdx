@@ -44,6 +44,28 @@ quiz:
       - text: "Use a map keyed by index"
         correct: false
     explain: "The end of a slice is the natural top: append pushes (amortized O(1)) and reslicing off the last element pops (O(1))."
+  - q: "Which traversal uses a stack and which uses a queue?"
+    options:
+      - text: "DFS uses a stack (or the call stack via recursion); BFS uses a queue"
+        correct: true
+      - text: "Both use a queue"
+        correct: false
+      - text: "DFS uses a queue; BFS uses a stack"
+        correct: false
+      - text: "Neither uses either"
+        correct: false
+    explain: "Depth-first search dives down one path before backtracking — LIFO, a stack (recursion's call stack is exactly that). Breadth-first search visits level by level — FIFO, a queue. Swapping the structure swaps the traversal order. Stacks also power undo, expression evaluation, and bracket matching."
+  - q: "Across goroutines, why prefer a buffered channel over a hand-rolled queue?"
+    options:
+      - text: "A buffered channel is already a thread-safe FIFO with blocking and backpressure — no mutex or compaction to write"
+        correct: true
+      - text: "Channels are faster than slices for everything"
+        correct: false
+      - text: "A slice queue can't hold structs"
+        correct: false
+      - text: "Channels sort the items"
+        correct: false
+    explain: "When producers and consumers are separate goroutines, a buffered channel gives you a concurrent FIFO out of the box: sends block when full, receives block when empty (backpressure), all race-free. Build your own slice/list queue only for single-goroutine use."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -148,5 +170,12 @@ For a double-ended queue (push/pop at both ends) reach for [`container/list`](ht
 <Callout type="tip" title="🐹 Channels are Go's concurrent queue">
 When producers and consumers run in different goroutines, you usually don't build a queue at all — a buffered **channel** *is* a thread-safe FIFO with blocking and backpressure built in. See [worker pool](/patterns/worker-pool/) and [pipeline](/patterns/pipeline/).
 </Callout>
+
+## See also
+
+- [linked lists](/dsa/linked-lists/) — the other backing for stacks/queues; `container/list` for a deque.
+- [arrays & slices](/dsa/arrays-and-slices/) — why slice push/pop is amortized O(1).
+- [graphs](/dsa/graphs/) — BFS (queue) and DFS (stack) traversal in action.
+- [worker pool](/patterns/worker-pool/) — a buffered channel as a concurrent queue.
 
 Next: keys instead of positions — [hash tables](/dsa/hash-tables/).

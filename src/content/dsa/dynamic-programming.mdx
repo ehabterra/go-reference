@@ -44,6 +44,28 @@ quiz:
       - text: "Greedy uses more memory than DP"
         correct: false
     explain: "A locally optimal choice (the largest coin that fits) is not always globally optimal. DP considers every coin for every amount, so it finds the true minimum 3+3=2."
+  - q: "Memoization (top-down) vs tabulation (bottom-up) — what's the difference?"
+    options:
+      - text: "Top-down: recursion + a cache, computing only the states actually needed (lazily). Bottom-up: an iterative table filled in dependency order, no recursion or call stack"
+        correct: true
+      - text: "They give different answers"
+        correct: false
+      - text: "Tabulation is always exponential"
+        correct: false
+      - text: "Memoization can't use a slice"
+        correct: false
+    explain: "Both cache subproblem answers; they differ in direction. Memoization keeps the natural recursive shape and only solves states it reaches (good when many states are unused), but uses stack depth. Tabulation iterates from base cases up, avoiding recursion — often faster and easier to space-optimize."
+  - q: "How is Fibonacci reduced from O(n) space to O(1)?"
+    options:
+      - text: "Keep only the last two states in two rolling variables instead of the whole dp table"
+        correct: true
+      - text: "Use a faster hash function"
+        correct: false
+      - text: "Switch to recursion"
+        correct: false
+      - text: "It can't be — DP always needs the full table"
+        correct: false
+    explain: "dp[i] only depends on dp[i-1] and dp[i-2], so you never need the older entries — two variables (prev, curr) suffice, dropping O(n) space to O(1). This 'rolling array' trick generalizes: keep only as many previous rows/states as the recurrence references."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -202,5 +224,12 @@ For coins `[1, 3, 4]` and amount `6`, DP returns **2** (`3 + 3`). A greedy "take
 <Callout type="gotcha" title="⚠️ Define the state and base case before you write a loop">
 Most DP bugs are state bugs, not loop bugs. Pin down three things first: **what `dp[i]` means** (a precise sentence — "min coins for amount i"), the **recurrence** (how `dp[i]` is built from smaller entries), and the **base case** (`dp[0] = 0`). Initialize "impossible" entries to a sentinel (a large number for minimization, not `0`, or you'll mistake "unreachable" for "free"). Get those right and the loops almost write themselves.
 </Callout>
+
+## See also
+
+- [recursion & backtracking](/dsa/recursion-and-backtracking/) — the exponential starting point DP optimizes.
+- [greedy](/dsa/greedy/) — faster, but only correct when local choices are globally optimal.
+- [Big-O](/dsa/big-o/) — the O(2ⁿ) → O(n) collapse memoization buys.
+- [union-find](/dsa/union-find/) — the structure behind Kruskal, a greedy cousin of DP problems.
 
 Next: when the locally optimal choice *is* enough — [greedy algorithms](/dsa/greedy/).

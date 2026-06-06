@@ -44,6 +44,28 @@ quiz:
       - text: "4 coins"
         correct: false
     explain: "Greedy grabs the largest coin (4) first and gets stuck needing 1+1. The optimum 3+3=2 requires not taking the biggest coin. Greedy coin change is only correct for canonical systems like US coins."
+  - q: "Which classic graph algorithms are greedy?"
+    options:
+      - text: "Dijkstra (shortest path), Prim and Kruskal (minimum spanning tree), and Huffman coding"
+        correct: true
+      - text: "BFS and DFS"
+        correct: false
+      - text: "Binary search"
+        correct: false
+      - text: "Merge sort"
+        correct: false
+    explain: "Each makes a locally optimal choice that's provably global: Dijkstra always settles the closest unvisited vertex; Prim/Kruskal always add the cheapest safe edge (Kruskal via union-find); Huffman always merges the two least-frequent symbols. The correctness proofs are what separate these from greedy coin change."
+  - q: "How do you prove a greedy algorithm is actually correct?"
+    options:
+      - text: "An exchange argument — show any optimal solution can be transformed to include the greedy choice without getting worse"
+        correct: true
+      - text: "Run it on a few inputs and check"
+        correct: false
+      - text: "Measure its running time"
+        correct: false
+      - text: "Compare it to bubble sort"
+        correct: false
+    explain: "The standard technique: assume an optimal solution that differs from the greedy one, then 'exchange' an element to match the greedy first choice and show the result is no worse. If that always holds, the greedy choice is safe and the algorithm is optimal. Failing to find such an argument (or finding a counterexample) is the signal to use DP instead."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -196,4 +218,11 @@ func main() {
 Greedy's danger is that it always returns *an* answer, and that answer often looks plausible. Before trusting it, prove (or at least convince yourself) that the locally optimal choice is globally safe — typically with an exchange argument: show any optimal solution can be rewritten to start with the greedy choice without getting worse. If you can't, or you find a counterexample like `[1, 3, 4]` making `6`, reach for [dynamic programming](/dsa/dynamic-programming/) instead. Greedy trades correctness for speed; only spend that trade when you've earned it.
 </Callout>
 
-Next: back to the [Data Structures & Algorithms track](/dsa/), or revisit when greedy isn't enough — [dynamic programming](/dsa/dynamic-programming/).
+## See also
+
+- [dynamic programming](/dsa/dynamic-programming/) — the fallback when local choices aren't globally safe.
+- [union-find](/dsa/union-find/) — the engine of Kruskal's greedy MST.
+- [graphs](/dsa/graphs/) — Dijkstra and Prim are greedy graph algorithms.
+- [sorting](/dsa/sorting/) — most greedy algorithms start by sorting.
+
+Next: the whole track on one page — [the DSA cheat-sheet](/dsa/cheat-sheet/).

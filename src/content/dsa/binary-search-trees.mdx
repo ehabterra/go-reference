@@ -44,6 +44,28 @@ quiz:
       - text: "A random order"
         correct: false
     explain: "Inorder visits left subtree, node, right subtree. Because every left subtree holds smaller keys and every right subtree holds larger keys, this emits keys from smallest to largest — sorted, for free."
+  - q: "Deleting a BST node that has TWO children — what takes its place?"
+    options:
+      - text: "Its in-order successor (the smallest key in the right subtree), or symmetrically its predecessor"
+        correct: true
+      - text: "Its left child, always"
+        correct: false
+      - text: "A nil — the subtree is discarded"
+        correct: false
+      - text: "The root"
+        correct: false
+    explain: "A leaf is removed directly; a one-child node is replaced by that child. With two children you can't just pick one, so you copy in the in-order successor (leftmost node of the right subtree) — the next-larger key — then delete that successor (which has at most one child). This preserves the ordering invariant."
+  - q: "What keeps a BST's height at O(log n) regardless of insertion order?"
+    options:
+      - text: "A self-balancing variant (AVL or red-black) that rotates nodes to rebalance after insert/delete"
+        correct: true
+      - text: "Inserting keys in sorted order"
+        correct: false
+      - text: "Using a larger node struct"
+        correct: false
+      - text: "Nothing — plain BSTs are always balanced"
+        correct: false
+    explain: "A plain BST can degrade to a chain (height n−1) on sorted input. AVL and red-black trees track balance and perform rotations to keep height O(log n), guaranteeing O(log n) search/insert/delete in the worst case — at the cost of a little bookkeeping per node."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -152,5 +174,12 @@ Go's standard library has **no built-in BST**. Reach for one of these instead:
 <Callout type="gotcha" title="⚠️ A BST is not automatically balanced">
 Inserting keys in sorted order (1, 2, 3, 4, …) builds a tree that leans entirely to one side — height `n − 1`, so search becomes `O(n)`, the very linear scan the tree was meant to avoid. A plain BST gives `O(log n)` only on reasonably random input; for worst-case guarantees you need a self-balancing variant (AVL or red-black) or a different structure altogether.
 </Callout>
+
+## See also
+
+- [binary trees](/dsa/binary-trees/) — the structure and traversals a BST builds on (inorder = sorted).
+- [heaps](/dsa/heaps/) — a weaker ordering for O(1) min/max instead of full search.
+- [hash tables](/dsa/hash-tables/) — O(1) average lookups when you don't need order.
+- [binary search](/dsa/binary-search/) — the same halving logic on a sorted slice.
 
 Next: a tree tuned for fast min/max instead of full ordering — [heaps](/dsa/heaps/).

@@ -44,6 +44,28 @@ quiz:
       - text: "Because the slice never grows"
         correct: false
     explain: "When cap is exceeded, Go allocates a bigger backing array (roughly doubling) and copies. Doubling means those O(n) copies happen rarely enough that the average over n appends is O(1)."
+  - q: "Simplify O(n² + 3n + 7) to a single Big-O class."
+    options:
+      - text: "O(n²) — keep only the dominant term and drop constants"
+        correct: true
+      - text: "O(n² + 3n + 7) — every term matters"
+        correct: false
+      - text: "O(3n²)"
+        correct: false
+      - text: "O(n)"
+        correct: false
+    explain: "As n grows, n² dwarfs 3n and 7, so the lower-order terms vanish and constant factors drop. The class is O(n²) — Big-O captures the shape of the dominant term only."
+  - q: "A recursive function calls itself to a depth of n before returning. What's its space complexity, even if it returns a single int?"
+    options:
+      - text: "O(n) — each pending call keeps a stack frame until it returns"
+        correct: true
+      - text: "O(1) — it returns just one value"
+        correct: false
+      - text: "O(log n)"
+        correct: false
+      - text: "O(n²)"
+        correct: false
+    explain: "Space complexity counts the call stack too. n nested calls hold n frames simultaneously before any unwinds, so the recursion costs O(n) space regardless of how small the returned value is. Converting to iteration (or tail-style accumulation) can drop it to O(1)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -173,5 +195,30 @@ The same growth classes describe **extra memory**. Reversing a slice in place is
 <Callout type="gotcha" title="⚠️ Worst, average, and amortized aren't the same">
 A hash-map lookup is **average** O(1) but **worst-case** O(n) when everything collides. A slice `append` is **amortized** O(1) — most are instant, but the one that reallocates copies all n elements. State *which* you mean. And remember Big-O hides constants: an O(n) pass with a huge constant can lose to an O(n log n) one on realistic sizes.
 </Callout>
+
+## Complexity of common Go operations
+
+A quick reference for the costs you'll reason about constantly:
+
+| Operation | Complexity |
+|---|---|
+| `s[i]`, `len(s)`, `m[k]` read | O(1) |
+| `append(s, x)` | O(1) amortized |
+| insert/delete in the middle of a slice | O(n) (shift) |
+| `m[k] = v`, `delete(m, k)` | O(1) average |
+| `sort.Slice(s, …)` | O(n log n) |
+| binary search (`sort.Search`) | O(log n) |
+| linear scan / `range` | O(n) |
+| nested loop over the same slice | O(n²) |
+| balanced-tree / heap insert | O(log n) |
+| naive recursive Fibonacci | O(2ⁿ) |
+
+## See also
+
+- [arrays & slices](/dsa/arrays-and-slices/) — where amortized-O(1) append comes from.
+- [binary search](/dsa/binary-search/) — the canonical O(log n).
+- [hash tables](/dsa/hash-tables/) — O(1) average, and the trade that buys it.
+- [sorting](/dsa/sorting/) — the O(n log n) vs O(n²) landscape.
+- [the cheat sheet](/dsa/cheat-sheet/) — every structure and algorithm's complexity in one table.
 
 Next: the structure those costs live on — [arrays and slices](/dsa/arrays-and-slices/).

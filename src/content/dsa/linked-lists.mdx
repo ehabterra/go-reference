@@ -44,6 +44,28 @@ quiz:
       - text: "To count the nodes"
         correct: false
     explain: "Reversal walks the list flipping each Next to point backward. Once you overwrite head.Next, the forward link is gone — so you stash next first, then advance to it."
+  - q: "How do you detect a cycle in a linked list in O(1) extra space?"
+    options:
+      - text: "Floyd's tortoise-and-hare: a slow pointer (+1) and a fast pointer (+2); if they ever meet, there's a cycle"
+        correct: true
+      - text: "Store every visited node in a set"
+        correct: false
+      - text: "Reverse the list and compare"
+        correct: false
+      - text: "Count the nodes twice"
+        correct: false
+    explain: "Two pointers advance at different speeds; in a cycle the fast one laps the slow one and they collide, in O(n) time and O(1) space. A visited-set also works but costs O(n) space. The same fast/slow trick finds the list's middle in one pass."
+  - q: "What does a doubly linked list's Prev pointer buy you over a singly linked one?"
+    options:
+      - text: "Backward traversal and O(1) deletion of a node you already hold — no walk from the head to find its predecessor"
+        correct: true
+      - text: "O(1) random access by index"
+        correct: false
+      - text: "Less memory per node"
+        correct: false
+      - text: "Automatic sorting"
+        correct: false
+    explain: "To delete a node in a singly linked list you need its predecessor (an O(n) search, unless you tracked it). A Prev pointer makes that O(1) and lets you iterate in reverse — which is exactly why container/list (and LRU caches) use a doubly linked list."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -165,5 +187,12 @@ A **doubly** linked list adds a `Prev` pointer, so you can walk backward and del
 <Callout type="gotcha" title="⚠️ In Go, a slice usually wins">
 Linked lists look elegant but each node is a separate heap allocation scattered across memory, so traversal thrashes the CPU cache — often **slower** than a slice even where Big-O says otherwise. Pointer chasing also pressures the GC. Reach for a linked list only when you truly need O(1) splicing at a held position (LRU, intrusive queues); otherwise a `[]T` is simpler and faster.
 </Callout>
+
+## See also
+
+- [arrays & slices](/dsa/arrays-and-slices/) — the cache-friendly default; why a slice usually wins.
+- [stacks & queues](/dsa/stacks-and-queues/) — built on lists (or slices) with a discipline.
+- [two pointers](/dsa/two-pointers/) — the fast/slow technique behind cycle detection.
+- [Big-O](/dsa/big-o/) — the O(1)-splice vs O(n)-access trade in context.
 
 Next: two lists with a discipline — [stacks & queues](/dsa/stacks-and-queues/).

@@ -44,6 +44,28 @@ quiz:
       - text: "Use less memory than a hash map"
         correct: false
     explain: "A hash scatters keys by their full hash, destroying any prefix relationship, so 'find all words starting with car' means scanning every key. A trie shares prefixes along its paths, so StartsWith is a single O(L) walk."
+  - q: "When keys are known lowercase ASCII, why might you use [26]*Node instead of map[rune]*Node for children?"
+    options:
+      - text: "A fixed array avoids a map allocation per node and pointer-chasing — less memory overhead and faster walks"
+        correct: true
+      - text: "It supports Unicode better"
+        correct: false
+      - text: "It makes Search O(1)"
+        correct: false
+      - text: "Arrays can store more children"
+        correct: false
+    explain: "A map per node carries real overhead (hashing, allocation, indirection). When the alphabet is small and fixed, a [26]*Node array indexes children directly by ch-'a' — fewer allocations, better cache behavior. The map form is more general (any Unicode) but heavier."
+  - q: "Which job is the trie's, not the hash map's?"
+    options:
+      - text: "Prefix work — autocomplete, longest-prefix-match (IP routing), 'all keys starting with…'"
+        correct: true
+      - text: "Exact-key lookup in O(1)"
+        correct: false
+      - text: "Counting word frequencies"
+        correct: false
+      - text: "Storing unordered pairs"
+        correct: false
+    explain: "Tries exploit shared prefixes, so they excel at prefix queries: autocomplete, spell-check, and longest-prefix matching (used in routers). For plain exact lookup with no prefix needs, a hash map is simpler and O(1) average — don't pay the trie's per-character node cost."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -229,5 +251,12 @@ func main() {
 <Callout type="gotcha" title="⚠️ When NOT to reach for a trie">
 A trie shines only for **prefix** work — autocomplete, longest-prefix routing, dictionary lookups. For plain exact-key lookup, a [hash table](/dsa/hash-tables/) is simpler, smaller, and O(1) on average rather than O(L). The cost is memory: a node per character can balloon for sparse, long keys (a `map[rune]*Node` per node has real overhead). When keys are known lowercase ASCII, swap the map for a `[26]*Node` array to cut allocations and pointer chasing.
 </Callout>
+
+## See also
+
+- [hash tables](/dsa/hash-tables/) — the simpler choice for exact-key lookup.
+- [binary trees](/dsa/binary-trees/) — the DFS walk autocomplete uses on the subtree.
+- [graphs](/dsa/graphs/) — a trie is a tree; traversal generalizes.
+- [strings & runes](/fundamentals/strings-and-runes/) — why children are keyed by `rune`.
 
 Next: from trees of letters to networks of anything — [graphs](/dsa/graphs/).
