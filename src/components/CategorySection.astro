@@ -8,7 +8,7 @@ interface Props {
   blurb: string;
   titleKey?: string;
   blurbKey?: string;
-  collection?: 'patterns' | 'concurrency' | 'dsa' | 'fundamentals';
+  collection?: 'patterns' | 'concurrency' | 'dsa' | 'fundamentals' | 'stdlib';
   base?: string;
 }
 const { cat, title, blurb, collection = 'patterns', base = '/patterns' } = Astro.props;

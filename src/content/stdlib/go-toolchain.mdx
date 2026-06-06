@@ -1,0 +1,174 @@
+---
+title: "The go Toolchain"
+category: tooling
+kind: topic
+order: 12
+difficulty: "Beginner"
+status: ready
+intent: "One tool does it all — build, run, test, format, vet, and document Go code, plus embed files and cross-compile static binaries from a single command."
+related:
+  - modules
+  - packages-and-modules
+  - testing-basics
+quiz:
+  - q: "What does `go build -ldflags \"-s -w\"` do?"
+    options:
+      - text: "Strips the symbol table and DWARF debug info, producing a smaller binary"
+        correct: true
+      - text: "Enables optimizations that are off by default"
+        correct: false
+      - text: "Links dynamically against the system C library"
+        correct: false
+      - text: "Runs the program after building it"
+        correct: false
+    explain: "`-s` omits the symbol table, `-w` omits DWARF debug information. Neither changes behavior or speed — they just shrink the binary (handy for containers). Go is already optimized by default."
+  - q: "How do you cross-compile a Linux binary from a macOS machine?"
+    options:
+      - text: "Set GOOS=linux and GOARCH=amd64 before `go build`"
+        correct: true
+      - text: "Install a Linux cross-compiler toolchain first"
+        correct: false
+      - text: "Run the build inside a Linux container — it's the only way"
+        correct: false
+      - text: "Pass `--target=linux` to go build"
+        correct: false
+    explain: "Pure-Go programs cross-compile with just two env vars: `GOOS` (target OS) and `GOARCH` (target CPU). `GOOS=linux GOARCH=amd64 go build` on a Mac emits a Linux binary — no external toolchain, because the compiler and linker ship with Go."
+  - q: "What is the role of `//go:embed`?"
+    options:
+      - text: "It bundles files (templates, assets) into the compiled binary at build time"
+        correct: true
+      - text: "It marks a function for inlining"
+        correct: false
+      - text: "It runs a shell command during the build"
+        correct: false
+      - text: "It imports a C library"
+        correct: false
+    explain: "The `embed` package with a `//go:embed path` directive over a `string`, `[]byte`, or `embed.FS` variable copies those files into the binary. The result is a single self-contained executable with no loose asset files to ship."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧰 Analogy">
+The `go` command is a **Swiss Army knife**: one tool, many blades. Where other languages bolt together a compiler, a package manager, a formatter, a test runner, and a linter, Go folds them all into subcommands — `go build`, `go test`, `go fmt`, `go vet`. Learn the handle once and every blade is in reach.
+</Callout>
+
+## Running, building, and the single binary
+
+`go run` compiles to a temp file and executes it — perfect for a quick try. `go build` produces a real, self-contained executable you can ship:
+
+```bash
+$ go run .
+hello, gopher
+
+$ go build -o app .      # emit a binary named "app"
+$ ./app
+hello, gopher
+
+$ ls -lh app
+-rwxr-xr-x  1 you  staff   2.1M app
+```
+
+A Go binary is **statically linked** by default: no runtime, no interpreter, no shared-library hunt on the target machine. You can shrink it by stripping the symbol table and debug info:
+
+```bash
+$ go build -ldflags "-s -w" -o app .
+$ ls -lh app
+-rwxr-xr-x  1 you  staff   1.4M app    # smaller, same behavior
+```
+
+<Mermaid code={`graph LR
+  SRC["main.go + packages"] --> C["go build"]
+  C --> BIN["single static binary"]
+  BIN --> RUN["runs anywhere<br/>same GOOS/GOARCH<br/>no dependencies"]`} />
+
+## Format, vet, test, and document
+
+Formatting is **not** a style debate in Go — `gofmt` is canonical and every project uses it. `go fmt` runs `gofmt` over your packages; most editors run it on save:
+
+```bash
+$ go fmt ./...        # format every package in the tree
+$ gofmt -d main.go    # show the diff without writing
+
+$ go vet ./...        # report suspicious constructs the compiler allows
+# e.g. Printf format mismatches, unreachable code, lost struct tags
+
+$ go test ./...       # find and run *_test.go in every package
+ok      example.com/app/store   0.012s
+```
+
+`go doc` reads documentation straight from source comments, offline:
+
+```bash
+$ go doc strings.Builder
+$ go doc -src strings.Builder.WriteString   # show the source too
+```
+
+`go env` shows (and `go env -w` writes) the toolchain's configuration:
+
+```bash
+$ go env GOOS GOARCH GOPATH
+darwin
+amd64
+/Users/you/go
+```
+
+<Callout type="tip" title="🐹 Build tags gate files by platform">
+A build constraint at the very top of a file decides whether it compiles. The modern form is a `//go:build` line, followed by a blank line:
+
+```go
+//go:build linux
+
+package sys
+```
+
+That file is included only on Linux. Combine constraints with `&&`, `||`, `!` — e.g. `//go:build linux && amd64`. The `_test.go`, `_linux.go`, `_amd64.go` filename suffixes work the same way without a directive.
+</Callout>
+
+## Embedding files and cross-compiling
+
+The `embed` package bakes files into the binary at build time, so there are no loose assets to deploy. A `//go:embed` directive sits directly above the variable it fills:
+
+```go
+package main
+
+import (
+	_ "embed"
+	"fmt"
+)
+
+//go:embed version.txt
+var version string // contents of version.txt, baked into the binary
+
+func main() {
+	fmt.Print(version)
+}
+```
+
+For a whole directory use `embed.FS`:
+
+```go
+import "embed"
+
+//go:embed templates/*
+var templates embed.FS // a read-only filesystem inside the binary
+```
+
+Because the compiler and linker ship with Go, **cross-compilation is two env vars** — no external toolchain. From a Mac you can build for Linux, Windows, or a Raspberry Pi:
+
+```bash
+$ GOOS=linux   GOARCH=amd64 go build -o app-linux   .
+$ GOOS=windows GOARCH=amd64 go build -o app.exe      .
+$ GOOS=linux   GOARCH=arm64 go build -o app-arm64    .
+
+$ file app-linux
+app-linux: ELF 64-bit LSB executable, x86-64, statically linked
+```
+
+`go tool dist list` prints every supported `GOOS/GOARCH` pair.
+
+<Callout type="gotcha" title="🐹 CGO breaks pure cross-compilation">
+The two-env-var trick works because pure-Go code needs no C compiler. The moment a dependency uses **cgo** (e.g. some SQLite or image libraries), cross-compiling needs a C cross-toolchain and `CGO_ENABLED=1`. Setting `CGO_ENABLED=0` forces a pure-Go, fully static build — the usual choice for minimal container images, at the cost of cgo-only packages.
+</Callout>
+
+Next: managing the dependencies those builds pull in — [Modules & Dependencies](/stdlib/modules/).

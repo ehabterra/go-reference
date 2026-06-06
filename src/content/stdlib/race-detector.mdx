@@ -1,0 +1,161 @@
+---
+title: "The Race Detector"
+category: tooling
+kind: topic
+order: 15
+difficulty: "Intermediate"
+status: ready
+intent: "Catch data races automatically — -race instruments memory accesses to flag concurrent unsynchronized reads/writes, prints the two conflicting goroutines, and points at the fix."
+related:
+  - profiling-pprof
+  - race-conditions
+  - benchmarks
+quiz:
+  - q: "What exactly is a data race?"
+    options:
+      - text: "Two goroutines access the same memory concurrently, at least one writes, with no synchronization"
+        correct: true
+      - text: "Two goroutines finishing in an unexpected order"
+        correct: false
+      - text: "A goroutine that never terminates"
+        correct: false
+      - text: "Using more goroutines than CPU cores"
+        correct: false
+    explain: "A data race needs three things at once: concurrent access to the same location, at least one of them a write, and no happens-before synchronization between them. The result is undefined behavior — not merely a wrong order, but corrupted or torn values."
+  - q: "How does the `-race` flag find races?"
+    options:
+      - text: "It instruments memory accesses at build time and watches them at runtime, reporting any unsynchronized conflict it actually observes"
+        correct: true
+      - text: "It statically proves the program race-free before running"
+        correct: false
+      - text: "It runs the program twice and diffs the output"
+        correct: false
+      - text: "It adds a global lock around every variable"
+        correct: false
+    explain: "`-race` is a dynamic detector: the compiler instruments loads and stores, and a runtime tracks happens-before relationships. It reports races it *witnesses* during that run — so it finds real races, but only on code paths the run exercises. No false positives; possible false negatives."
+  - q: "Why run `-race` in CI but not in production?"
+    options:
+      - text: "Instrumentation slows the program ~2-20x and grows memory, which is fine for tests but not for serving traffic"
+        correct: true
+      - text: "It changes program behavior, so prod results would be wrong"
+        correct: false
+      - text: "It only works on the CI operating system"
+        correct: false
+      - text: "Production builds can't be compiled with -race"
+        correct: false
+    explain: "The detector adds heavy bookkeeping: roughly 2-20x slower and several times the memory. That overhead is acceptable in tests (`go test -race`) where you want coverage, but unacceptable for production throughput. Run it in CI against your test suite instead."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚦 Analogy">
+A data race is **two cars entering an unsignaled intersection at once** — sometimes they pass cleanly, sometimes they crash, and you can't predict which. The `-race` flag is a traffic camera that records every crossing and flags the moment two paths conflict without a signal between them. It can't catch a crash on a road no car drove — but every collision it sees is real.
+</Callout>
+
+## What a data race is
+
+Three conditions, all at the same time, make a **data race**:
+
+1. Two or more goroutines access the **same** memory location,
+2. at least one access is a **write**, and
+3. there's **no synchronization** ordering them (no mutex, channel, or other happens-before).
+
+The Go memory model declares the result **undefined behavior** — not just a surprising order, but possibly a torn or garbage value. Here is the canonical offender: a counter incremented from many goroutines without a lock.
+
+<Mermaid code={`graph TD
+  G1["goroutine A<br/>reads counter, +1, writes"] --> MEM["shared counter"]
+  G2["goroutine B<br/>reads counter, +1, writes"] --> MEM
+  MEM --> BAD["no mutex / channel<br/>= data race<br/>lost updates, undefined value"]`} />
+
+<Playground client:visible title="race.go" code={`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	var counter int
+	var wg sync.WaitGroup
+
+	// 1000 goroutines each increment the SAME variable with no lock.
+	// This is a data race: concurrent read-modify-write, no synchronization.
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			counter++ // read, +1, write -- unsynchronized
+		}()
+	}
+	wg.Wait()
+
+	// Expect 1000, but updates are lost to the race.
+	fmt.Println("counter =", counter)
+}`} />
+
+The playground runs this **without** flagging the race — it just often prints a number below 1000 as updates clobber each other. To actually *see* the race diagnosed, run it locally with `-race` (next section). The runnable, fully explained version lives at [race conditions](/concurrency/race-conditions/).
+
+## Detecting with -race
+
+Add `-race` to `run`, `test`, or `build`; the compiler instruments every memory access and the runtime watches for conflicts:
+
+```bash
+$ go run -race main.go
+$ go test -race ./...     # the usual home: races caught in CI
+$ go build -race -o app . # instrumented binary, for staging
+```
+
+A race report names **both** goroutines, the conflicting addresses, and the stacks:
+
+```bash
+==================
+WARNING: DATA RACE
+Write at 0x00c0000b4010 by goroutine 8:
+  main.main.func1()
+      /app/main.go:20 +0x44      <- counter++ (the write)
+
+Previous read at 0x00c0000b4010 by goroutine 7:
+  main.main.func1()
+      /app/main.go:20 +0x3a      <- counter++ (the read)
+
+Goroutine 8 (running) created at:
+  main.main()
+      /app/main.go:18 +0x...
+==================
+Found 1 data race(s)
+exit status 66
+```
+
+Read it top-down: the **same address** (`0x00c0000b4010`) is written by goroutine 8 and read by goroutine 7 with nothing ordering them. The file:line points straight at `counter++`. Exit status 66 fails the build, so CI goes red.
+
+## Fixing the race
+
+Add synchronization so the accesses can't overlap. A **mutex** serializes the read-modify-write:
+
+```go
+var mu sync.Mutex
+var counter int
+
+go func() {
+	defer wg.Done()
+	mu.Lock()
+	counter++ // now exclusive
+	mu.Unlock()
+}()
+```
+
+For a pure counter, `sync/atomic` is lighter and lock-free:
+
+```go
+var counter atomic.Int64
+counter.Add(1) // atomic read-modify-write
+```
+
+Or follow Go's motto — *don't communicate by sharing memory; share memory by communicating* — and funnel updates through a **channel** so one goroutine owns the state. See [the sync package](/concurrency/sync-package/) for mutexes, `WaitGroup`, and `Once`. After any fix, re-run `go test -race` to confirm the warning is gone.
+
+<Callout type="gotcha" title="🐹 No warning is not a proof of safety">
+`-race` only reports races it **actually observes** on the paths a run exercises — it has no false positives, but plenty of false *negatives*. A clean `go test -race` means "no race seen this run," not "race-free forever." Maximize coverage: run it across your whole suite, with realistic concurrency and `-count` to repeat flaky tests. And never ship a `-race` binary to production — the 2-20x slowdown and memory blowup are for testing, not serving.
+</Callout>
+
+Next: see the live, runnable race demo and its fixes in [race conditions](/concurrency/race-conditions/), or head back to the [standard library index](/stdlib/).

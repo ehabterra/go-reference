@@ -1,0 +1,120 @@
+---
+title: "strings & bytes"
+category: essentials
+kind: topic
+order: 2
+difficulty: "Beginner"
+status: ready
+intent: "The text toolkit — the strings package, efficient building with strings.Builder, the parallel bytes package, and strconv for number/string conversion."
+related:
+  - fmt-and-io
+  - strings-and-runes
+  - encoding-json
+quiz:
+  - q: "Why use strings.Builder instead of += to concatenate many strings?"
+    options:
+      - text: "Strings are immutable, so += reallocates and copies each time — O(n²); Builder grows one buffer — O(n)"
+        correct: true
+      - text: "Builder is the only way to join strings"
+        correct: false
+      - text: "+= doesn't compile for strings"
+        correct: false
+      - text: "There's no difference"
+        correct: false
+    explain: "Each += allocates a brand-new string and copies everything so far. In a loop that's quadratic. strings.Builder writes into one growing byte buffer and produces the final string once."
+  - q: "When would you use the bytes package instead of strings?"
+    options:
+      - text: "When you're working with []byte (mutable data, I/O buffers) rather than immutable string"
+        correct: true
+      - text: "Never — they're identical"
+        correct: false
+      - text: "Only for Unicode"
+        correct: false
+      - text: "bytes is faster for all string work"
+        correct: false
+    explain: "The bytes package mirrors strings (Contains, Split, etc.) but operates on []byte. Use it when you already hold a byte slice — from a file, a network read, or a bytes.Buffer — to avoid converting."
+  - q: "What does strconv.Atoi(\"42\") return?"
+    options:
+      - text: "The int 42 and a nil error"
+        correct: true
+      - text: "The string \"42\""
+        correct: false
+      - text: "Just the int 42"
+        correct: false
+      - text: "A float64"
+        correct: false
+    explain: "strconv converts between strings and other types. Atoi returns (int, error) — always check the error, because parsing user input can fail. Itoa goes the other way."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="✂️ Analogy">
+If a `string` is a sealed, read-only ribbon of text, the `strings` package is the toolbox that *measures and cuts copies* of it — find, split, replace, trim — without ever altering the original. When you need to **assemble** text instead, `strings.Builder` is the workbench; when you're holding mutable bytes, `bytes` is the same toolbox for a different material.
+</Callout>
+
+## The strings package
+
+A flat set of functions over immutable strings — search, split, transform:
+
+<Playground client:visible title="strings.go" code={`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	s := "  Go is fun  "
+	fmt.Printf("%q\n", strings.TrimSpace(s))          // "Go is fun"
+	fmt.Println(strings.ToUpper("go"))                // GO
+	fmt.Println(strings.Contains(s, "fun"))           // true
+	fmt.Println(strings.Split("a,b,c", ","))          // [a b c]
+	fmt.Println(strings.Join([]string{"x", "y"}, "-")) // x-y
+	fmt.Println(strings.ReplaceAll("aaa", "a", "b"))  // bbb
+	fmt.Println(strings.HasPrefix("gopher", "go"))    // true
+	fmt.Println(strings.Count("banana", "a"))         // 3
+}`} />
+
+## Build, don't concatenate
+
+A `string` is **immutable**, so `s += more` allocates a whole new string every time — quadratic in a loop. `strings.Builder` writes into one growing buffer:
+
+<Playground client:visible title="builder.go" code={`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	var b strings.Builder
+	for i := 0; i < 5; i++ {
+		fmt.Fprintf(&b, "item-%d ", i) // Builder is an io.Writer
+	}
+	out := b.String()
+	fmt.Printf("%q (len %d)\n", strings.TrimSpace(out), b.Len())
+}`} />
+
+## bytes and strconv
+
+<Mermaid code={`graph LR
+  STR["string (immutable)"] <-->|"[]byte(s) / string(b)"| BYT["[]byte (mutable)"]
+  STR -->|"strconv.Atoi / Itoa"| NUM["int, float, bool"]
+  STR --- P1["strings.* funcs"]
+  BYT --- P2["bytes.* funcs (mirror)"]`} />
+
+The `bytes` package mirrors `strings` for `[]byte` (handy for I/O buffers, where `bytes.Buffer` is the mutable cousin of `strings.Builder`). `strconv` converts between strings and numbers — and always returns an error to check:
+
+```go
+n, err := strconv.Atoi("42")   // string -> int
+s := strconv.Itoa(42)          // int -> string
+f, err := strconv.ParseFloat("3.14", 64)
+b, err := strconv.ParseBool("true")
+```
+
+<Callout type="gotcha" title="⚠️ Converting string ↔ []byte copies">
+`[]byte(s)` and `string(b)` each **allocate and copy** — strings are immutable, so Go can't share the memory safely. That's usually fine, but in a hot loop, work in one representation (stay in `[]byte` for I/O, `string` for keys) rather than converting back and forth. For character-by-character work, remember `string` indexing gives **bytes**, not characters — see [strings & runes](/fundamentals/strings-and-runes/).
+</Callout>
+
+Next: turning structs into JSON and back — [encoding/json](/stdlib/encoding-json/).

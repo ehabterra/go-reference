@@ -1,0 +1,129 @@
+---
+title: "time"
+category: essentials
+kind: topic
+order: 4
+difficulty: "Beginner"
+status: ready
+intent: "Instants, durations and the famous reference layout — formatting and parsing, time arithmetic, measuring elapsed time, and timers vs tickers."
+related:
+  - fmt-and-io
+  - encoding-json
+  - context
+quiz:
+  - q: "What is Go's reference time layout for formatting?"
+    options:
+      - text: "Mon Jan 2 15:04:05 MST 2006 — the digits 1,2,3,4,5,6,7 in order"
+        correct: true
+      - text: "YYYY-MM-DD HH:mm:ss"
+        correct: false
+      - text: "%Y-%m-%d like C strftime"
+        correct: false
+      - text: "Any string you like"
+        correct: false
+    explain: "Instead of cryptic codes, Go uses one specific reference instant — 01/02 03:04:05PM '06 -0700 (i.e. 1 2 3 4 5 6 7). You write the output you want using those numbers, e.g. \"2006-01-02\"."
+  - q: "What is a time.Duration under the hood?"
+    options:
+      - text: "An int64 count of nanoseconds, with helper methods and constants like time.Second"
+        correct: true
+      - text: "A struct holding hours, minutes, seconds"
+        correct: false
+      - text: "A float64 of seconds"
+        correct: false
+      - text: "A string like \"1h30m\""
+        correct: false
+    explain: "Duration is int64 nanoseconds. That's why 90 * time.Minute works and d.Hours() returns 1.5 — it's arithmetic on a number, with named constants for readability."
+  - q: "How do you measure how long an operation took?"
+    options:
+      - text: "start := time.Now(); … ; elapsed := time.Since(start)"
+        correct: true
+      - text: "Subtract two strings"
+        correct: false
+      - text: "time.Sleep then read the clock"
+        correct: false
+      - text: "There's no way in the standard library"
+        correct: false
+    explain: "time.Now() captures an instant; time.Since(start) returns the Duration elapsed (shorthand for time.Now().Sub(start)). Go's Time carries a monotonic clock reading so this stays correct even if the wall clock changes."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🕰️ Analogy">
+The `time` package gives you three instruments in one: a **calendar** (a `time.Time` instant — this date, this clock reading, this zone), a **ruler for spans** (`time.Duration` — how long between two instants), and a **stopwatch** (`time.Now` + `time.Since`). The famous oddity is how you tell it a date format — by *spelling out one specific reference moment*.
+</Callout>
+
+## Time and Duration
+
+A `time.Time` is an instant; a `time.Duration` is a span of nanoseconds with friendly constants:
+
+<Playground client:visible title="time.go" code={`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	// a fixed instant keeps this output deterministic
+	t := time.Date(2026, time.June, 6, 15, 4, 5, 0, time.UTC)
+
+	fmt.Println("RFC3339:", t.Format(time.RFC3339))     // 2026-06-06T15:04:05Z
+	fmt.Println("custom: ", t.Format("2006-01-02 15:04")) // 2026-06-06 15:04
+
+	// parse a string into a Time using the same layout idea
+	p, _ := time.Parse("2006-01-02", "2025-12-25")
+	fmt.Println("weekday:", p.Weekday()) // Thursday
+
+	// Duration is int64 nanoseconds — arithmetic just works
+	d := 90 * time.Minute
+	fmt.Println("hours:  ", d.Hours())                 // 1.5
+	fmt.Println("later:  ", t.Add(d).Format("15:04"))  // 16:34
+}`} />
+
+## The reference layout
+
+<Mermaid code={`graph LR
+  REF["Mon Jan 2 15:04:05 MST 2006"] --> N["01 / 02   03:04:05 PM   2006   -0700"]
+  N --> SEQ["the sequence 1 2 3 4 5 6 7 — memorize it"]`} />
+
+Rather than `%Y-%m-%d` codes, Go uses **one reference instant** — `01/02 03:04:05PM '06 -0700` — and you write your desired output using those exact numbers. `"2006-01-02"` → ISO date; `"15:04"` → 24-hour clock; `"Mon, 02 Jan 2006"` → a readable date.
+
+## Durations, timers and the stopwatch
+
+<Playground client:visible title="duration.go" code={`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	d := 3*time.Hour + 25*time.Minute + 45*time.Second
+	fmt.Println("duration:", d)                        // 3h25m45s
+	fmt.Println("seconds: ", d.Seconds())              // 12345
+	fmt.Println("rounded: ", d.Round(time.Hour))       // 3h0m0s
+	fmt.Println("truncate:", d.Truncate(time.Minute))  // 3h25m0s
+
+	// parse a human duration string
+	timeout, _ := time.ParseDuration("1500ms")
+	fmt.Println("timeout: ", timeout)                  // 1.5s
+}`} />
+
+To measure real work, bracket it with the stopwatch; for periodic or delayed work, use timers:
+
+```go
+start := time.Now()
+doWork()
+fmt.Println("took", time.Since(start))
+
+time.Sleep(200 * time.Millisecond)   // pause this goroutine
+<-time.After(time.Second)            // a channel that fires once, later
+tick := time.NewTicker(time.Second)  // fires repeatedly; call tick.Stop()
+```
+
+<Callout type="gotcha" title="⚠️ Compare with Equal, and stop your tickers">
+Don't compare `Time` values with `==` — two instants can represent the same moment yet differ in monotonic reading or location; use `t.Equal(u)`. A `time.NewTicker` keeps firing until you call `Stop()`, so a forgotten ticker is a resource leak. And `time.After` in a hot loop allocates a fresh timer each iteration — reuse a `Timer` or a `Ticker` instead. Timers pair naturally with [`select`](/concurrency/select/) and [`context`](/concurrency/context/) for timeouts.
+</Callout>
+
+Next: reading and writing the filesystem — [files & os](/stdlib/files-and-os/).

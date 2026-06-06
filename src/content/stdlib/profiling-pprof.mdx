@@ -1,0 +1,168 @@
+---
+title: "Profiling with pprof"
+category: tooling
+kind: topic
+order: 14
+difficulty: "Advanced"
+status: ready
+intent: "Measure before you optimize — capture CPU, heap, and goroutine profiles with runtime/pprof or net/http/pprof, then read hot paths in go tool pprof."
+related:
+  - benchmarks
+  - race-detector
+  - go-toolchain
+quiz:
+  - q: "Why capture a profile before optimizing code?"
+    options:
+      - text: "Intuition about hot spots is usually wrong; a profile shows where time and allocations actually go"
+        correct: true
+      - text: "The compiler refuses to optimize unprofiled code"
+        correct: false
+      - text: "Profiling makes the program run faster on its own"
+        correct: false
+      - text: "go build requires a profile to link"
+        correct: false
+    explain: "Optimizing without data wastes effort on cold paths. A CPU or heap profile ranks functions by real cost, so you spend time where it pays off. Measure, change, then measure again to confirm the win."
+  - q: "What's the quickest way to profile a hot function you already have a benchmark for?"
+    options:
+      - text: "`go test -bench . -cpuprofile cpu.out`, then `go tool pprof cpu.out`"
+        correct: true
+      - text: "Add fmt.Println timing around every call"
+        correct: false
+      - text: "Run `go vet -profile`"
+        correct: false
+      - text: "Set GODEBUG=profile=1 and rerun"
+        correct: false
+    explain: "Benchmarks are the ideal profiling harness: `-cpuprofile` (and `-memprofile`) write a profile while the bench loop runs. `go tool pprof cpu.out` then opens it interactively — type `top` and `list FuncName` to find the hot path."
+  - q: "Which profile helps you find a goroutine leak?"
+    options:
+      - text: "The goroutine profile — it shows how many goroutines are stuck and where"
+        correct: true
+      - text: "The CPU profile, because leaked goroutines burn CPU"
+        correct: false
+      - text: "The heap profile, since goroutines aren't heap objects"
+        correct: false
+      - text: "The block profile only"
+        correct: false
+    explain: "A leak means goroutines pile up without exiting. The goroutine profile groups all live goroutines by their stack, so a growing count parked at the same blocking call (e.g. a channel receive) pinpoints the leak's source."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🩺 Analogy">
+A profiler is an **X-ray, not a guess**. Before a surgeon cuts, they image the patient; before you optimize, you profile. Staring at code and *feeling* where the slowness is wastes effort on cold paths — pprof shows you exactly which functions burn the CPU and which lines allocate the memory. Measure first; optimize the proven hot spot.
+</Callout>
+
+## Capturing a profile
+
+Two doors lead to the same data. For a **batch program**, drive `runtime/pprof` by hand:
+
+```go
+import (
+	"os"
+	"runtime/pprof"
+)
+
+func main() {
+	f, _ := os.Create("cpu.out")
+	defer f.Close()
+	pprof.StartCPUProfile(f) // sample the CPU while work runs
+	defer pprof.StopCPUProfile()
+
+	doExpensiveWork()
+}
+```
+
+For a **long-running server**, import `net/http/pprof` for its side effects — it registers handlers under `/debug/pprof/`:
+
+```go
+import (
+	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on the default mux
+)
+
+func main() {
+	go http.ListenAndServe("localhost:6060", nil)
+	// ... your real server ...
+}
+```
+
+```bash
+# Pull a 30-second live CPU profile straight into pprof:
+$ go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+# Heap (in-use memory) and goroutine snapshots:
+$ go tool pprof http://localhost:6060/debug/pprof/heap
+$ go tool pprof http://localhost:6060/debug/pprof/goroutine
+```
+
+But the easiest harness of all is a **benchmark** — it both stresses the code and writes the profile:
+
+```bash
+$ go test -bench . -cpuprofile cpu.out -memprofile mem.out
+goos: darwin
+goarch: amd64
+BenchmarkParse-8   	  248913	      4821 ns/op	    2048 B/op	      33 allocs/op
+PASS
+ok      example.com/app   1.402s
+```
+
+<Mermaid code={`graph LR
+  PROG["program / benchmark"] --> PROF["profile<br/>cpu.out · mem.out"]
+  PROF --> TOOL["go tool pprof"]
+  TOOL --> HOT["hot path<br/>top · list · web (flame graph)"]`} />
+
+## Reading the profile
+
+Open the profile and explore it interactively:
+
+```bash
+$ go tool pprof cpu.out
+(pprof) top
+Showing nodes accounting for 1.30s, 92.86% of 1.40s total
+      flat  flat%   sum%        cum   cum%
+     0.70s 50.00% 50.00%      0.70s 50.00%  example.com/app.parseField
+     0.40s 28.57% 78.57%      1.10s 78.57%  example.com/app.Parse
+     0.20s 14.29% 92.86%      0.20s 14.29%  runtime.mallocgc
+```
+
+- **flat** = time spent *in* the function itself; **cum** = time including everything it called.
+- `parseField` is the leaf hot spot (50% flat); `mallocgc` showing up means allocations are a cost.
+
+Drill into a function line by line, then render a flame graph:
+
+```bash
+(pprof) list parseField     # annotate the source with per-line cost
+(pprof) web                 # open an SVG call graph in the browser
+(pprof) png > profile.png   # or save it
+```
+
+A **flame graph** stacks callers vertically and widths-by-cost horizontally — the widest box at any level is where the time goes. `go tool pprof -http=:8080 cpu.out` serves an interactive flame graph in your browser, the friendliest view.
+
+For memory, point pprof at the heap profile and switch sample types:
+
+```bash
+$ go tool pprof mem.out
+(pprof) top                 # default: in-use space
+(pprof) sample_index=alloc_space
+(pprof) top                 # total bytes ever allocated — finds churn
+```
+
+## Hot spots and leaks
+
+Two patterns recur. **Allocation hot spots** show up as `runtime.mallocgc` high in the CPU profile or large `alloc_space` in the heap profile — the fix is usually to reuse buffers (`sync.Pool`, preallocated slices) or avoid converting between `string` and `[]byte`.
+
+A **goroutine leak** appears in the goroutine profile as an ever-growing count parked at the same stack frame:
+
+```bash
+$ go tool pprof http://localhost:6060/debug/pprof/goroutine
+(pprof) top
+   10000   95%   chan receive   example.com/app.worker   # 10k stuck here!
+```
+
+Ten thousand goroutines blocked on the same channel receive means senders vanished without closing the channel or cancelling a `context` — a classic leak. The count climbing over time is the tell.
+
+<Callout type="gotcha" title="🐹 Optimize the proven hot path, then re-measure">
+The profile ranks cost; resist "optimizing" a function that's 2% of the total. Pick the widest flame, change it, and **profile again** to confirm the win — micro-optimizations sometimes move the bottleneck rather than remove it. And profile a realistic workload: a profile of a toy input lies about production. As the proverb goes, premature optimization is the root of much wasted time — pprof is how you make it timely.
+</Callout>
+
+Next: catching the bugs that only appear under concurrency — [The Race Detector](/stdlib/race-detector/).

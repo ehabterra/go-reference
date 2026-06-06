@@ -1,0 +1,156 @@
+---
+title: "Files & os"
+category: system
+kind: topic
+order: 5
+difficulty: "Beginner"
+status: ready
+intent: "Reading and writing files with os, streaming line-by-line with bufio, portable paths via path/filepath, and the os entry points to the world."
+related:
+  - fmt-and-io
+  - cli-with-flag
+  - encoding-json
+quiz:
+  - q: "When should you reach for os.Open / bufio.Scanner instead of os.ReadFile?"
+    options:
+      - text: "When the file is large or you only need it line-by-line — streaming avoids loading it all into memory"
+        correct: true
+      - text: "os.ReadFile only works on files under 1KB"
+        correct: false
+      - text: "Always — os.ReadFile is deprecated"
+        correct: false
+      - text: "Never; os.Open can't read text files"
+        correct: false
+    explain: "os.ReadFile slurps the whole file into a []byte — simple and fine for small files. For large files, or when you process input a line at a time, os.Open gives you a streaming *os.File that bufio.Scanner reads incrementally."
+  - q: "Why use filepath.Join(dir, name) instead of dir + \"/\" + name?"
+    options:
+      - text: "filepath.Join uses the OS-correct separator and cleans the path, so the same code works on Windows and Unix"
+        correct: true
+      - text: "String concatenation doesn't compile for paths"
+        correct: false
+      - text: "Join is faster"
+        correct: false
+      - text: "There is no difference"
+        correct: false
+    explain: "Hard-coding \"/\" breaks on Windows (which uses backslashes) and leaves doubled or trailing separators. filepath.Join picks the right separator for the platform and normalizes the result."
+  - q: "What is *os.File, the type returned by os.Open and os.Create?"
+    options:
+      - text: "A concrete type that implements io.Reader and io.Writer, so it plugs into io.Copy, bufio, and fmt.Fprintf"
+        correct: true
+      - text: "An interface you must implement yourself"
+        correct: false
+      - text: "A string holding the file's contents"
+        correct: false
+      - text: "A map of bytes keyed by offset"
+        correct: false
+    explain: "*os.File satisfies io.Reader and io.Writer (among others). That's why os.Stdout works with fmt.Fprintf and why any open file streams through io.Copy — it's just another Reader/Writer."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗄️ Analogy">
+The `os` package is the **doorway between your program and the machine**. `os.ReadFile` is grabbing a whole document off the shelf at once; `os.Open` hands you a *bookmark* (`*os.File`) so you can read page by page. `os.Args`, `os.Getenv`, and `os.Stdin/Stdout/Stderr` are the doorway's other openings — to the command line, the environment, and the terminal.
+</Callout>
+
+## Whole files vs. streaming
+
+For small files, read or write everything in one call. `os.ReadFile` returns a `[]byte`; `os.WriteFile` takes the bytes plus a **permission** mode (`0644` = owner read/write, everyone else read):
+
+<Playground client:visible title="wholefile.go" code={`package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	// Build a portable path under the OS temp dir.
+	path := filepath.Join(os.TempDir(), "greeting.txt")
+
+	// Write the whole file at once with 0644 permissions.
+	if err := os.WriteFile(path, []byte("hello\nfrom os\n"), 0644); err != nil {
+		fmt.Println("write error:", err)
+		return
+	}
+
+	// Read it all back into memory.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Println("read error:", err)
+		return
+	}
+
+	fmt.Printf("base: %s\n", filepath.Base(path)) // greeting.txt
+	fmt.Printf("ext:  %s\n", filepath.Ext(path))  // .txt
+	fmt.Printf("bytes read: %d\n", len(b))
+	fmt.Print(string(b))
+
+	os.Remove(path) // clean up
+}`} />
+
+When a file is large — or you process it one line at a time — don't load it all. `os.Open` returns an `*os.File` (an `io.Reader`); always `defer f.Close()` so the handle is released even on an early return. Wrap it in a `bufio.Scanner` to walk it line by line:
+
+<Mermaid code={`graph LR
+  F["os.Open(path)"] --> FILE["*os.File<br/>(io.Reader)"]
+  FILE --> SC["bufio.Scanner"]
+  SC -->|"Scan() / Text()"| L["one line at a time"]
+  F -.->|"defer"| C["f.Close()"]`} />
+
+The same `bufio.Scanner` pattern reads from **any** `io.Reader` — a file, `os.Stdin`, or a `strings.Reader`. Here it scans an in-memory reader so the output is fully deterministic:
+
+<Playground client:visible title="scan.go" code={`package main
+
+import (
+	"bufio"
+	"fmt"
+	"strings"
+)
+
+func main() {
+	// In a real program this would be a *os.File from os.Open;
+	// any io.Reader works the same way.
+	data := "alpha\nbeta\ngamma"
+	scanner := bufio.NewScanner(strings.NewReader(data))
+
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		fmt.Printf("%d: %s\n", lineNo, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Println("scan error:", err)
+	}
+	fmt.Println("total lines:", lineNo)
+}`} />
+
+<Callout type="tip" title="🐹 Scanner errors hide at the end">
+`scanner.Scan()` returns `false` both at end-of-file **and** on a read error — the loop looks identical either way. After the loop, always check `scanner.Err()`; a silent failure (a broken pipe, a too-long line) is otherwise invisible. By default `bufio.Scanner` also caps lines at 64KB; for longer lines call `scanner.Buffer(...)`.
+</Callout>
+
+## Portable paths with filepath
+
+Never build paths by gluing strings with `"/"` — that breaks on Windows. The `path/filepath` package handles the OS-correct separator and gives you the pieces of a path:
+
+```go
+p := filepath.Join("data", "logs", "app.log") // data/logs/app.log (or \ on Windows)
+filepath.Base(p)  // "app.log"
+filepath.Dir(p)   // "data/logs"
+filepath.Ext(p)   // ".log"
+```
+
+## The os doorway
+
+Beyond files, `os` is how a program reaches its environment:
+
+- **`os.Args`** — the command-line arguments (`os.Args[0]` is the program name).
+- **`os.Getenv("KEY")`** — an environment variable, or `""` if unset.
+- **`os.Stdin` / `os.Stdout` / `os.Stderr`** — the three standard streams, each an `*os.File` (so an `io.Reader`/`io.Writer`). That's why `fmt.Fprintln(os.Stderr, …)` writes errors to the right place.
+
+```go
+fmt.Fprintln(os.Stderr, "warning: config not found")
+home := os.Getenv("HOME")
+```
+
+Next: turn `os.Args` into real options — [CLI Tools with flag](/stdlib/cli-with-flag/).

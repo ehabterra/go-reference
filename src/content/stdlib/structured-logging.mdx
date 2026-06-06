@@ -1,0 +1,119 @@
+---
+title: "Structured Logging with slog"
+category: system
+kind: topic
+order: 7
+difficulty: "Intermediate"
+status: ready
+intent: "Log key-value attributes with log/slog — Text vs JSON handlers, levels, slog.With for shared fields, and why structured logs beat fmt.Println in production."
+related:
+  - cli-with-flag
+  - errors
+  - testing-basics
+quiz:
+  - q: "Why are structured logs (key=value) better than fmt.Println in production?"
+    options:
+      - text: "They're machine-parseable — log systems can filter, search, and aggregate by field instead of grepping free text"
+        correct: true
+      - text: "They run faster than fmt.Println"
+        correct: false
+      - text: "They use less memory"
+        correct: false
+      - text: "They're shorter to type"
+        correct: false
+    explain: "A line like level=ERROR msg=\"upstream failed\" status=503 carries named fields. Log pipelines (and JSON handlers) can index and query those fields. fmt.Println produces opaque text you can only grep, and which breaks the moment you reword the message."
+  - q: "What does slog.With(\"request_id\", id) give you?"
+    options:
+      - text: "A child logger that automatically attaches request_id to every line it writes"
+        correct: true
+      - text: "A one-time log line containing request_id"
+        correct: false
+      - text: "It sets the global log level"
+        correct: false
+      - text: "It deletes the request_id attribute"
+        correct: false
+    explain: "slog.With returns a new *slog.Logger carrying the given attributes. Every call on that logger includes them, so you set request_id (or user, trace) once and it appears on all related lines — no repeating yourself."
+  - q: "How do you choose between TextHandler and JSONHandler?"
+    options:
+      - text: "TextHandler for human-readable local output; JSONHandler when a machine (a log aggregator) consumes the logs"
+        correct: true
+      - text: "JSONHandler is always required"
+        correct: false
+      - text: "TextHandler can't include attributes"
+        correct: false
+      - text: "They produce identical output"
+        correct: false
+    explain: "Both write the same attributes; only the format differs. TextHandler emits key=value lines that are easy to read in a terminal. JSONHandler emits one JSON object per line — ideal for ingestion by tools like Loki, Elasticsearch, or CloudWatch."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏷️ Analogy">
+`fmt.Println("user 42 failed")` is a handwritten sticky note — fine for one person, useless to a machine that must search a million of them. `log/slog` is a **filing system**: every log line carries labeled fields (`user=42`, `status=503`), so a log pipeline can filter, count, and alert on them. Same effort to write; vastly more useful when something breaks at 3am.
+</Callout>
+
+## Logging with attributes
+
+`log/slog` (Go 1.21+) logs a **message plus key-value attributes**. The package-level `slog.Info/Warn/Error` work out of the box, but in real code you build a logger with an explicit **handler** that decides the format and destination. A `TextHandler` writes readable `key=value` lines:
+
+<Playground client:visible title="slog.go" code={`package main
+
+import (
+	"log/slog"
+	"os"
+)
+
+func main() {
+	// Drop the time attribute so the output is deterministic here.
+	// In production you keep the real timestamp.
+	opts := &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+
+	logger.Info("server started", "port", 8080, "env", "prod")
+	logger.Warn("cache miss", "key", "user:42")
+
+	// slog.With attaches common fields to every later line.
+	reqLog := logger.With("request_id", "abc-123")
+	reqLog.Info("handling request", "method", "GET", "path", "/health")
+	reqLog.Error("upstream failed", "status", 503)
+}`} />
+
+Notice `reqLog` carries `request_id=abc-123` on **both** of its lines without repeating it — that's `slog.With` building a child logger with shared context.
+
+## Levels, handlers, and shared fields
+
+slog has four built-in levels — **Debug, Info, Warn, Error** — and the handler filters by a configurable threshold, so you can silence `Debug` in production without touching call sites:
+
+<Mermaid code={`graph LR
+  CALL["logger.Info/Warn/Error<br/>(msg + attrs)"] --> H{"Handler"}
+  H -->|"TextHandler"| TXT["level=INFO msg=... key=val"]
+  H -->|"JSONHandler"| JSON["{level:INFO, msg:..., key:val}"]
+  TXT --> OUT["os.Stdout / file"]
+  JSON --> OUT`} />
+
+Swapping the **handler** changes the format without touching any log call. For a machine-readable pipeline, use `JSONHandler` — every line becomes one JSON object:
+
+```go
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	Level: slog.LevelInfo, // Debug lines are dropped
+}))
+logger.Info("server started", "port", 8080)
+// {"time":"...","level":"INFO","msg":"server started","port":8080}
+```
+
+To make this logger the default for the package-level `slog.Info` calls everywhere, register it once with `slog.SetDefault(logger)`.
+
+<Callout type="gotcha" title="⚠️ Odd args silently corrupt a line">
+The variadic `key, value, key, value` form is convenient but fragile: forget a value and slog logs a `!BADKEY` entry instead of failing. For anything important, use the **typed** helpers — `slog.Int("port", 8080)`, `slog.String("env", "prod")`, `slog.Any("user", u)` — which the compiler checks and which are slightly faster (no boxing guesswork). Reserve the loose `"key", value` form for quick, low-stakes lines.
+</Callout>
+
+Next: prove your code works before it ships — [Testing Basics](/stdlib/testing-basics/).

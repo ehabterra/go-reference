@@ -1,0 +1,170 @@
+---
+title: "Table-Driven Tests & Subtests"
+category: testing
+kind: topic
+order: 9
+difficulty: "Intermediate"
+status: ready
+intent: "The idiomatic Go pattern — a slice of named cases looped through t.Run subtests, with t.Parallel, so one test scales to dozens of inputs."
+related:
+  - testing-basics
+  - fuzzing
+  - benchmarks
+quiz:
+  - q: "Why wrap each case in t.Run(tc.name, ...) instead of asserting in the loop directly?"
+    options:
+      - text: "Each case becomes a named subtest — failures name the case, all cases run, and you can target one with -run"
+        correct: true
+      - text: "It makes the test run faster"
+        correct: false
+      - text: "t.Run is required for any loop"
+        correct: false
+      - text: "It silences errors"
+        correct: false
+    explain: "t.Run creates an isolated subtest with its own name (e.g. TestSplit/empty_string). A failure or Fatalf in one subtest doesn't stop the others, the output tells you exactly which case broke, and -run TestSplit/empty can run just that one."
+  - q: "When you call t.Parallel() inside a subtest, what should you watch out for with the loop variable?"
+    options:
+      - text: "Since Go 1.22 each iteration has its own variable, so it's safe — but on older Go you had to copy tc into the loop body"
+        correct: true
+      - text: "Nothing, parallel subtests can't share variables"
+        correct: false
+      - text: "You must call t.Parallel() before the loop"
+        correct: false
+      - text: "Parallel subtests always run in case order"
+        correct: false
+    explain: "Parallel subtests pause until the parent test function returns, then run together. In Go 1.22+ the for range loop variable is per-iteration, so capturing tc is safe. On Go 1.21 and earlier you needed tc := tc to avoid every subtest seeing the last case."
+  - q: "What's the main reason table tests scale better than one function per case?"
+    options:
+      - text: "Adding a case is one struct literal in the slice — the assertion logic is written once and reused"
+        correct: true
+      - text: "They compile faster"
+        correct: false
+      - text: "They don't need a _test.go file"
+        correct: false
+      - text: "They run without go test"
+        correct: false
+    explain: "The check is written a single time; each new scenario is just another row in the cases slice. That keeps the assertions consistent and makes the set of inputs easy to read and extend at a glance."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📋 Analogy">
+A table test is a **checklist on a clipboard**. Instead of writing a separate inspection for every item, you list the items in rows — *name, input, expected* — and walk the same inspection down the list. Add a row to cover a new case; the procedure never changes. `t.Run` stamps each row with its own pass/fail so you know exactly which one failed.
+</Callout>
+
+## The pattern
+
+A table test is a slice of anonymous-struct cases, looped with `t.Run` so each becomes a **named subtest**:
+
+```go
+// reverse_test.go
+package strutil
+
+import "testing"
+
+func TestReverse(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"single", "a", "a"},
+		{"word", "abc", "cba"},
+		{"palindrome", "level", "level"},
+		{"unicode", "héllo", "olléh"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Reverse(tc.input)
+			if got != tc.want {
+				t.Errorf("Reverse(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+```
+
+Running it shows each case by name, and `-run` can target a single row:
+
+```bash
+$ go test -v -run TestReverse
+=== RUN   TestReverse
+=== RUN   TestReverse/empty
+=== RUN   TestReverse/word
+=== RUN   TestReverse/unicode
+--- PASS: TestReverse (0.00s)
+    --- PASS: TestReverse/empty (0.00s)
+    --- PASS: TestReverse/word (0.00s)
+    --- PASS: TestReverse/unicode (0.00s)
+PASS
+
+# run just one subtest
+$ go test -run TestReverse/unicode
+```
+
+Here is the function under test running over the same inputs in `main`, printing got vs want — exactly what the table checks, but in a form you can run and edit:
+
+<Playground client:visible title="reverse.go" code={`package main
+
+import "fmt"
+
+// Reverse returns s with its runes in reverse order (rune-safe).
+func Reverse(s string) string {
+	r := []rune(s)
+	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r)
+}
+
+func main() {
+	cases := []struct{ input, want string }{
+		{"", ""},
+		{"a", "a"},
+		{"abc", "cba"},
+		{"level", "level"},
+		{"héllo", "olléh"},
+	}
+	for _, c := range cases {
+		got := Reverse(c.input)
+		status := "ok"
+		if got != c.want {
+			status = "MISMATCH"
+		}
+		fmt.Printf("Reverse(%q) = %q want %q  [%s]\n", c.input, got, c.want, status)
+	}
+}`} />
+
+## Parallel subtests
+
+`t.Parallel()` lets independent cases run concurrently. Each subtest signals it's parallel, then pauses until the parent returns and they all run together:
+
+```go
+for _, tc := range cases {
+	t.Run(tc.name, func(t *testing.T) {
+		t.Parallel() // these subtests run concurrently
+		if got := Reverse(tc.input); got != tc.want {
+			t.Errorf("Reverse(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	})
+}
+```
+
+<Mermaid code={`graph TD
+  T["cases []struct{name,input,want}"] --> L["for _, tc := range cases"]
+  L --> R["t.Run(tc.name, func(t))"]
+  R --> S1["subtest: empty"]
+  R --> S2["subtest: word"]
+  R --> S3["subtest: unicode"]
+  S1 --> A["assert got == want"]
+  S2 --> A
+  S3 --> A`} />
+
+<Callout type="gotcha" title="⚠️ The loop-variable trap (and why it's gone)">
+With parallel subtests on **Go 1.21 and earlier**, every closure captured the *same* `tc`, so by the time the parallel subtests ran, all of them saw the **last** case. The fix was a `tc := tc` copy at the top of the loop. As of **Go 1.22** the `for range` loop variable is scoped per iteration, so this footgun is fixed and the copy is no longer needed — but you'll still see `tc := tc` in older code, and it does no harm.
+</Callout>
+
+Next: throwing random inputs at your code to find the cases you didn't list — [fuzzing](/stdlib/fuzzing/).

@@ -314,6 +314,10 @@ img { max-width: 100%; }
   --dp-composite:       #14b8a6;
   --dp-types-methods:   #d946ef;
   --dp-idioms:          #f43f5e;
+  --dp-essentials:      #84cc16;
+  --dp-system:          #f97316;
+  --dp-testing:         #a855f7;
+  --dp-tooling:         #0891b2;
 }
 .dp-badge[data-cat="building-blocks"] { color: var(--dp-building-blocks); }
 .dp-badge[data-cat="coordination"]    { color: var(--dp-coordination); }
@@ -326,6 +330,10 @@ img { max-width: 100%; }
 .dp-badge[data-cat="composite"]       { color: var(--dp-composite); }
 .dp-badge[data-cat="types-methods"]   { color: var(--dp-types-methods); }
 .dp-badge[data-cat="idioms"]          { color: var(--dp-idioms); }
+.dp-badge[data-cat="essentials"]      { color: var(--dp-essentials); }
+.dp-badge[data-cat="system"]          { color: var(--dp-system); }
+.dp-badge[data-cat="testing"]         { color: var(--dp-testing); }
+.dp-badge[data-cat="tooling"]         { color: var(--dp-tooling); }
 .dp-card[data-cat="building-blocks"]  { --c: var(--dp-building-blocks); }
 .dp-card[data-cat="coordination"]     { --c: var(--dp-coordination); }
 .dp-card[data-cat="runtime"]          { --c: var(--dp-runtime); }
@@ -337,6 +345,10 @@ img { max-width: 100%; }
 .dp-card[data-cat="composite"]        { --c: var(--dp-composite); }
 .dp-card[data-cat="types-methods"]    { --c: var(--dp-types-methods); }
 .dp-card[data-cat="idioms"]           { --c: var(--dp-idioms); }
+.dp-card[data-cat="essentials"]       { --c: var(--dp-essentials); }
+.dp-card[data-cat="system"]           { --c: var(--dp-system); }
+.dp-card[data-cat="testing"]          { --c: var(--dp-testing); }
+.dp-card[data-cat="tooling"]          { --c: var(--dp-tooling); }
 
 /* hub topic cards */
 .dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
@@ -352,6 +364,7 @@ img { max-width: 100%; }
 .dp-topic[data-cat="stdlib"]          { --c: var(--dp-stdlib); }
 .dp-topic[data-cat="algorithms"]      { --c: var(--dp-algorithms); }
 .dp-topic[data-cat="basics"]          { --c: var(--dp-basics); }
+.dp-topic[data-cat="essentials"]      { --c: var(--dp-essentials); }
 .dp-topic:not(.dp-topic--soon):hover { transform: translateY(-3px); border-color: var(--c); box-shadow: var(--dp-shadow-sm); color: #fff; text-decoration: none; }
 .dp-topic__icon { font-size: 2rem; }
 .dp-topic h3 { margin: .2rem 0 0; font-size: 1.4rem; }

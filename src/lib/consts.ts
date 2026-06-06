@@ -120,4 +120,32 @@ export const FUNDAMENTALS_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Standard-library-&-tooling categories (the journey on /stdlib/). */
+export const STDLIB_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'essentials',
+    title: 'Core Packages',
+    blurb:
+      'The packages you reach for daily — fmt and the io interfaces, strings and bytes, encoding/json, and working with time.',
+  },
+  {
+    key: 'system',
+    title: 'Files, CLI & Logging',
+    blurb:
+      'Talking to the outside world — reading and writing files with os, building command-line tools with flag, and structured logging with slog.',
+  },
+  {
+    key: 'testing',
+    title: 'Testing',
+    blurb:
+      "Go's batteries-included testing — the testing package, table-driven tests and subtests, fuzzing, and benchmarks.",
+  },
+  {
+    key: 'tooling',
+    title: 'Tooling & Profiling',
+    blurb:
+      'The toolchain that ships with Go — the go command and modules, profiling with pprof, and catching data races with the race detector.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

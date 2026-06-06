@@ -1,0 +1,151 @@
+---
+title: "Fuzzing"
+category: testing
+kind: topic
+order: 10
+difficulty: "Intermediate"
+status: ready
+intent: "Native Go fuzzing — FuzzXxx with f.Add seeds and f.Fuzz, how a fuzzer hunts for panics and broken properties, and go test -fuzz."
+related:
+  - table-driven-tests
+  - testing-basics
+  - benchmarks
+quiz:
+  - q: "What does a fuzzer actually do?"
+    options:
+      - text: "Generates many random/mutated inputs and runs your f.Fuzz body on each, looking for panics or failed assertions"
+        correct: true
+      - text: "Runs your existing test cases faster"
+        correct: false
+      - text: "Randomly reorders your test functions"
+        correct: false
+      - text: "Measures how long each test takes"
+        correct: false
+    explain: "A fuzz target asserts a property over an input. The fuzzer mutates the seed corpus to generate new inputs, running coverage-guided to reach new code paths, and reports any input that panics or trips a t.Errorf/t.Fatalf."
+  - q: "What kind of check makes a good fuzz property?"
+    options:
+      - text: "An invariant that must hold for ANY input, like Reverse(Reverse(s)) == s or Decode(Encode(x)) == x"
+        correct: true
+      - text: "Checking one specific hand-written input equals one specific output"
+        correct: false
+      - text: "Printing the input to the screen"
+        correct: false
+      - text: "Asserting the function never returns an error"
+        correct: false
+    explain: "Fuzzing shines on universal properties — round-trips, idempotence, 'never panics', output always valid — because they hold for every input the fuzzer can dream up. A single fixed input/output pair is just a normal table case."
+  - q: "What is f.Add used for?"
+    options:
+      - text: "Seeds the corpus with starting inputs the fuzzer mutates from (and runs as regular cases too)"
+        correct: true
+      - text: "Adds two numbers under test"
+        correct: false
+      - text: "Registers a new fuzz target"
+        correct: false
+      - text: "Sets the number of iterations"
+        correct: false
+    explain: "f.Add provides seed inputs. The fuzzer runs them directly and uses them as a starting point for mutation. Good seeds (edge cases, realistic values) help the fuzzer reach interesting code faster. The arg types must match the f.Fuzz function signature."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎲 Analogy">
+A normal test asks *"does it work for the cases I thought of?"* A fuzzer asks *"does it work for the cases I **didn't**?"* It's a tireless monkey at the keyboard, mashing mutated inputs into your function and watching for the moment it panics or breaks a rule you swore was always true. You don't supply answers — you supply a **property** that must always hold.
+</Callout>
+
+## A fuzz target
+
+Native fuzzing arrived in **Go 1.18**. A fuzz target is `func FuzzXxx(f *testing.F)`: you seed it with `f.Add`, then hand `f.Fuzz` a function whose arguments the fuzzer fills with generated values. The body asserts a **property**:
+
+```go
+// reverse_test.go
+package strutil
+
+import "testing"
+
+func FuzzReverse(f *testing.F) {
+	// seed corpus: starting points the fuzzer mutates from
+	f.Add("")
+	f.Add("abc")
+	f.Add("héllo")
+
+	f.Fuzz(func(t *testing.T, in string) {
+		// property: reversing twice returns the original
+		got := Reverse(Reverse(in))
+		if got != in {
+			t.Errorf("Reverse(Reverse(%q)) = %q, want %q", in, got, in)
+		}
+		// property: reversing preserves rune count
+		if len([]rune(Reverse(in))) != len([]rune(in)) {
+			t.Errorf("Reverse(%q) changed rune count", in)
+		}
+	})
+}
+```
+
+Run it with `-fuzz`. Without that flag, `go test` just runs the seed corpus as ordinary cases:
+
+```bash
+# seed corpus only (fast, runs in CI)
+$ go test -run FuzzReverse
+
+# actually fuzz: generate inputs until you stop it or it finds a failure
+$ go test -fuzz=FuzzReverse
+fuzz: elapsed: 0s, gathering baseline coverage: 0/3 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 3/3 completed, now fuzzing
+fuzz: elapsed: 3s, execs: 412300 (137401/sec), new interesting: 9
+^Cfuzz: elapsed: 5s, execs: 700120 (0/sec), interrupted
+```
+
+If it finds a failing input, Go writes it to `testdata/fuzz/FuzzReverse/` so the failure becomes a permanent regression test that reruns every time:
+
+```bash
+$ go test -fuzz=FuzzReverse
+--- FAIL: FuzzReverse (0.01s)
+    --- FAIL: FuzzReverse/a1b2c3 (0.00s)
+        reverse_test.go:14: Reverse(Reverse("\xed...")) = "...", want "..."
+    Failing input written to testdata/fuzz/FuzzReverse/a1b2c3
+```
+
+## What the fuzzer does
+
+The fuzzer takes your seeds, **mutates** them, and runs the body on each result — guided by code coverage, so it steers toward inputs that reach new branches:
+
+<Mermaid code={`graph TD
+  S["f.Add seeds"] --> C["seed corpus"]
+  C --> M["mutate / generate input"]
+  M --> R["run f.Fuzz body"]
+  R --> P{"panic or t.Errorf?"}
+  P -->|"no, new coverage"| C
+  P -->|"no, same coverage"| M
+  P -->|"yes"| W["save input to testdata/fuzz/ as regression"]`} />
+
+Here's the property running over sample inputs in `main`, so you can see *why* `Reverse(Reverse(s)) == s` should always hold — and edit `Reverse` to watch it break:
+
+<Playground client:visible title="reverse-property.go" code={`package main
+
+import "fmt"
+
+// Reverse is the function under test (rune-safe).
+func Reverse(s string) string {
+	r := []rune(s)
+	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r)
+}
+
+func main() {
+	inputs := []string{"", "a", "abc", "level", "héllo", "Go 1.25"}
+	for _, in := range inputs {
+		round := Reverse(Reverse(in))
+		fmt.Printf("in=%q  reverse=%q  roundtrip=%q  holds=%t\n",
+			in, Reverse(in), round, round == in)
+	}
+}`} />
+
+<Callout type="gotcha" title="⚠️ f.Add types must match f.Fuzz exactly">
+The arguments to `f.Add` must line up — in count, order, and type — with the parameters of the `f.Fuzz` function (after the leading `*testing.T`). If `f.Fuzz` takes `(t *testing.T, in string, n int)`, every seed must be `f.Add("x", 7)`. A mismatch fails at runtime, not compile time. Also note fuzzing only supports a fixed set of argument types (`string`, `[]byte`, the numeric types, `bool`, `rune`/`byte`) — not arbitrary structs.
+</Callout>
+
+Next: measuring how fast that code actually runs — [benchmarks](/stdlib/benchmarks/).

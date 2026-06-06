@@ -1,0 +1,149 @@
+---
+title: "Modules & Dependencies"
+category: tooling
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "Dependency management in depth — go.mod and go.sum, go get / mod tidy, semantic versioning, minimal version selection, replace directives, workspaces, and vendoring."
+related:
+  - go-toolchain
+  - packages-and-modules
+  - fmt-and-io
+quiz:
+  - q: "What does `go mod tidy` do?"
+    options:
+      - text: "Adds any imports your code uses but go.mod misses, and removes requirements nothing imports"
+        correct: true
+      - text: "Upgrades every dependency to its latest version"
+        correct: false
+      - text: "Deletes the go.sum file and rebuilds it from scratch"
+        correct: false
+      - text: "Formats the go.mod file's indentation"
+        correct: false
+    explain: "`go mod tidy` reconciles go.mod/go.sum with what your source actually imports: it adds missing direct/indirect requirements and prunes ones no longer referenced. It does not upgrade pinned versions — that's `go get -u`."
+  - q: "How does Go pick which version of a dependency to use when several are requested?"
+    options:
+      - text: "Minimal version selection — the lowest version that still satisfies every requirement"
+        correct: true
+      - text: "Always the newest version available in the registry"
+        correct: false
+      - text: "The version listed in the first require line"
+        correct: false
+      - text: "Whatever is cached locally"
+        correct: false
+    explain: "Go uses Minimal Version Selection: from all the versions required across the dependency graph, it picks the highest *required* one for each module — never silently newer. This makes builds reproducible without a lock file resolver doing range solving."
+  - q: "What is a `replace` directive for?"
+    options:
+      - text: "Redirecting a module path to a local directory or fork while developing or patching"
+        correct: true
+      - text: "Renaming a package on import"
+        correct: false
+      - text: "Replacing the Go version in go.mod"
+        correct: false
+      - text: "Deleting a dependency from the build"
+        correct: false
+    explain: "`replace example.com/lib => ../lib` points an import at a local path (or a fork) instead of the published module — invaluable for testing an unreleased fix. For multi-module local dev, `go work` is now usually cleaner than committing replace lines."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+If [packages](/fundamentals/packages-and-modules/) are rooms in your building, a **module** is the building's mailing address plus a signed manifest of every other building it leans on. `go.mod` is that manifest — who you depend on and which version — and `go.sum` is the tamper-proof seal. This page is about managing that supply chain, not about organizing your own rooms.
+</Callout>
+
+## go.mod and go.sum: the manifest and the seal
+
+`go mod init` creates a module. The module path is the **import prefix** for every package inside it:
+
+```bash
+$ go mod init example.com/app
+go: creating new go.mod: module example.com/app
+```
+
+```go
+module example.com/app
+
+go 1.25
+
+require (
+	github.com/google/uuid v1.6.0      // direct dependency
+	golang.org/x/text v0.14.0 // indirect // pulled in transitively
+)
+```
+
+The `module` line sets the import prefix, `go` declares the language version, and each `require` pins a dependency. An **import path is the module path plus the subdirectory** — so `example.com/app/store` is the `store` package within this module, and `github.com/google/uuid` resolves to that module's root package.
+
+`go.sum` is **not** the lock file you may know from other ecosystems — go.mod already pins exact versions. Instead go.sum records a cryptographic checksum for every module version (and its go.mod), so a download either matches what you verified or the build fails:
+
+```bash
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+```
+
+## The daily commands
+
+Four commands cover almost everything:
+
+```bash
+$ go get github.com/google/uuid@v1.6.0   # add or pin a version
+$ go get github.com/google/uuid@latest   # move to the newest release
+$ go get -u ./...                         # upgrade deps to newer minors/patches
+
+$ go mod tidy        # add missing requires, drop unused ones, fix go.sum
+$ go mod download    # pre-fetch modules into the local cache (CI warm-up)
+```
+
+Versions use **semantic versioning** — `vMAJOR.MINOR.PATCH`. A bump in MAJOR signals a breaking change, and Go encodes that in the import path itself: `v2+` modules append the major version, e.g. `github.com/foo/bar/v2`. You can also `go get` a branch or commit, and Go synthesizes a **pseudo-version** like `v0.0.0-20240115093000-abcdef123456`.
+
+<Mermaid code={`graph TD
+  APP["your module<br/>requires lib v1.2.0"] --> SEL["Minimal Version Selection"]
+  DEP["dependency X<br/>requires lib v1.4.0"] --> SEL
+  DEP2["dependency Y<br/>requires lib v1.1.0"] --> SEL
+  SEL --> OUT["build uses lib v1.4.0<br/>highest *required*, never newer"]`} />
+
+**Minimal Version Selection (MVS)** is why Go needs no range-solving resolver: for each module it picks the highest version anyone in the graph *requires* — and nothing newer unless you ask. Builds are reproducible by construction.
+
+## replace, workspaces, and vendoring
+
+A **`replace`** directive redirects a module path — to a local checkout or a fork — without changing any imports:
+
+```go
+// Test an unreleased fix from a local clone:
+replace github.com/google/uuid => ../uuid
+
+// Or point at your fork at a specific commit:
+replace github.com/google/uuid => github.com/you/uuid v1.6.1-patch
+```
+
+For developing **several modules together**, prefer a **workspace** over committing `replace` lines. `go work` overlays multiple modules locally without touching their `go.mod`:
+
+```bash
+$ go work init ./app ./lib     # creates go.work spanning both modules
+$ go work use ./tool           # add another module to the workspace
+```
+
+```go
+go 1.25
+
+use (
+	./app
+	./lib
+)
+```
+
+Now `app` resolves `lib` from your local tree. Crucially, **go.work is local** — don't commit it; teammates and CI build against the published versions in go.mod.
+
+**Vendoring** copies all dependencies into a `vendor/` directory committed to your repo, for hermetic, network-free builds:
+
+```bash
+$ go mod vendor      # populate ./vendor from go.mod
+$ go build -mod=vendor ./...   # build using the vendored copies
+```
+
+<Callout type="gotcha" title="🐹 Commit go.sum; never edit it by hand">
+`go.sum` is security infrastructure, not noise — commit it so every build verifies the same bytes you did. Don't hand-edit it; let `go mod tidy` and `go get` maintain it. If a checksum mismatch appears, it means a module's contents changed for that version: investigate before you blow it away with `go clean -modcache`. And run `go mod tidy` before every PR so go.mod/go.sum reflect exactly what the code imports.
+</Callout>
+
+Next: making that code fast — measure first with [Profiling with pprof](/stdlib/profiling-pprof/).

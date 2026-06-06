@@ -1,0 +1,180 @@
+---
+title: "Testing"
+category: testing
+kind: topic
+order: 8
+difficulty: "Beginner"
+status: ready
+intent: "The testing package and go test — writing TestXxx functions, Errorf vs Fatalf, t.Helper, and the got/want convention that runs with go test ./..."
+related:
+  - table-driven-tests
+  - benchmarks
+  - errors
+quiz:
+  - q: "What's the difference between t.Errorf and t.Fatalf?"
+    options:
+      - text: "Errorf records the failure and keeps going; Fatalf records it and stops the current test immediately"
+        correct: true
+      - text: "Errorf is for errors, Fatalf is for panics"
+        correct: false
+      - text: "They're identical"
+        correct: false
+      - text: "Fatalf only works inside helpers"
+        correct: false
+    explain: "Errorf marks the test failed but lets the rest of the function run, so you see every failing assertion. Fatalf marks it failed and calls runtime.Goexit, so nothing after it executes — use it when continuing makes no sense (e.g. a nil you'd dereference)."
+  - q: "Where must a test for package math live, and what must the file be named?"
+    options:
+      - text: "In the same directory, in a file ending _test.go (e.g. math_test.go)"
+        correct: true
+      - text: "In a tests/ subdirectory, named anything"
+        correct: false
+      - text: "Anywhere, as long as the function starts with Test"
+        correct: false
+      - text: "In a separate module"
+        correct: false
+    explain: "go test compiles files ending in _test.go alongside the package. The function signature must be func TestXxx(t *testing.T) with an exported-style name after Test."
+  - q: "What does t.Helper() do?"
+    options:
+      - text: "Marks the function as a test helper so failures are reported at the caller's line, not inside the helper"
+        correct: true
+      - text: "Runs the test in parallel"
+        correct: false
+      - text: "Skips the test"
+        correct: false
+      - text: "Retries the test on failure"
+        correct: false
+    explain: "Calling t.Helper() at the top of an assertion helper tells the testing package to skip that frame when printing the failure location, so the error points at the real test line that called it."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧪 Analogy">
+A test is a **lab assistant** that checks your work the same way every time. You hand it a known input, tell it the answer you *want*, and it shouts only when what it *got* disagrees. `go test` rounds up every assistant in the package, runs them, and reports who complained — no manual `main` to babysit.
+</Callout>
+
+## Your first test
+
+A test lives next to the code it checks, in a file ending `_test.go`, and is any function shaped `func TestXxx(t *testing.T)`. Here's a tiny function and its test:
+
+```go
+// math.go
+package math
+
+func Abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+```
+
+```go
+// math_test.go
+package math
+
+import "testing"
+
+func TestAbs(t *testing.T) {
+	got := Abs(-3)
+	want := 3
+	if got != want {
+		t.Errorf("Abs(-3) = %d, want %d", got, want)
+	}
+}
+```
+
+The `got` / `want` naming is a strong Go convention — it makes failure messages read like a sentence: *got 5, want 3*. You can run the real logic here in `main` to see it execute:
+
+<Playground client:visible title="abs.go" code={`package main
+
+import "fmt"
+
+// Abs is the function under test.
+func Abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func main() {
+	for _, x := range []int{-3, 0, 7} {
+		fmt.Printf("Abs(%d) = %d\n", x, Abs(x))
+	}
+}`} />
+
+## Errorf vs Fatalf, and t.Helper
+
+`t.Errorf` marks the test failed but **keeps running** — good for independent checks so you see them all at once. `t.Fatalf` marks it failed and **stops the test function** — use it when continuing would crash or is pointless (a `nil` you'd dereference, an `err` that means nothing else is valid):
+
+```go
+func TestParse(t *testing.T) {
+	v, err := Parse("12")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err) // stop: v is unusable
+	}
+	if v != 12 {
+		t.Errorf("Parse = %d, want 12", v)        // keep going
+	}
+}
+```
+
+When you extract a repeated assertion into a helper, call `t.Helper()` first so failures point at the **caller's** line, not at the helper's internals:
+
+```go
+func assertEqual(t *testing.T, got, want int) {
+	t.Helper() // failures are reported at the line that called assertEqual
+	if got != want {
+		t.Errorf("got %d, want %d", got, want)
+	}
+}
+```
+
+<Mermaid code={`graph TD
+  A["go test ./..."] --> B["compile *_test.go with package"]
+  B --> C["find every TestXxx(t *testing.T)"]
+  C --> D["run each test"]
+  D --> E{"t.Errorf called?"}
+  E -->|"no"| F["PASS"]
+  E -->|"yes / t.Fatalf"| G["FAIL: print got vs want"]`} />
+
+## Running tests
+
+`go test` builds and runs the tests in the current package. The flags you'll reach for daily:
+
+```bash
+# run tests in this package
+$ go test
+ok      example/math    0.002s
+
+# run tests in every package under the module
+$ go test ./...
+
+# -v prints each test name and PASS/FAIL
+$ go test -v
+=== RUN   TestAbs
+--- PASS: TestAbs (0.00s)
+PASS
+ok      example/math    0.003s
+
+# -run filters by regexp on the test name
+$ go test -run TestAbs -v
+```
+
+A failing run shows the file, line, and your message:
+
+```bash
+$ go test
+--- FAIL: TestAbs (0.00s)
+    math_test.go:8: Abs(-3) = -3, want 3
+FAIL
+exit status 1
+FAIL    example/math    0.002s
+```
+
+<Callout type="tip" title="🐹 Test the behaviour, not the implementation">
+Write assertions against what a function should **return or do**, not how it does it internally. Then you can refactor the body freely and the test still guards the contract. And prefer many small focused tests over one giant test — when several `t.Errorf` checks are independent, you learn about *all* the breakages in a single run instead of fixing them one at a time.
+</Callout>
+
+Next: scaling one test into many cases — [table-driven tests & subtests](/stdlib/table-driven-tests/).

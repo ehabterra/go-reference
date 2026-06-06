@@ -1,0 +1,127 @@
+---
+title: "encoding/json"
+category: essentials
+kind: topic
+order: 3
+difficulty: "Beginner"
+status: ready
+intent: "Turning Go values into JSON and back — Marshal and Unmarshal, struct tags, omitempty, decoding into structs vs maps, and streaming with the Encoder/Decoder."
+related:
+  - fmt-and-io
+  - structs
+  - reflection
+quiz:
+  - q: "Why must a struct field be exported (capitalized) to be marshaled to JSON?"
+    options:
+      - text: "encoding/json uses reflection, which can only see exported fields"
+        correct: true
+      - text: "JSON keys must be uppercase"
+        correct: false
+      - text: "It's a style rule, not a requirement"
+        correct: false
+      - text: "Unexported fields become null"
+        correct: false
+    explain: "json.Marshal reflects over the value, and reflection can't read unexported (lowercase) fields. They're silently skipped. Use a json:\"name\" tag to control the key's casing."
+  - q: "What does the `omitempty` option in a json struct tag do?"
+    options:
+      - text: "Drops the field from the output when it holds its zero value"
+        correct: true
+      - text: "Makes the field required"
+        correct: false
+      - text: "Encrypts the field"
+        correct: false
+      - text: "Renames it only when decoding"
+        correct: false
+    explain: "The tag's first part renames the JSON key; omitempty drops the field from output when it's the zero value (empty string, 0, nil, …). Use json:\"-\" to skip a field entirely."
+  - q: "You Unmarshal arbitrary JSON whose shape you don't know. What type do you decode into?"
+    options:
+      - text: "map[string]any (with []any and float64 for the nested values)"
+        correct: true
+      - text: "string"
+        correct: false
+      - text: "A struct with no fields"
+        correct: false
+      - text: "[]byte"
+        correct: false
+    explain: "Decoding into any/map[string]any gives a generic tree: objects become map[string]any, arrays []any, numbers float64. Prefer a typed struct when you know the shape."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+JSON is a shipping container for data: `Marshal` packs a Go value into the standard box so it can travel over a network or into a file, and `Unmarshal` unpacks a box back into a Go value. Struct tags are the packing slip — they say which Go field maps to which label on the box.
+</Callout>
+
+## Marshal and Unmarshal
+
+`Marshal` turns a Go value into `[]byte` of JSON; `Unmarshal` fills a Go value from JSON bytes. **Struct tags** map fields to JSON keys — conventionally written with backticks:
+
+```go
+type User struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
+	Age   int    `json:"age"`
+	pass  string // unexported: never marshaled
+}
+```
+
+Run a round-trip (the playground writes the tags as plain string literals, which work identically):
+
+<Playground client:visible title="json.go" code={`package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type User struct {
+	Name  string "json:\"name\""
+	Email string "json:\"email,omitempty\""
+	Age   int    "json:\"age\""
+	pass  string // unexported: never marshaled
+}
+
+func main() {
+	u := User{Name: "Ada", Age: 36, pass: "secret"}
+	b, _ := json.Marshal(u)
+	fmt.Println(string(b)) // {"name":"Ada","age":36} — email omitted, pass skipped
+
+	pretty, _ := json.MarshalIndent(u, "", "  ")
+	fmt.Println(string(pretty))
+
+	// decode JSON back into a struct (Unmarshal needs a pointer)
+	src := "{\"name\":\"Bob\",\"email\":\"b@x.io\",\"age\":40}"
+	var got User
+	if err := json.Unmarshal([]byte(src), &got); err != nil {
+		fmt.Println("error:", err)
+	}
+	fmt.Printf("%+v\n", got)
+}`} />
+
+## Known shape? Use a struct. Unknown? Use a map
+
+<Mermaid code={`graph LR
+  J["JSON bytes"] -->|"Unmarshal into &struct"| S["typed struct (you know the shape)"]
+  J -->|"Unmarshal into &map[string]any"| M["generic tree: object→map, array→[]any, number→float64"]`} />
+
+For dynamic JSON, decode into `map[string]any` — but reach for a typed struct whenever you know the shape; it's safer and self-documenting.
+
+## Streaming with Encoder/Decoder
+
+For an `io.Reader`/`io.Writer` (a file, an HTTP body) use `json.NewDecoder(r)` / `json.NewEncoder(w)` instead of reading everything into memory first:
+
+```go
+// decode an HTTP request body straight into a struct
+var u User
+err := json.NewDecoder(r.Body).Decode(&u)
+
+// encode a value straight to the response
+json.NewEncoder(w).Encode(u)
+```
+
+<Callout type="gotcha" title="⚠️ Unmarshal needs a pointer, and ignores what it can't match">
+Pass a **pointer** to `Unmarshal` (`&u`) — it has to write into your value. Decoding is lenient: JSON keys with no matching field are silently dropped, and missing fields keep their zero value, so always check the returned `error` and validate. Numbers default to `float64` inside an `any`, which surprises people expecting `int`. For custom formats, implement `json.Marshaler` / `json.Unmarshaler`.
+</Callout>
+
+Next: working with dates, durations and timers — [time](/stdlib/time/).

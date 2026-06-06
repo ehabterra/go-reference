@@ -27,6 +27,11 @@ const refSchema = z.object({
     'composite',
     'types-methods',
     'idioms',
+    // standard-library-&-tooling categories
+    'essentials',
+    'system',
+    'testing',
+    'tooling',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -77,4 +82,9 @@ const fundamentals = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa, fundamentals };
+const stdlib = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/stdlib' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals, stdlib };

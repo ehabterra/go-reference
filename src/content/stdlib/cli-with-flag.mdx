@@ -1,0 +1,141 @@
+---
+title: "CLI Tools with flag"
+category: system
+kind: topic
+order: 6
+difficulty: "Beginner"
+status: ready
+intent: "Build command-line tools with the flag package — typed options with defaults, positional args, subcommands via FlagSet, and env-var fallbacks."
+related:
+  - files-and-os
+  - structured-logging
+  - fmt-and-io
+quiz:
+  - q: "Why do flag.String / flag.Int return a *pointer* instead of the value?"
+    options:
+      - text: "The value isn't known until flag.Parse() runs, so flag hands you a pointer it fills in later"
+        correct: true
+      - text: "Pointers are faster than values"
+        correct: false
+      - text: "So you can pass the flag to another goroutine"
+        correct: false
+      - text: "It's a quirk with no real reason"
+        correct: false
+    explain: "When you call flag.String(\"name\", ...) the flag isn't parsed yet. flag returns a *string it will populate during flag.Parse(); you read the value through the pointer (*name) afterward."
+  - q: "After flag.Parse(), where do the leftover non-flag arguments go?"
+    options:
+      - text: "flag.Args() — the positional arguments that came after the flags"
+        correct: true
+      - text: "They are discarded"
+        correct: false
+      - text: "os.Getenv collects them"
+        correct: false
+      - text: "They stay in os.Args unchanged"
+        correct: false
+    explain: "flag.Parse() consumes the recognized flags and leaves the rest in flag.Args() (a []string). flag.Arg(0) and flag.NArg() give individual access — handy for a filename or command word."
+  - q: "How do you give a tool subcommands like `git commit` and `git push`?"
+    options:
+      - text: "Create a separate flag.NewFlagSet per subcommand and parse the args after the command word"
+        correct: true
+      - text: "Call flag.Parse() twice"
+        correct: false
+      - text: "Use os.Getenv to switch modes"
+        correct: false
+      - text: "The flag package can't do subcommands"
+        correct: false
+    explain: "The global flag set handles one set of options. For subcommands, switch on os.Args[1], then call a dedicated flag.NewFlagSet(name, ...).Parse(os.Args[2:]) — each subcommand gets its own flags."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎛️ Analogy">
+`os.Args` is the raw stream of words typed after your program's name — a pile of unsorted mail. The `flag` package is the **mail sorter**: you declare the slots you expect (`--name`, `--count`, `--verbose`), call `flag.Parse()`, and it files each argument into the right typed variable, applies your defaults, and leaves the leftover positionals in a neat stack.
+</Callout>
+
+## Declaring flags
+
+Each `flag.String/Int/Bool` takes a **name**, a **default**, and a **usage** string, and returns a pointer that `flag.Parse()` fills in. Read the value through the pointer afterward:
+
+<Mermaid code={`graph LR
+  ARGS["os.Args[1:]<br/>--name go --count 3 file.txt"] --> PARSE["flag.Parse()"]
+  PARSE --> VARS["*name, *count, *verbose<br/>(typed, with defaults)"]
+  PARSE --> POS["flag.Args()<br/>positional: file.txt"]`} />
+
+This program defines three flags. With no arguments — as on the playground — the **defaults** stand, so it runs deterministically:
+
+<Playground client:visible title="flags.go" code={`package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+)
+
+func main() {
+	// Define flags: name, default value, usage string.
+	name := flag.String("name", "world", "who to greet")
+	count := flag.Int("count", 1, "how many times")
+	upper := flag.Bool("upper", false, "shout the greeting")
+
+	flag.Parse() // parses os.Args[1:]; with no args, defaults stand
+
+	greeting := "hello, " + *name
+	for i := 0; i < *count; i++ {
+		if *upper {
+			fmt.Println("HELLO, " + *name + "!")
+		} else {
+			fmt.Println(greeting)
+		}
+	}
+
+	// Positional args (after the flags) live in flag.Args().
+	fmt.Printf("positional args: %v\n", flag.Args())
+
+	// Environment with a fallback default.
+	mode := os.Getenv("APP_MODE")
+	if mode == "" {
+		mode = "dev"
+	}
+	fmt.Println("mode:", mode)
+}`} />
+
+Run as `tool --name go --count 2 report.txt` and you'd get two `hello, go` lines plus `[report.txt]` as the positional. The built-in `--help` flag prints every usage string for free.
+
+## Positionals, env vars, and subcommands
+
+After parsing, **positional arguments** — the words that aren't flags — sit in `flag.Args()`:
+
+```go
+flag.Args()  // []string of leftovers, e.g. ["report.txt"]
+flag.Arg(0)  // "report.txt"
+flag.NArg()  // 1
+```
+
+For configuration that shouldn't live on the command line (secrets, deploy mode), read an **environment variable with a fallback** via `os.Getenv`:
+
+```go
+mode := os.Getenv("APP_MODE")
+if mode == "" {
+	mode = "dev" // sensible default
+}
+```
+
+When one binary needs several commands (`tool add`, `tool list`), give each its own **`flag.NewFlagSet`** and parse the args after the command word:
+
+```go
+addCmd := flag.NewFlagSet("add", flag.ExitOnError)
+prio := addCmd.Int("priority", 1, "task priority")
+
+switch os.Args[1] {
+case "add":
+	addCmd.Parse(os.Args[2:]) // each subcommand owns its flags
+	// ... use *prio and addCmd.Args()
+}
+```
+
+<Callout type="gotcha" title="⚠️ Flags must come before positionals">
+The standard `flag` parser **stops at the first non-flag argument**. So `tool file.txt --count 3` treats `--count 3` as positionals, not flags — `*count` keeps its default. Put flags first (`tool --count 3 file.txt`), or use `--` only to force the end of flags. If you want flags anywhere, that's where a third-party parser (like `cobra`/`pflag`) earns its keep.
+</Callout>
+
+Next: replace ad-hoc `fmt.Println` debugging with real logs — [Structured Logging with slog](/stdlib/structured-logging/).
