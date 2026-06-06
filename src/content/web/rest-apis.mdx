@@ -1,0 +1,125 @@
+---
+title: "Building REST APIs"
+category: apis
+kind: topic
+order: 8
+difficulty: "Intermediate"
+status: ready
+intent: "JSON over HTTP done right — resources and methods, decoding requests and encoding responses, the status codes that matter, and clean error bodies."
+related:
+  - http-server
+  - routing-and-middleware
+  - grpc
+quiz:
+  - q: "Which status code should a successful resource creation (POST) return?"
+    options:
+      - text: "201 Created (often with a Location header)"
+        correct: true
+      - text: "200 OK always"
+        correct: false
+      - text: "204 No Content"
+        correct: false
+      - text: "302 Found"
+        correct: false
+    explain: "200 OK is fine for reads and updates; a successful POST that creates a resource should return 201 Created. 204 No Content suits a successful DELETE; 400/404/409/422 cover client errors; 500 is a server fault."
+  - q: "How do you decode a JSON request body into a struct in a handler?"
+    options:
+      - text: "json.NewDecoder(r.Body).Decode(&v) — and check the error"
+        correct: true
+      - text: "json.Marshal(r.Body)"
+        correct: false
+      - text: "r.Body is already the struct"
+        correct: false
+      - text: "fmt.Sscanf(r.Body)"
+        correct: false
+    explain: "Stream the body straight into your struct with json.NewDecoder(r.Body).Decode(&v). Always check the error (malformed JSON, wrong types) and validate the result before using it."
+  - q: "Why return errors as JSON instead of plain text from a JSON API?"
+    options:
+      - text: "Clients parse one consistent shape; mixing text and JSON forces them to branch on content type"
+        correct: true
+      - text: "Plain text isn't allowed over HTTP"
+        correct: false
+      - text: "JSON errors are faster"
+        correct: false
+      - text: "It changes the status code"
+        correct: false
+    explain: "A predictable error envelope like {\"error\":\"...\"} lets every client decode responses the same way. Set Content-Type: application/json and an accurate status code on errors too."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗂️ Analogy">
+A REST API treats your data as **resources** at stable addresses — `/todos`, `/todos/42` — and uses the HTTP **verb** to say what to do: `GET` to read, `POST` to create, `PUT`/`PATCH` to update, `DELETE` to remove. It's the filing cabinet metaphor: the URL names the drawer and folder, the method is the action.
+</Callout>
+
+## Resources, methods, status codes
+
+<Mermaid code={`graph TD
+  A["GET /todos"] --> R1["200 · list"]
+  B["POST /todos"] --> R2["201 · created"]
+  C["GET /todos/{id}"] --> R3["200 · one  /  404 · missing"]
+  D["DELETE /todos/{id}"] --> R4["204 · gone"]`} />
+
+Map each method to the right status: **2xx** success (200 OK, 201 Created, 204 No Content), **4xx** the client's fault (400 Bad Request, 404 Not Found, 409 Conflict, 422 Unprocessable), **5xx** the server's fault (500). Returning the correct code is half of a good API.
+
+## A handler, end to end
+
+Decode JSON in, encode JSON out, pick the status — driven in-process so it runs anywhere:
+
+<Playground client:visible title="rest.go" code={`package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+type Todo struct {
+	ID    int    "json:\"id\""
+	Title string "json:\"title\""
+	Done  bool   "json:\"done\""
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
+}
+
+func main() {
+	store := map[int]Todo{1: {ID: 1, Title: "write Go", Done: false}}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /todos/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var id int
+		fmt.Sscanf(r.PathValue("id"), "%d", &id)
+		t, ok := store[id]
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, t)
+	})
+
+	// hit /todos/1 in-process
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/todos/1", nil))
+	fmt.Println("GET /todos/1 ->", rec.Code)
+	fmt.Print(rec.Body.String()) // {"id":1,"title":"write Go","done":false}
+
+	// a miss returns a JSON 404
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, httptest.NewRequest("GET", "/todos/9", nil))
+	fmt.Println("GET /todos/9 ->", rec2.Code)
+	fmt.Print(rec2.Body.String()) // {"error":"not found"}
+}`} />
+
+A `POST` handler is the mirror image: `json.NewDecoder(r.Body).Decode(&todo)`, validate, store, then `writeJSON(w, 201, todo)`.
+
+<Callout type="gotcha" title="⚠️ Validate input, limit the body, version your API">
+Decoding succeeds on partial or unexpected JSON, so **always validate** the decoded value before trusting it. Cap request bodies with `http.MaxBytesReader` so a giant payload can't exhaust memory, and consider `decoder.DisallowUnknownFields()` for strict APIs. Put cross-cutting concerns (auth, logging) in [middleware](/web/routing-and-middleware/), keep handlers thin, and version your routes (`/v1/...`) from day one — it's far easier than migrating clients later.
+</Callout>
+
+Next: typed, high-performance APIs with [gRPC](/web/grpc/).

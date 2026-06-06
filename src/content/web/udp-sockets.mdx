@@ -1,0 +1,156 @@
+---
+title: "UDP Sockets"
+category: net-basics
+kind: topic
+order: 2
+difficulty: "Beginner"
+status: ready
+intent: "Connectionless datagrams in Go — net.ListenPacket, ReadFrom/WriteTo, DialUDP, no handshake or delivery guarantees, and when UDP beats TCP."
+related:
+  - tcp-sockets
+  - dns-and-addressing
+  - http-server
+quiz:
+  - q: "What does UDP NOT provide that TCP does?"
+    options:
+      - text: "Reliability, ordering, and a connection — UDP datagrams may be lost, duplicated, or arrive out of order"
+        correct: true
+      - text: "The ability to send bytes over IP"
+        correct: false
+      - text: "Port numbers"
+        correct: false
+      - text: "IPv6 support"
+        correct: false
+    explain: "UDP is connectionless and fire-and-forget. There's no handshake, no acknowledgement, no retransmission, and no ordering. A datagram either arrives whole or not at all — your application handles loss, dedup, and ordering if it needs them."
+  - q: "Unlike TCP, what does UDP preserve about each WriteTo?"
+    options:
+      - text: "Message boundaries — one WriteTo is one datagram and arrives as exactly one ReadFrom"
+        correct: true
+      - text: "Guaranteed delivery order"
+        correct: false
+      - text: "Nothing; it's a byte stream like TCP"
+        correct: false
+      - text: "Automatic compression"
+        correct: false
+    explain: "UDP is datagram-oriented: each WriteTo produces one datagram and the receiver gets it as one ReadFrom (or not at all). So unlike TCP you do NOT need to frame messages — but you still handle loss and reordering yourself."
+  - q: "Which workload is the best fit for UDP?"
+    options:
+      - text: "Low-latency, loss-tolerant traffic like DNS lookups, game state, or metrics where a dropped packet is cheaper than waiting for a retransmit"
+        correct: true
+      - text: "Transferring a large file that must arrive byte-for-byte intact"
+        correct: false
+      - text: "A banking transaction that must not be lost"
+        correct: false
+      - text: "Loading an HTML page over HTTP/1.1"
+        correct: false
+    explain: "UDP shines when latency matters more than perfect delivery: DNS, real-time games, VoIP, telemetry/metrics, and QUIC (which builds HTTP/3 on UDP). For exact, ordered, must-arrive bytes, use TCP."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📮 Analogy">
+If TCP is a phone call, UDP is a stack of postcards. You write an address on each one and drop it in the mailbox — no dialing, no "are you there?", no guarantee it arrives or arrives in order. But it's instant and cheap, and each postcard is a complete message. DNS, online games, and video calls all ride on postcards.
+</Callout>
+
+## Connectionless datagrams
+
+UDP has no handshake and no connection state. You just send a self-contained **datagram** to an address, and the kernel ships it off. There's no ACK, no retransmit, no ordering — if a packet is dropped on the way, neither side is told. In exchange you get the lowest possible latency and **message boundaries for free**: one `WriteTo` is exactly one datagram, received as exactly one `ReadFrom`.
+
+<Mermaid code={`graph LR
+  C["client<br/>WriteTo(addr)"] -->|"datagram 1"| S["server<br/>ReadFrom"]
+  C -->|"datagram 2 (may be lost)"| S
+  C -->|"datagram 3 (may arrive first)"| S`} />
+
+The server side opens a packet socket with `net.ListenPacket` and loops on `ReadFrom`, which hands back both the bytes **and** the sender's address so you know where to reply:
+
+```go
+// server: one socket serves every client — no Accept, no per-conn goroutine
+pc, err := net.ListenPacket("udp", ":9000")
+if err != nil { log.Fatal(err) }
+defer pc.Close()
+
+buf := make([]byte, 1500) // ~one Ethernet MTU; size to your datagrams
+for {
+	n, addr, err := pc.ReadFrom(buf)
+	if err != nil { continue }
+	msg := buf[:n]
+	// reply straight back to the sender's address
+	pc.WriteTo([]byte("echo: "), addr)
+	_ = msg
+}
+```
+
+## Sending datagrams from a client
+
+A client can either use `net.Dial("udp", ...)` (which fixes a default peer so you can `Write`/`Read`) or resolve an address and `WriteTo` it explicitly:
+
+```go
+// option A: Dial pins a remote — Write/Read use it, but it's still connectionless
+conn, err := net.Dial("udp", "127.0.0.1:9000")
+if err != nil { log.Fatal(err) }
+defer conn.Close()
+conn.Write([]byte("ping"))
+
+conn.SetReadDeadline(time.Now().Add(2 * time.Second)) // or you may wait forever
+buf := make([]byte, 1500)
+n, _ := conn.Read(buf)
+fmt.Printf("got %d bytes: %s\n", n, buf[:n])
+
+// option B: explicit address + DialUDP / WriteToUDP for ad-hoc destinations
+raddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9000")
+uc, _ := net.DialUDP("udp", nil, raddr)
+defer uc.Close()
+uc.Write([]byte("ping"))
+```
+
+Because there's no connection, a UDP `Read` can block forever waiting for a reply that may never come — **always set a deadline**.
+
+## Parsing a UDP address, in-process
+
+Resolving a numeric address into a `*net.UDPAddr` is pure parsing — no DNS, no socket — so it's safe to run anywhere. This is the same `*net.UDPAddr` you'd hand to `DialUDP` or get back from `ReadFromUDP`:
+
+<Playground client:visible title="udpaddr.go" code={`package main
+
+import (
+	"fmt"
+	"net"
+)
+
+func main() {
+	// ResolveUDPAddr parses "host:port" into a *net.UDPAddr.
+	// A numeric IP literal needs NO DNS and NO network — pure parsing.
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:9000")
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	fmt.Println("network:", addr.Network()) // "udp"
+	fmt.Println("string: ", addr.String())  // 127.0.0.1:9000
+	fmt.Println("ip:     ", addr.IP)        // 127.0.0.1
+	fmt.Println("port:   ", addr.Port)      // 9000
+	fmt.Println("loopback?", addr.IP.IsLoopback())
+
+	// An IPv6 literal is bracketed in the string form.
+	v6, _ := net.ResolveUDPAddr("udp", "[::1]:53")
+	fmt.Println("v6:     ", v6.String()) // [::1]:53
+	fmt.Println("v6 port:", v6.Port)     // 53
+}`} />
+
+## When to choose UDP
+
+Reach for UDP when **latency beats reliability** and a lost packet is cheaper than waiting for a retransmit:
+
+- **DNS** — one tiny request, one tiny reply; on loss you just ask again.
+- **Real-time games & VoIP** — last week's position is useless, so don't pay to resend it.
+- **Metrics & telemetry** (e.g. StatsD) — dropping the occasional sample is fine.
+- **QUIC / HTTP/3** — builds its own reliability, ordering, and encryption on top of UDP to dodge TCP's head-of-line blocking.
+
+Stick with [TCP](/web/tcp-sockets/) when every byte must arrive, in order, intact.
+
+<Callout type="gotcha" title="⚠️ No delivery guarantees, and watch the datagram size">
+**The playground above is pure parsing** — no socket, no network — so it's safe anywhere. When you run the *fenced* examples locally, bind to a `localhost`/port you control. Two traps: (1) UDP gives **no** delivery, ordering, or dedup — if your app needs those, you build them or use TCP/QUIC. (2) Keep datagrams small (often ≤ ~1400 bytes) to avoid IP fragmentation; an oversized datagram that fragments is more likely to be dropped wholesale. And always `SetReadDeadline` — a reply may never come.
+</Callout>
+
+Next: turning names into addresses — [DNS & addressing](/web/dns-and-addressing/).

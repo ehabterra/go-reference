@@ -1,0 +1,205 @@
+---
+title: "TLS & HTTPS"
+category: http
+kind: topic
+order: 7
+difficulty: "Intermediate"
+status: ready
+intent: "How TLS secures HTTP — the handshake, certificates and the CA chain, serving with ListenAndServeTLS, verifying clients, mTLS, and autocert."
+related:
+  - http-server
+  - routing-and-middleware
+  - http-client
+quiz:
+  - q: "What does a certificate authority (CA) chain let a client verify during the TLS handshake?"
+    options:
+      - text: "That the server's certificate was signed by a trusted CA and genuinely belongs to the host being contacted"
+        correct: true
+      - text: "That the server is physically nearby"
+        correct: false
+      - text: "That the connection is faster"
+        correct: false
+      - text: "The server's CPU architecture"
+        correct: false
+    explain: "The server presents a certificate signed (directly or via intermediates) by a CA the client trusts. The client walks that chain up to a root in its trust store and checks the hostname matches, proving identity and enabling an encrypted session. No trusted signer, no trust."
+  - q: "What does setting InsecureSkipVerify: true on an http.Client's TLS config do?"
+    options:
+      - text: "Disables certificate verification, so the client accepts ANY certificate — only acceptable for local testing, never production"
+        correct: true
+      - text: "Speeds up the handshake safely"
+        correct: false
+      - text: "Forces a stronger cipher suite"
+        correct: false
+      - text: "Enables mutual TLS"
+        correct: false
+    explain: "InsecureSkipVerify turns off the chain and hostname checks, defeating the entire point of TLS and exposing you to man-in-the-middle attacks. Go's client verifies certificates by default — leave it that way. Use it only for throwaway local tests with self-signed certs."
+  - q: "What additionally does mutual TLS (mTLS) require compared to ordinary HTTPS?"
+    options:
+      - text: "The client also presents a certificate, so the server authenticates the client (not just the client authenticating the server)"
+        correct: true
+      - text: "A second TCP connection"
+        correct: false
+      - text: "Disabling encryption"
+        correct: false
+      - text: "A username and password"
+        correct: false
+    explain: "In normal HTTPS only the server proves its identity. In mTLS both sides present certificates: the server requires and verifies a client certificate too (via tls.Config.ClientAuth = RequireAndVerifyClientCert), giving strong two-way authentication common in service-to-service setups."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛂 Analogy">
+TLS is showing your passport at a border. The server hands over a **certificate** (passport) stamped by a **certificate authority** (the issuing government the client already trusts). The client checks the stamp and that the name matches — then both sides agree on a secret only they share, and everything after is sealed in an envelope nobody else can read.
+</Callout>
+
+## How TLS works
+
+A TLS handshake does three jobs before any HTTP flows: **authenticate** the server (and optionally the client), **agree** on keys, and **encrypt** the rest of the connection. The server presents a certificate signed by a CA; the client verifies that signature chain up to a trusted root and confirms the hostname matches.
+
+<Mermaid code={`sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: ClientHello (versions, cipher suites)
+  S->>C: ServerHello + Certificate (signed by CA)
+  C->>C: verify cert chain + hostname
+  C->>S: key exchange
+  S->>C: Finished (handshake done)
+  C->>S: encrypted HTTP request
+  S->>C: encrypted HTTP response`} />
+
+Once the handshake completes, HTTPS is just HTTP inside that encrypted channel.
+
+## Serving HTTPS in Go
+
+`http.ListenAndServeTLS` takes a certificate file and a private-key file and serves your mux over TLS. For real timeouts, set them on an `http.Server` and call its `ListenAndServeTLS`:
+
+```go
+mux := http.NewServeMux()
+mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, "hello over TLS")
+})
+
+srv := &http.Server{
+	Addr:         ":443",
+	Handler:      mux,
+	ReadTimeout:  5 * time.Second,
+	WriteTimeout: 10 * time.Second,
+}
+// cert.pem must include the full chain (leaf + intermediates)
+log.Fatal(srv.ListenAndServeTLS("cert.pem", "key.pem"))
+```
+
+For local testing you can generate a self-signed pair with Go's bundled tool:
+
+```bash
+# writes cert.pem and key.pem for localhost, valid 24h
+go run $(go env GOROOT)/src/crypto/tls/generate_cert.go --host localhost
+```
+
+On the client side, Go **verifies certificates by default** — no configuration needed:
+
+```go
+client := &http.Client{Timeout: 10 * time.Second}
+resp, err := client.Get("https://example.com") // chain + hostname checked for you
+if err != nil { log.Fatal(err) }
+defer resp.Body.Close()
+```
+
+To trust a self-signed cert in a test, add it to a cert pool instead of disabling verification:
+
+```go
+pool := x509.NewCertPool()
+pool.AppendCertsFromPEM(pemBytes) // your test CA / self-signed cert
+client := &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool}, // still verifies — just against your pool
+	},
+}
+```
+
+## Mutual TLS and automatic certs
+
+Two extensions you'll meet in production:
+
+- **mTLS** — the server also demands a client certificate. Set `tls.Config.ClientAuth = tls.RequireAndVerifyClientCert` and give it a `ClientCAs` pool. Now both sides authenticate each other, common for service-to-service traffic.
+- **Let's Encrypt / autocert** — instead of managing cert files by hand, `golang.org/x/crypto/acme/autocert` fetches and renews free certificates automatically:
+
+```go
+m := &autocert.Manager{
+	Prompt:     autocert.AcceptTOS,
+	HostPolicy: autocert.HostWhitelist("example.com"),
+	Cache:      autocert.DirCache("certs"),
+}
+srv := &http.Server{
+	Addr:      ":443",
+	Handler:   mux,
+	TLSConfig: m.TLSConfig(),
+}
+log.Fatal(srv.ListenAndServeTLS("", "")) // certs come from the manager
+```
+
+## Build a self-signed cert in memory
+
+You can generate a key and a self-signed certificate entirely in memory — no files, no network — and inspect it. This is the same DER the `tls` package parses on the wire:
+
+<Playground client:visible title="cert.go" code={`package main
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"fmt"
+	"math/big"
+	"time"
+)
+
+func main() {
+	// Generate a private key fully in memory — no files, no network.
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		fmt.Println("key error:", err)
+		return
+	}
+
+	// Describe the certificate: who it's for and how long it's valid.
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Go Learn Demo"},
+			CommonName:   "localhost",
+		},
+		DNSNames:  []string{"localhost"},
+		NotBefore: time.Unix(0, 0),
+		NotAfter:  time.Unix(0, 0).Add(365 * 24 * time.Hour),
+		KeyUsage:  x509.KeyUsageDigitalSignature,
+	}
+
+	// Self-sign: the template is both the certificate AND the issuer (its own CA).
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		fmt.Println("cert error:", err)
+		return
+	}
+
+	// Parse the DER bytes back into a structured certificate and inspect it.
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		fmt.Println("parse error:", err)
+		return
+	}
+
+	fmt.Println("subject:    ", cert.Subject.CommonName)
+	fmt.Println("org:        ", cert.Subject.Organization[0])
+	fmt.Println("dns names:  ", cert.DNSNames)
+	fmt.Println("self-signed?", cert.Subject.CommonName == cert.Issuer.CommonName)
+	fmt.Println("algorithm:  ", cert.SignatureAlgorithm)
+}`} />
+
+<Callout type="gotcha" title="🔒 Never set InsecureSkipVerify in production">
+**The playground builds a cert in memory only** — no listener, no network — so it's safe and deterministic. The cardinal sin of TLS in Go is reaching for `InsecureSkipVerify: true` to "make the error go away." It disables chain and hostname checks and opens you to man-in-the-middle attacks. For a self-signed cert in tests, add it to a `RootCAs`/`ClientCAs` pool instead so verification still happens. In production, serve a CA-signed cert (autocert makes this painless) and keep the client's default verification on.
+</Callout>
+
+Next: structure your HTTPS endpoints into a clean API — [REST APIs](/web/rest-apis/).

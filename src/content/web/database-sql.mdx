@@ -1,0 +1,165 @@
+---
+title: "database/sql"
+category: data
+kind: topic
+order: 14
+difficulty: "Intermediate"
+status: ready
+intent: "Go's driver-agnostic SQL layer — sql.Open returns a connection pool, parameterized queries stop injection, Scan reads rows, and you always close them."
+related:
+  - sql-transactions
+  - rest-apis
+  - postgres-and-redis
+quiz:
+  - q: "What does sql.Open return?"
+    options:
+      - text: "A *sql.DB that is a connection pool — it doesn't open a connection yet"
+        correct: true
+      - text: "A single live connection to the database"
+        correct: false
+      - text: "An error if the database is unreachable"
+        correct: false
+      - text: "A transaction you must commit"
+        correct: false
+    explain: "sql.Open just validates arguments and prepares a *sql.DB pool; it lazily opens connections on first use. Call db.Ping (or PingContext) if you need to verify connectivity at startup, and keep the *sql.DB for the program's lifetime instead of opening one per request."
+  - q: "How do you safely include a user-supplied value in a query?"
+    options:
+      - text: "Pass it as a parameter with a placeholder ($1 or ?) — never string-concatenate it in"
+        correct: true
+      - text: "Escape quotes manually with strings.ReplaceAll"
+        correct: false
+      - text: "fmt.Sprintf the value into the SQL text"
+        correct: false
+      - text: "Base64-encode it first"
+        correct: false
+    explain: "Parameterized queries send the SQL and the values on separate channels, so the driver can never confuse data for code — this is what prevents SQL injection. Concatenating or Sprintf-ing user input into query text is the classic injection hole; placeholders ($1/$2 for Postgres, ? for MySQL/SQLite) are the only safe path."
+  - q: "After ranging over the result of db.Query, what must you do?"
+    options:
+      - text: "Close rows (defer rows.Close()) and check rows.Err() after the loop"
+        correct: true
+      - text: "Nothing — the loop closes the rows automatically"
+        correct: false
+      - text: "Call db.Close() to free the connection"
+        correct: false
+      - text: "Re-run the query to confirm it finished"
+        correct: false
+    explain: "rows.Next() returning false can mean end-of-data OR an error mid-iteration, so you must check rows.Err() afterward. And you must Close() the rows to return the connection to the pool — defer rows.Close() right after the error check. db.Close() shuts the whole pool and is only for program exit."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔌 Analogy">
+`database/sql` is a universal power adapter. Your code plugs into one standard socket — `Query`, `Exec`, `Scan` — and a **driver** behind it speaks the dialect of whatever database is on the wall (Postgres, MySQL, SQLite). Swap the database and you swap the driver; your code keeps the same plug.
+</Callout>
+
+## A driver-agnostic layer
+
+`database/sql` is the standard library's SQL **interface** — it knows about pools, statements, rows, and transactions, but it does **not** know how to talk to any specific database. That job belongs to a third-party **driver** you import for its side effects (`_ "github.com/jackc/pgx/v5/stdlib"`), which registers itself by name. Your application code only ever touches `database/sql` types, so switching databases is mostly a one-line change.
+
+<Mermaid code={`graph LR
+  APP["your code<br/>Query · Exec · Scan"] --> SQL["database/sql<br/>(pool, rows, tx)"]
+  SQL --> DRV["driver<br/>(pgx, mysql, sqlite)"]
+  DRV --> POOL["connection pool"]
+  POOL --> DB[("database")]`} />
+
+## sql.Open returns a pool, not a connection
+
+This is the single most misunderstood fact about the package:
+
+```go
+import (
+	"database/sql"
+
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" driver
+)
+
+// dsn is a placeholder — never commit real credentials
+dsn := "postgres://user:pass@localhost:5432/app?sslmode=disable"
+
+db, err := sql.Open("pgx", dsn)
+if err != nil {
+	log.Fatal(err) // only fires for a bad driver name / DSN syntax
+}
+defer db.Close()
+
+// sql.Open did NOT connect. Verify connectivity explicitly:
+if err := db.PingContext(ctx); err != nil {
+	log.Fatal(err)
+}
+
+// Tune the pool for your workload:
+db.SetMaxOpenConns(25)
+db.SetMaxIdleConns(25)
+db.SetConnMaxLifetime(5 * time.Minute)
+```
+
+`*sql.DB` is a **pool of connections** that is safe for concurrent use by many goroutines. Open it **once** at startup and pass it around (or inject it) — do **not** open a new `*sql.DB` per request. The pool opens, reuses, and retires real connections for you.
+
+## Query, scan, and always close
+
+A single row with `QueryRow`, many rows with `Query`, and no rows (INSERT/UPDATE/DELETE) with `Exec`. Use the `…Context` variants so a cancelled request cancels the query too:
+
+```go
+// One row: QueryRow + Scan. ErrNoRows means "not found".
+var name string
+var age int
+err := db.QueryRowContext(ctx,
+	"SELECT name, age FROM users WHERE id = $1", id).Scan(&name, &age)
+if errors.Is(err, sql.ErrNoRows) {
+	return ErrUserNotFound
+} else if err != nil {
+	return err
+}
+
+// Many rows: Query, then ALWAYS close and check rows.Err().
+rows, err := db.QueryContext(ctx,
+	"SELECT id, name FROM users WHERE age > $1 ORDER BY id", minAge)
+if err != nil {
+	return err
+}
+defer rows.Close() // returns the connection to the pool
+
+var users []User
+for rows.Next() {
+	var u User
+	if err := rows.Scan(&u.ID, &u.Name); err != nil {
+		return err
+	}
+	users = append(users, u)
+}
+if err := rows.Err(); err != nil { // the loop can stop on an ERROR, not just EOF
+	return err
+}
+
+// No rows back: Exec, then inspect the result.
+res, err := db.ExecContext(ctx,
+	"UPDATE users SET age = $1 WHERE id = $2", age, id)
+if err != nil {
+	return err
+}
+n, _ := res.RowsAffected() // 0 means the WHERE matched nothing
+```
+
+Each placeholder (`$1`, `$2`, … for Postgres; `?` for MySQL/SQLite) is filled from the trailing arguments. The values travel **separately** from the SQL text, so a malicious string like `'; DROP TABLE users; --` is stored as plain data, never executed.
+
+## NULLs and the sql.Null types
+
+A SQL column that can be `NULL` won't `Scan` into a plain `string` or `int`. Use the nullable wrappers — `sql.NullString`, `sql.NullInt64`, `sql.NullTime`, and friends (Go 1.22+ also has the generic `sql.Null[T]`):
+
+```go
+var nickname sql.NullString
+err := db.QueryRowContext(ctx,
+	"SELECT nickname FROM users WHERE id = $1", id).Scan(&nickname)
+if nickname.Valid {
+	fmt.Println("nickname:", nickname.String)
+} else {
+	fmt.Println("no nickname set")
+}
+```
+
+<Callout type="gotcha" title="⚠️ The pool is real, the connection is lazy — and never concatenate SQL">
+Three traps catch everyone. **(1)** `sql.Open` doesn't connect — a successful `Open` with an unreachable database returns no error until the first query or `Ping`. **(2)** Leaking rows starves the pool: forget `rows.Close()` and connections never come back, so the app eventually hangs waiting for a free one. Always `defer rows.Close()`. **(3)** **Never** build query text from user input with `fmt.Sprintf` or `+` — use placeholders so the [driver](/web/postgres-and-redis/) keeps data and code apart. These are unrunnable here because they need a real driver and database; verify them locally.
+</Callout>
+
+Next: grouping statements that must all succeed or all fail — [SQL Transactions](/web/sql-transactions/).

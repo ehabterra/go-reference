@@ -1,0 +1,163 @@
+---
+title: "WebSockets"
+category: apis
+kind: topic
+order: 10
+difficulty: "Intermediate"
+status: ready
+intent: "Full-duplex, persistent connections over one TCP socket — the HTTP Upgrade handshake, frames, ping/pong keepalives, and when to choose them over SSE or polling."
+related:
+  - http-server
+  - grpc
+  - rest-apis
+quiz:
+  - q: "How does a WebSocket connection begin?"
+    options:
+      - text: "An ordinary HTTP request with an Upgrade: websocket header that the server agrees to switch protocols on"
+        correct: true
+      - text: "A brand-new TCP connection on a special websocket port"
+        correct: false
+      - text: "A UDP datagram handshake"
+        correct: false
+      - text: "A gRPC stream"
+        correct: false
+    explain: "A client sends a normal HTTP GET with Connection: Upgrade and Upgrade: websocket. The server replies 101 Switching Protocols, and the same TCP connection is then reused for bidirectional WebSocket frames — no new socket, no new port."
+  - q: "What is the key advantage of a WebSocket over repeated HTTP polling?"
+    options:
+      - text: "One persistent connection carries messages both ways with no per-message HTTP overhead"
+        correct: true
+      - text: "It encrypts traffic automatically without TLS"
+        correct: false
+      - text: "It uses UDP for lower latency"
+        correct: false
+      - text: "It works without a server"
+        correct: false
+    explain: "After the handshake the socket stays open, so either side can push a message instantly with only a small frame header — no new request/response, headers, or connection setup each time. That's far cheaper than polling for live updates."
+  - q: "When is Server-Sent Events (SSE) a better fit than a WebSocket?"
+    options:
+      - text: "When you only need server-to-client updates and want plain HTTP with auto-reconnect"
+        correct: true
+      - text: "When the client must stream large uploads to the server"
+        correct: false
+      - text: "When you need full-duplex chat"
+        correct: false
+      - text: "When you need binary frames"
+        correct: false
+    explain: "SSE is one-way (server → client) over a normal HTTP response, with built-in reconnection and simpler infrastructure. Choose a WebSocket when you genuinely need both directions; choose SSE for one-way feeds and polling for occasional, infrequent checks."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="☎️ Analogy">
+Plain HTTP is like sending a letter and waiting for a reply: one request, one response, then the line drops. A **WebSocket** is like keeping a phone call open. After a quick "can we switch to a call?" (the handshake), the line stays connected and **either side can speak at any time** — no redialing for every sentence. That open, two-way line is exactly what live chat, dashboards, and games need.
+</Callout>
+
+## The upgrade handshake
+
+A WebSocket doesn't start as its own protocol — it **borrows an HTTP request to bootstrap**. The client sends an ordinary `GET` carrying `Connection: Upgrade` and `Upgrade: websocket`. If the server agrees, it replies `101 Switching Protocols`, and from that instant the *same TCP connection* stops speaking HTTP and starts exchanging WebSocket frames in both directions.
+
+<Mermaid code={`sequenceDiagram
+  participant C as Browser / Client
+  participant S as Server
+  C->>S: GET /ws  (Upgrade: websocket)
+  S-->>C: 101 Switching Protocols
+  Note over C,S: same TCP socket, now full-duplex
+  C->>S: frame: "hello"
+  S-->>C: frame: "welcome"
+  S-->>C: frame: "live update"
+  C->>S: ping
+  S-->>C: pong`} />
+
+## A server in Go
+
+The standard library handles the HTTP side but not the WebSocket protocol itself, so you reach for a small third-party library (here `nhooyr.io/websocket`, also published as `github.com/coder/websocket`). The handler **accepts** the upgrade, then reads and writes typed messages in a loop. Messages travel as **frames** — each carries a small header plus a payload, and a frame is either text or binary.
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/coder/websocket" // third-party — run locally, needs a network
+)
+
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+	// upgrade this HTTP request to a WebSocket
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close(websocket.StatusInternalError, "closing")
+
+	ctx := r.Context()
+	for {
+		// Read blocks until the client sends a frame
+		typ, data, err := conn.Read(ctx)
+		if err != nil {
+			return // client went away or the connection closed
+		}
+		log.Printf("got %d bytes (type %v)", len(data), typ)
+
+		// echo it straight back — full-duplex: we can write any time
+		if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+			return
+		}
+	}
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", wsHandler)
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  0, // a live socket may stay idle between messages
+		WriteTimeout: 10 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
+}
+
+var _ = context.Background
+```
+
+<Callout type="info" title="ℹ️ Why this isn't a Playground">
+WebSockets need a real listening socket and a long-lived TCP connection, plus a third-party library — none of which run in the in-browser sandbox. The code here is display-only; drop it into a Go module locally to try it.
+</Callout>
+
+## Keepalives: ping and pong
+
+A connection can sit silent for minutes between messages, and idle TCP connections get reaped by proxies, load balancers, and NAT timeouts. WebSockets solve this with built-in **ping/pong** control frames: one side sends a `ping`, the other automatically answers with a `pong`. If a ping goes unanswered within a deadline, you know the peer is gone and can close.
+
+```go
+// send a ping with a deadline; an unanswered ping means a dead peer
+ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+defer cancel()
+if err := conn.Ping(ctx); err != nil {
+	conn.Close(websocket.StatusPolicyViolation, "no pong")
+	return
+}
+```
+
+Pair this with a heartbeat (ping every N seconds) so dead connections are detected promptly instead of lingering and leaking goroutines.
+
+## WebSocket vs SSE vs polling
+
+Pick the lightest tool that fits the direction of your data:
+
+| Need | Best fit |
+| --- | --- |
+| Two-way, low-latency (chat, games, collab editing) | **WebSocket** |
+| Server → client only (notifications, live tickers) | **SSE** (plain HTTP, auto-reconnect) |
+| Occasional, infrequent updates | **Polling** (simple GET on a timer) |
+
+WebSockets are the most capable but also the most to operate (sticky sessions, custom proxy config, manual reconnection). Don't reach for them when a one-way SSE stream or a periodic poll would do.
+
+<Callout type="gotcha" title="⚠️ Concurrency, origins, and timeouts will bite you">
+A WebSocket handler runs in its own goroutine and a connection isn't safe for concurrent writers — funnel all writes through **one goroutine or a channel**, or you'll corrupt frames. Always check the **Origin** header (or use the library's origin option) so a malicious site can't open a socket to your server on a logged-in user's behalf. And since a live socket may stay idle for long stretches, **disable or lengthen the server's read timeout** for the upgraded connection, and rely on **ping/pong** plus a per-message deadline to detect a dead peer instead.
+</Callout>
+
+Next: the simpler one-way alternative — [Server-Sent Events](/web/server-sent-events/).

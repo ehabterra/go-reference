@@ -1,0 +1,117 @@
+---
+title: "Routing & Middleware"
+category: http
+kind: topic
+order: 6
+difficulty: "Intermediate"
+status: ready
+intent: "Dispatch and cross-cutting concerns — ServeMux method+path patterns (Go 1.22), path values, and middleware as handlers that wrap handlers."
+related:
+  - http-server
+  - rest-apis
+  - tls-and-https
+quiz:
+  - q: "What is middleware in Go's net/http?"
+    options:
+      - text: "A function that takes a Handler and returns a Handler, wrapping it to add behavior"
+        correct: true
+      - text: "A special framework type"
+        correct: false
+      - text: "A goroutine that runs before the server starts"
+        correct: false
+      - text: "A field on http.Request"
+        correct: false
+    explain: "Middleware is just `func(next http.Handler) http.Handler`. It returns a handler that does something (log, auth, set a header), then calls next.ServeHTTP — composable because the input and output are the same interface."
+  - q: "In Go 1.22+, what does the pattern \"GET /users/{id}\" give you?"
+    options:
+      - text: "Method-aware routing plus a path variable read with r.PathValue(\"id\")"
+        correct: true
+      - text: "Nothing; ServeMux ignores the method"
+        correct: false
+      - text: "A regex match"
+        correct: false
+      - text: "A query parameter"
+        correct: false
+    explain: "Since Go 1.22 the standard ServeMux understands method prefixes and {name} wildcards. It matches the method and captures the segment, available via r.PathValue(\"id\") — no third-party router needed for most apps."
+  - q: "In what order do wrapped middlewares run for `log(auth(mux))`?"
+    options:
+      - text: "log runs first (outermost), then auth, then the mux — and unwinds in reverse on the way back"
+        correct: true
+      - text: "The mux runs first"
+        correct: false
+      - text: "auth runs first"
+        correct: false
+      - text: "They run concurrently"
+        correct: false
+    explain: "The outermost wrapper sees the request first. log's handler runs, calls auth's handler, which calls the mux; responses unwind back out through auth then log — like nested function calls, because that's exactly what they are."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧅 Analogy">
+Middleware is an onion around your handler. A request travels inward through each layer — logging, authentication, rate-limiting — reaches the core handler, then the response travels back out through the same layers. Each layer is the same shape (`Handler`), so you can add, remove, or reorder them freely.
+</Callout>
+
+## Routing with the standard mux
+
+Since **Go 1.22**, `http.ServeMux` routes by method and captures path variables — so you rarely need a third-party router:
+
+```go
+mux := http.NewServeMux()
+mux.HandleFunc("GET /users/{id}", getUser)      // method + wildcard
+mux.HandleFunc("POST /users", createUser)
+mux.HandleFunc("GET /health", health)
+// inside getUser: id := r.PathValue("id")
+```
+
+More specific patterns win over less specific ones, and a trailing `/` (`/static/`) matches a subtree.
+
+## Middleware wraps a handler
+
+A middleware takes a `Handler` and returns a `Handler` — so they **compose** by nesting. Run it all in-process:
+
+<Mermaid code={`graph LR
+  REQ["request"] --> L["logging"] --> A["auth"] --> M["mux → handler"]
+  M --> A2["auth (return)"] --> L2["logging (return)"] --> RES["response"]`} />
+
+<Playground client:visible title="middleware.go" code={`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+// middleware: same shape in, same shape out
+func withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-ID", "req-123")
+		next.ServeHTTP(w, r) // call the wrapped handler
+	})
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "user %s", r.PathValue("id")) // path variable
+	})
+
+	handler := withRequestID(mux) // wrap the whole mux in one line
+
+	// drive it in-process — no network needed
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/users/42", nil))
+
+	fmt.Println("status:    ", rec.Code)                       // 200
+	fmt.Println("request-id:", rec.Header().Get("X-Request-ID")) // req-123
+	fmt.Println("body:      ", rec.Body.String())              // user 42
+}`} />
+
+Chain several with a small helper: `handler := logging(auth(mux))` reads outermost-first. Many codebases write a `func chain(h Handler, mw ...Middleware) Handler` to apply a slice in order.
+
+<Callout type="tip" title="🐹 Middleware is just composition — keep it boring">
+The whole pattern is `func(http.Handler) http.Handler`. Resist a framework until the standard mux genuinely can't express your routes. Common middlewares: request logging, panic [recovery](/fundamentals/panic-recover/) (so one bad handler can't crash the server), auth, CORS, gzip, and [rate limiting](/patterns/semaphore/). Put cross-cutting concerns here and keep handlers focused on one job.
+</Callout>
+
+Next: shipping JSON with status codes — [building REST APIs](/web/rest-apis/).

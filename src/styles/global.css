@@ -318,6 +318,10 @@ img { max-width: 100%; }
   --dp-system:          #f97316;
   --dp-testing:         #a855f7;
   --dp-tooling:         #0891b2;
+  --dp-net-basics:      #2563eb;
+  --dp-http:            #16a34a;
+  --dp-apis:            #db2777;
+  --dp-data:            #ca8a04;
 }
 .dp-badge[data-cat="building-blocks"] { color: var(--dp-building-blocks); }
 .dp-badge[data-cat="coordination"]    { color: var(--dp-coordination); }
@@ -334,6 +338,10 @@ img { max-width: 100%; }
 .dp-badge[data-cat="system"]          { color: var(--dp-system); }
 .dp-badge[data-cat="testing"]         { color: var(--dp-testing); }
 .dp-badge[data-cat="tooling"]         { color: var(--dp-tooling); }
+.dp-badge[data-cat="net-basics"]      { color: var(--dp-net-basics); }
+.dp-badge[data-cat="http"]            { color: var(--dp-http); }
+.dp-badge[data-cat="apis"]            { color: var(--dp-apis); }
+.dp-badge[data-cat="data"]            { color: var(--dp-data); }
 .dp-card[data-cat="building-blocks"]  { --c: var(--dp-building-blocks); }
 .dp-card[data-cat="coordination"]     { --c: var(--dp-coordination); }
 .dp-card[data-cat="runtime"]          { --c: var(--dp-runtime); }
@@ -349,6 +357,10 @@ img { max-width: 100%; }
 .dp-card[data-cat="system"]           { --c: var(--dp-system); }
 .dp-card[data-cat="testing"]          { --c: var(--dp-testing); }
 .dp-card[data-cat="tooling"]          { --c: var(--dp-tooling); }
+.dp-card[data-cat="net-basics"]       { --c: var(--dp-net-basics); }
+.dp-card[data-cat="http"]             { --c: var(--dp-http); }
+.dp-card[data-cat="apis"]             { --c: var(--dp-apis); }
+.dp-card[data-cat="data"]             { --c: var(--dp-data); }
 
 /* hub topic cards */
 .dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
@@ -365,6 +377,7 @@ img { max-width: 100%; }
 .dp-topic[data-cat="algorithms"]      { --c: var(--dp-algorithms); }
 .dp-topic[data-cat="basics"]          { --c: var(--dp-basics); }
 .dp-topic[data-cat="essentials"]      { --c: var(--dp-essentials); }
+.dp-topic[data-cat="net-basics"]      { --c: var(--dp-net-basics); }
 .dp-topic:not(.dp-topic--soon):hover { transform: translateY(-3px); border-color: var(--c); box-shadow: var(--dp-shadow-sm); color: #fff; text-decoration: none; }
 .dp-topic__icon { font-size: 2rem; }
 .dp-topic h3 { margin: .2rem 0 0; font-size: 1.4rem; }

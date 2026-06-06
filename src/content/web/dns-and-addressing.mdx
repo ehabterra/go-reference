@@ -1,0 +1,130 @@
+---
+title: "DNS & Addressing"
+category: net-basics
+kind: topic
+order: 3
+difficulty: "Beginner"
+status: ready
+intent: "From names to numbers — net.ParseIP, net/netip, SplitHostPort/JoinHostPort, ports, and the net.Resolver that turns hostnames into IPs."
+related:
+  - tcp-sockets
+  - udp-sockets
+  - http-client
+quiz:
+  - q: "Why prefer net/netip's Addr over the older net.IP for new code?"
+    options:
+      - text: "netip.Addr is a small, comparable, allocation-free value (usable as a map key and with ==), whereas net.IP is a []byte slice"
+        correct: true
+      - text: "net.IP can't parse IPv6"
+        correct: false
+      - text: "netip.Addr can do DNS lookups by itself"
+        correct: false
+      - text: "net.IP is deprecated and removed in Go 1.25"
+        correct: false
+    explain: "net/netip.Addr is a compact value type: comparable with ==, usable as a map key, and allocation-free. net.IP is a []byte slice, so it allocates and can't be compared with == or used as a key. net.IP still works everywhere, but netip is the modern default."
+  - q: "What does net.SplitHostPort(\"[2001:db8::1]:443\") return?"
+    options:
+      - text: "host \"2001:db8::1\" and port \"443\" — it strips the IPv6 brackets for you"
+        correct: true
+      - text: "host \"[2001:db8::1]\" and port \"443\""
+        correct: false
+      - text: "an error, because IPv6 isn't supported"
+        correct: false
+      - text: "host \"2001\" and port \"db8::1]:443\""
+        correct: false
+    explain: "SplitHostPort understands IPv6 literals and removes the surrounding brackets, returning the bare host and the port as strings. Its inverse, JoinHostPort, adds the brackets back around an IPv6 literal."
+  - q: "What does a DNS lookup like net.LookupHost(\"example.com\") actually do?"
+    options:
+      - text: "Contacts a DNS resolver over the network to translate the name into one or more IP addresses"
+        correct: true
+      - text: "Parses the string locally without any network access"
+        correct: false
+      - text: "Opens a TCP connection to example.com"
+        correct: false
+      - text: "Returns the MAC address of the host"
+        correct: false
+    explain: "LookupHost (and the methods on net.Resolver) send a query to a DNS server and return the resolved IPs. It hits the network and can be slow or fail — unlike net.ParseIP/SplitHostPort, which are pure local string parsing."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📇 Analogy">
+DNS is the phone book of the internet. You know a name — `example.com` — but the network only routes to numbers — `93.184.216.34`. A **resolver** looks the name up and hands back the number. Parsing and splitting addresses, by contrast, is just reading the phone book entry you already have — no call required.
+</Callout>
+
+## Addresses: parsing vs. resolving
+
+Two very different things get lumped together as "addressing." **Parsing** an IP or a `host:port` string is pure, local, and instant. **Resolving** a hostname means a trip to a DNS server over the network — slow, fallible, and worth a timeout.
+
+<Mermaid code={`graph LR
+  N["name<br/>example.com:443"] -->|"SplitHostPort"| H["host: example.com<br/>port: 443"]
+  H -->|"Resolver (DNS, network)"| IP["93.184.216.34<br/>2606:2800:..."]
+  L["literal<br/>10.0.0.1"] -->|"ParseIP / ParseAddr (local)"| A["net.IP / netip.Addr"]`} />
+
+Modern Go has two IP types. The classic `net.IP` is a `[]byte` slice — it allocates and can't be a map key. The newer **`net/netip`** gives you `netip.Addr` and `netip.AddrPort`: small, comparable value types you can use with `==` and as map keys. Prefer `net/netip` for new code.
+
+## Inspecting addresses, in-process
+
+All of this is pure string parsing — no DNS, no socket — so it runs anywhere and is fully deterministic:
+
+<Playground client:visible title="addr.go" code={`package main
+
+import (
+	"fmt"
+	"net"
+	"net/netip"
+)
+
+func main() {
+	// 1) net.ParseIP — the classic []byte-backed net.IP type
+	v4 := net.ParseIP("192.168.0.42")
+	v6 := net.ParseIP("2001:db8::1")
+	fmt.Println("v4:", v4, "is4:", v4.To4() != nil)
+	fmt.Println("v6:", v6, "is4:", v6.To4() != nil)
+	fmt.Println("loopback?", net.ParseIP("127.0.0.1").IsLoopback())
+	fmt.Println("private?", v4.IsPrivate())
+
+	// 2) net.SplitHostPort — break "host:port" into its parts (DNS-free)
+	host, port, _ := net.SplitHostPort("example.com:8443")
+	fmt.Println("host:", host, "port:", port)
+
+	// JoinHostPort wraps an IPv6 literal in [] for you
+	fmt.Println("joined:", net.JoinHostPort("2001:db8::1", "443"))
+
+	// 3) net/netip — the modern, comparable, allocation-free address type
+	ap, _ := netip.ParseAddrPort("[2001:db8::1]:443")
+	fmt.Println("addr:", ap.Addr(), "port:", ap.Port(), "is6:", ap.Addr().Is6())
+
+	a, _ := netip.ParseAddr("10.0.0.1")
+	fmt.Println("netip addr:", a, "is4:", a.Is4(), "private:", a.IsPrivate())
+}`} />
+
+A few things to notice: `SplitHostPort` strips the IPv6 brackets, `JoinHostPort` puts them back, and ports are always **strings** in these APIs (`"443"`), because a `host:port` literal is text — convert with `strconv.Atoi` only when you need the number.
+
+## Resolving names with DNS
+
+When you actually need to turn a name into IPs, you hit the network. These calls reach a DNS server, so they can be slow or fail — pass a `context.Context` with a deadline. (Shown as fenced examples because they touch the network and won't run in a sandbox.)
+
+```go
+// quick one-shots
+ips, err := net.LookupHost("example.com")     // []string of IPs
+addrs, err := net.LookupIP("example.com")     // []net.IP
+cname, err := net.LookupCNAME("www.example.com")
+
+// the configurable way: a *net.Resolver with a context deadline
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+var r net.Resolver
+hosts, err := r.LookupHost(ctx, "example.com")
+mxs, err := r.LookupMX(ctx, "example.com")     // mail servers
+_ = err
+```
+
+Most of the time you never call these directly — `net.Dial("tcp", "example.com:443")` and the HTTP client resolve the name for you under the hood.
+
+<Callout type="gotcha" title="⚠️ Parsing is local; resolving is a network call">
+**The playground is pure parsing** (no DNS, no socket) so it's safe and deterministic anywhere. The trap is forgetting that `LookupHost`/`Resolver` methods are **network calls**: they can block, time out, or return multiple addresses (IPv4 *and* IPv6). Always pass a `context` with a timeout, expect more than one IP back, and don't cache results forever — DNS records have a TTL and change. For new code, prefer `net/netip` types so addresses stay comparable and allocation-free.
+</Callout>
+
+Next: serve requests over the network — [the HTTP server](/web/http-server/).

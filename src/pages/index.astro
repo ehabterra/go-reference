@@ -7,6 +7,7 @@ const concurrency = await getCollection('concurrency');
 const dsa = await getCollection('dsa');
 const fundamentals = await getCollection('fundamentals');
 const stdlib = await getCollection('stdlib');
+const web = await getCollection('web');
 
 const gofCount = patterns.filter((p) => p.data.gof).length;
 const concPatternCount = patterns.filter((p) => p.data.category === 'concurrency').length;
@@ -14,9 +15,10 @@ const concTopicCount = concurrency.filter((p) => p.data.kind === 'topic').length
 const dsaCount = dsa.filter((p) => p.data.kind === 'topic').length;
 const funCount = fundamentals.filter((p) => p.data.kind === 'topic').length;
 const stdlibCount = stdlib.filter((p) => p.data.kind === 'topic').length;
+const webCount = web.filter((p) => p.data.kind === 'topic').length;
 
 // unified progress across every page in the reference
-const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib].map((p) => p.id).join(',');
+const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web].map((p) => p.id).join(',');
 ---
 <BaseLayout>
   <header class="dp-hero">
@@ -82,6 +84,14 @@ const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdli
       <h3>Standard Library &amp; Tooling</h3>
       <p data-i18n="home.stdlib.desc">The batteries Go includes — fmt and io, encoding/json, files and the CLI, structured logging, plus testing, benchmarks, the race detector and pprof profiling.</p>
       <span class="dp-topic__stat">{stdlibCount} <span data-i18n="home.stdlib.stat">topics · stdlib → tooling · runnable</span></span>
+      <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
+    </a>
+
+    <a class="dp-topic" data-cat="net-basics" href="/web/">
+      <div class="dp-topic__icon">🌐</div>
+      <h3>Networking &amp; Web</h3>
+      <p data-i18n="home.web.desc">Build services in Go — TCP and UDP sockets, net/http servers and clients, routing and middleware, REST and gRPC, WebSockets, TLS, and database/sql with transactions.</p>
+      <span class="dp-topic__stat">{webCount} <span data-i18n="home.web.stat">topics · sockets → databases · runnable</span></span>
       <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
     </a>
   </div>

@@ -1,0 +1,168 @@
+---
+title: "HTTP Client"
+category: http
+kind: topic
+order: 5
+difficulty: "Beginner"
+status: ready
+intent: "Calling services with net/http — http.Get, a configured http.Client with timeouts, building requests, checking status, and always closing the body."
+related:
+  - http-server
+  - rest-apis
+  - tls-and-https
+quiz:
+  - q: "After a successful http.Get, what must you always do with resp.Body?"
+    options:
+      - text: "Close it (e.g. defer resp.Body.Close()) — otherwise the connection leaks and can't be reused"
+        correct: true
+      - text: "Nothing; Go closes it automatically"
+        correct: false
+      - text: "Call resp.Body.Flush()"
+        correct: false
+      - text: "Re-open it before reading"
+        correct: false
+    explain: "resp.Body is an io.ReadCloser backed by a live connection. If you don't Close it (and ideally read it to EOF), the connection can't return to the pool and you leak file descriptors. Always defer resp.Body.Close() right after checking err."
+  - q: "Why prefer your own http.Client with a Timeout over http.Get / http.DefaultClient in production?"
+    options:
+      - text: "http.DefaultClient has NO timeout, so a slow or hung server can block your goroutine forever"
+        correct: true
+      - text: "http.Get can't send headers"
+        correct: false
+      - text: "DefaultClient doesn't follow redirects"
+        correct: false
+      - text: "Your own client is required for HTTPS"
+        correct: false
+    explain: "The zero-value/default client has no overall timeout — a stalled server holds your goroutine indefinitely. Construct &http.Client{Timeout: ...} (and reuse it) so requests fail fast instead of hanging."
+  - q: "Does a non-2xx HTTP status (like 404 or 500) make http.Get return a non-nil error?"
+    options:
+      - text: "No — err is nil for any valid HTTP response; you must check resp.StatusCode yourself"
+        correct: true
+      - text: "Yes, any status ≥ 400 returns an error"
+        correct: false
+      - text: "Yes, but only 5xx returns an error"
+        correct: false
+      - text: "Only if you set Client.FailOnError"
+        correct: false
+    explain: "An error is returned only for transport-level failures (DNS, connection refused, timeout). A 404 or 500 is a perfectly valid HTTP response, so err is nil — always inspect resp.StatusCode (e.g. if resp.StatusCode != http.StatusOK) before trusting the body."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📨 Analogy">
+An HTTP client is you mailing a letter and waiting for the reply. You write the request (method, address, headers), drop it in the box, and a response comes back — but you have to *open the envelope* (read the body) and *throw it away* (close the body) when you're done, or your mailbox fills up. And a reply that says "no such address" (404) is still a delivered letter, not a postal error.
+</Callout>
+
+## A request, end to end
+
+The client sends a `*http.Request`, the server returns a `*http.Response`. Your job: set a timeout, check the status, read the body, and **close it**.
+
+<Mermaid code={`graph LR
+  REQ["build *http.Request<br/>method + URL + headers"] --> CL["http.Client.Do"]
+  CL -->|"over the network"| SRV["server"]
+  SRV --> RES["*http.Response<br/>StatusCode + Header + Body"]
+  RES --> CHK["check status →<br/>read body → CLOSE body"]`} />
+
+The simplest call is `http.Get`, but it uses `http.DefaultClient`, which has **no timeout**. For anything real, build your own client (and reuse it — it pools connections):
+
+```go
+// reuse ONE client across your app; it pools and reuses connections
+var client = &http.Client{Timeout: 10 * time.Second}
+
+resp, err := client.Get("https://api.example.com/users/1")
+if err != nil {
+	log.Fatal(err) // transport failure: DNS, refused, timeout, TLS
+}
+defer resp.Body.Close() // ALWAYS — even on non-2xx
+
+if resp.StatusCode != http.StatusOK {
+	log.Fatalf("unexpected status: %s", resp.Status) // 404/500 are NOT errors
+}
+
+body, err := io.ReadAll(resp.Body)
+if err != nil { log.Fatal(err) }
+fmt.Printf("%s\n", body)
+```
+
+## Custom requests and posting JSON
+
+For headers, other methods, or a context deadline, build the request with `http.NewRequestWithContext` and send it with `client.Do`:
+
+```go
+// POST a JSON body
+payload, _ := json.Marshal(map[string]any{"name": "Ada", "active": true})
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+	"https://api.example.com/users", bytes.NewReader(payload))
+if err != nil { log.Fatal(err) }
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("Authorization", "Bearer "+token)
+
+resp, err := client.Do(req)
+if err != nil { log.Fatal(err) }
+defer resp.Body.Close()
+
+if resp.StatusCode != http.StatusCreated {
+	log.Fatalf("create failed: %s", resp.Status)
+}
+// decode the JSON response straight from the body stream
+var created struct{ ID int `json:"id"` }
+json.NewDecoder(resp.Body).Decode(&created)
+```
+
+## Build a request without sending it
+
+You can construct and inspect a request entirely in memory — no network — which is exactly how you'd unit-test request building. Note how `net/url`'s `url.Values` escapes query parameters for you:
+
+<Playground client:visible title="request.go" code={`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+func main() {
+	// Encode query parameters safely with net/url — it handles escaping.
+	q := url.Values{}
+	q.Set("q", "go sockets")
+	q.Set("page", "2")
+	q.Add("tag", "net")
+	q.Add("tag", "http")
+	fmt.Println("query:", q.Encode())
+
+	// Build a request WITHOUT sending it. No network touched here.
+	endpoint := "https://api.example.com/search?" + q.Encode()
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	// Set headers on the request value.
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "golearn-demo/1.0")
+
+	// Inspect the fully-built request — exactly what would go on the wire.
+	fmt.Println("method:", req.Method)
+	fmt.Println("scheme:", req.URL.Scheme)
+	fmt.Println("host:  ", req.URL.Host)
+	fmt.Println("path:  ", req.URL.Path)
+	fmt.Println("rawq:  ", req.URL.RawQuery)
+	fmt.Println("accept:", req.Header.Get("Accept"))
+	fmt.Println("agent: ", req.Header.Get("User-Agent"))
+
+	// Read decoded params back out of the parsed URL.
+	got := req.URL.Query()
+	fmt.Println("tags:  ", strings.Join(got["tag"], ","))
+}`} />
+
+<Callout type="gotcha" title="⚠️ Close the body, check the status, set a timeout">
+**The playground only builds a request — it never sends it**, so it's safe and deterministic. Three real-world traps: (1) **Always `defer resp.Body.Close()`** and read it to EOF, or you leak connections. (2) A non-2xx status is **not** a Go error — `err` is nil for a 404/500, so check `resp.StatusCode` yourself. (3) `http.DefaultClient` (and `http.Get`) have **no timeout** — make one `&http.Client{Timeout: ...}` and reuse it across the app so it can pool connections.
+</Callout>
+
+Next: structure these calls into a clean API — [REST APIs](/web/rest-apis/).

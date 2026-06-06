@@ -1,0 +1,193 @@
+---
+title: "Project Layout & Dependency Injection"
+category: data
+kind: topic
+order: 17
+difficulty: "Intermediate"
+status: ready
+intent: "cmd/internal/pkg layout, accept-interfaces dependency injection, wiring in main, config from env/flags, and why Go rarely needs a DI framework."
+related:
+  - graceful-shutdown
+  - rest-apis
+  - database-sql
+quiz:
+  - q: "What lives in the internal/ directory of a Go project?"
+    options:
+      - text: "Packages that can only be imported by code inside the same module — compiler-enforced privacy"
+        correct: true
+      - text: "Internal documentation only"
+        correct: false
+      - text: "The main package and its entry point"
+        correct: false
+      - text: "Third-party vendored dependencies"
+        correct: false
+    explain: "The Go toolchain enforces that anything under an internal/ directory is importable only by packages rooted at internal/'s parent. It's privacy at the package level: put your application's guts there so outside modules can't depend on them, keeping your public API (pkg/) small and stable."
+  - q: "How is dependency injection usually done in idiomatic Go?"
+    options:
+      - text: "A type accepts its dependencies as interface arguments to its constructor; main wires the real implementations"
+        correct: true
+      - text: "A global container resolves dependencies at runtime by reflection"
+        correct: false
+      - text: "Annotations on struct fields that a framework fills in"
+        correct: false
+      - text: "Each type creates its own dependencies with new()"
+        correct: false
+    explain: "Idiomatic Go DI is just passing arguments: a Service takes a Store INTERFACE in its constructor, main constructs the concrete Store and passes it in, and tests pass a fake. No container, no reflection, no annotations — just plain functions and small interfaces, which is why DI frameworks are rarely needed."
+  - q: "Why does accepting an interface (not a concrete type) make a Service testable?"
+    options:
+      - text: "Tests can pass a small in-memory fake that satisfies the interface, with no real database or network"
+        correct: true
+      - text: "Interfaces run faster than structs"
+        correct: false
+      - text: "The compiler generates mocks automatically"
+        correct: false
+      - text: "Interfaces disable error handling"
+        correct: false
+    explain: "Because the Service only knows the interface, you can substitute any implementation: the real SQL-backed store in production, a hand-written in-memory fake in tests. Since Go satisfies interfaces structurally, the fake needs no special registration — it just implements the methods, so tests stay fast and hermetic."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧩 Analogy">
+Dependency injection is hiring with a **job description** instead of a named person. A Service posts: "I need something that can `Save` and `Get`." It doesn't care whether the hire is a Postgres store, an in-memory map, or a test fake — only that it fits the description (the interface). `main` is the hiring manager who picks the actual candidate.
+</Callout>
+
+## A standard-ish layout
+
+Go projects converge on a small set of top-level directories. Nothing is enforced except `internal/`, but the convention makes any codebase navigable:
+
+<Mermaid code={`graph TD
+  ROOT["myapp/"] --> CMD["cmd/<br/>main packages (entry points)"]
+  ROOT --> INT["internal/<br/>private packages (the app guts)"]
+  ROOT --> PKG["pkg/<br/>optional: reusable public packages"]
+  CMD --> WIRE["main(): wire everything together"]
+  INT --> SVC["service, store, http handlers"]`} />
+
+- **`cmd/myapp/main.go`** — one tiny `main` per binary. Its only job is to read config and wire dependencies.
+- **`internal/…`** — the bulk of your code (services, stores, handlers). The toolchain forbids other modules from importing it, so you can refactor freely.
+- **`pkg/…`** — *optional*, only for genuinely reusable libraries you intend others to import. Most apps don't need it; don't cargo-cult it.
+
+## Accept interfaces, wire in main
+
+The core idea: a **Service** depends on a **Store interface**, never on a concrete database. The real implementation is constructed in `main`; a fake is constructed in tests. Because Go satisfies interfaces [structurally](/fundamentals/interfaces/), the swap is free — no registration, no framework.
+
+<Playground client:visible title="di.go" code={`package main
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+)
+
+// Store is the small interface the Service depends on.
+// The Service never names a concrete database — only this contract.
+type Store interface {
+	Save(id string, balance int) error
+	Get(id string) (int, error)
+}
+
+// Service holds business logic. It depends on the Store INTERFACE,
+// not on any particular implementation.
+type Service struct {
+	store Store
+}
+
+// NewService is the constructor: dependencies arrive as arguments.
+func NewService(s Store) *Service {
+	return &Service{store: s}
+}
+
+func (svc *Service) Open(id string, opening int) error {
+	if opening < 0 {
+		return errors.New("opening balance cannot be negative")
+	}
+	return svc.store.Save(id, opening)
+}
+
+func (svc *Service) Deposit(id string, amount int) (int, error) {
+	bal, err := svc.store.Get(id)
+	if err != nil {
+		return 0, err
+	}
+	bal += amount
+	if err := svc.store.Save(id, bal); err != nil {
+		return 0, err
+	}
+	return bal, nil
+}
+
+// memStore is an in-memory Store. In production this would be SQL-backed;
+// in tests you would pass a fake. The Service cannot tell the difference.
+type memStore struct{ data map[string]int }
+
+func newMemStore() *memStore { return &memStore{data: map[string]int{}} }
+
+func (m *memStore) Save(id string, balance int) error {
+	m.data[id] = balance
+	return nil
+}
+
+func (m *memStore) Get(id string) (int, error) {
+	bal, ok := m.data[id]
+	if !ok {
+		return 0, fmt.Errorf("account %q not found", id)
+	}
+	return bal, nil
+}
+
+func main() {
+	// Wiring happens HERE in main: choose the implementation and inject it.
+	// Swap newMemStore() for a SQL store without touching Service at all.
+	svc := NewService(newMemStore())
+
+	_ = svc.Open("alice", 100)
+	_ = svc.Open("bob", 50)
+
+	bal, _ := svc.Deposit("alice", 25)
+	fmt.Println("alice balance:", bal) // 125
+
+	bobBal, _ := svc.Deposit("bob", 10)
+	fmt.Println("bob balance:  ", bobBal) // 60
+
+	ids := []string{"alice", "bob"}
+	sort.Strings(ids) // deterministic output
+	fmt.Println("accounts:", ids)
+}`} />
+
+In a test you'd define a `fakeStore` (or reuse `memStore`) and pass it to `NewService` — no database, no network, instant. That is the entire payoff of "accept interfaces."
+
+## Config from env and flags
+
+Keep configuration out of code. Read it in `main` and pass concrete values down:
+
+```go
+type Config struct {
+	Addr        string
+	DatabaseURL string
+}
+
+func loadConfig() Config {
+	cfg := Config{
+		Addr:        ":8080",
+		DatabaseURL: os.Getenv("DATABASE_URL"), // placeholder source
+	}
+	flag.StringVar(&cfg.Addr, "addr", cfg.Addr, "listen address")
+	flag.Parse()
+	return cfg
+}
+
+func main() {
+	cfg := loadConfig()
+	db := mustOpenDB(cfg.DatabaseURL)   // construct dependencies
+	svc := NewService(NewSQLStore(db))  // inject them
+	srv := NewServer(cfg.Addr, svc)     // wire the HTTP layer
+	log.Fatal(srv.Run())
+}
+```
+
+<Callout type="tip" title="💡 Plain functions beat DI frameworks in Go">
+You almost never need a DI **framework** in Go. Constructor injection plus a `main` that wires things up is enough, stays type-checked at compile time, and reads top-to-bottom with no hidden magic. Define interfaces **where they're used** (in the consumer's package), keep them **small** — often one or two methods — and let the concrete types live near the database or [HTTP layer](/web/rest-apis/). When wiring grows large, a tool like Google's `wire` *generates* the same plain code for you; a runtime reflection container is rarely worth its opacity.
+</Callout>
+
+Next: stopping the server cleanly when it's time to deploy — [Graceful Shutdown](/web/graceful-shutdown/).

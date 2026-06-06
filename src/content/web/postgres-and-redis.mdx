@@ -1,0 +1,137 @@
+---
+title: "Postgres & Redis"
+category: data
+kind: topic
+order: 16
+difficulty: "Intermediate"
+status: ready
+intent: "Choosing drivers and datastores — pgx for relational/transactional data, go-redis for caching and sessions, and the cache-aside pattern that ties them together."
+related:
+  - database-sql
+  - sql-transactions
+  - project-layout-and-di
+quiz:
+  - q: "Which datastore fits each job: relational, transactional records vs. a short-lived cache?"
+    options:
+      - text: "Postgres for relational/transactional data; Redis for caching, sessions, queues, and rate-limiting"
+        correct: true
+      - text: "Redis for relational data; Postgres for caching"
+        correct: false
+      - text: "Either one — they're interchangeable"
+        correct: false
+      - text: "Postgres for both, with Redis only for backups"
+        correct: false
+    explain: "Postgres is a durable relational database with ACID transactions and joins — your source of truth. Redis is an in-memory store optimized for fast key/value access with TTLs, ideal for caches, sessions, job queues, and rate-limiters. They complement each other rather than compete."
+  - q: "In the cache-aside pattern, what happens on a cache MISS?"
+    options:
+      - text: "Read from Postgres, then write the value into Redis with a TTL before returning it"
+        correct: true
+      - text: "Return an error to the caller"
+        correct: false
+      - text: "Write the value to Redis only, never touching Postgres"
+        correct: false
+      - text: "Invalidate the entire cache and retry"
+        correct: false
+    explain: "Cache-aside: check Redis first; on a hit, return it; on a miss, load from the database, populate the cache with an expiry, and return. The TTL bounds staleness, and on writes you update Postgres then invalidate (or update) the cached key so readers don't serve stale data."
+  - q: "Why are pgx and go-redis third-party imports rather than part of the standard library?"
+    options:
+      - text: "Go's stdlib ships database/sql as a generic interface but no concrete drivers or a Redis client — those live in external modules"
+        correct: true
+      - text: "They are in the standard library under database/redis"
+        correct: false
+      - text: "The standard library forbids database access"
+        correct: false
+      - text: "They only work with cgo"
+        correct: false
+    explain: "database/sql defines the SQL contract but ships zero drivers — you add pgx (which also offers a richer native API beyond database/sql) for Postgres. Redis isn't SQL at all, so there's no stdlib interface; go-redis is the de-facto client. Both are plain go get dependencies."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗄️ Analogy">
+Postgres is your **filing cabinet**: every record is durable, organized, and survives the power going out. Redis is the **sticky notes** on your monitor — instant to read, but meant to be temporary and to expire. You keep the truth in the cabinet and stick the hot, frequently-asked answers where you can grab them in a glance.
+</Callout>
+
+## Choosing the datastore and the driver
+
+Reach for **Postgres** when data is relational and must be durable and consistent: users, orders, ledgers — anything you'd run [transactions](/web/sql-transactions/) over. Reach for **Redis** when you need speed and natural expiry: caches, sessions, rate-limiter counters, and lightweight job queues. They're partners, not rivals — Postgres is the source of truth, Redis is the fast path in front of it.
+
+Neither client is in the standard library:
+
+```bash
+# Postgres driver (works with database/sql, and has a richer native API)
+go get github.com/jackc/pgx/v5
+
+# Redis client
+go get github.com/redis/go-redis/v9
+```
+
+Both manage their own connection pools internally, so you construct **one** client at startup and share it across goroutines:
+
+```go
+// Postgres via pgx's native pool. The DSN here is a PLACEHOLDER —
+// load real values from the environment, never hard-code credentials.
+pgPool, err := pgxpool.New(ctx, "postgres://user:pass@localhost:5432/app?sslmode=disable")
+if err != nil {
+	log.Fatal(err)
+}
+defer pgPool.Close()
+
+// Redis client (also a pool under the hood).
+rdb := redis.NewClient(&redis.Options{
+	Addr:     "localhost:6379", // placeholder
+	Password: "",               // load from env in real apps
+	DB:       0,
+})
+defer rdb.Close()
+```
+
+## Cache-aside: Redis in front of Postgres
+
+The most common pattern is **cache-aside**: the application checks the cache, falls back to the database on a miss, and populates the cache for next time.
+
+<Mermaid code={`graph LR
+  APP["request"] --> C{"in Redis?"}
+  C -->|hit| RET["return cached value"]
+  C -->|miss| DB[("read Postgres")]
+  DB --> SET["SET key with TTL"]
+  SET --> RET`} />
+
+```go
+func getUser(ctx context.Context, id string) (User, error) {
+	key := "user:" + id
+
+	// 1. Try the cache.
+	if data, err := rdb.Get(ctx, key).Bytes(); err == nil {
+		var u User
+		if err := json.Unmarshal(data, &u); err == nil {
+			return u, nil // cache HIT
+		}
+	} else if err != redis.Nil {
+		return User{}, err // a real Redis error, not just "missing key"
+	}
+
+	// 2. Cache MISS: load from Postgres (the source of truth).
+	var u User
+	err := pgPool.QueryRow(ctx,
+		"SELECT id, name FROM users WHERE id = $1", id).Scan(&u.ID, &u.Name)
+	if err != nil {
+		return User{}, err
+	}
+
+	// 3. Populate the cache with a TTL so it can't go stale forever.
+	if data, err := json.Marshal(u); err == nil {
+		rdb.Set(ctx, key, data, 5*time.Minute) // best-effort; ignore cache write errors
+	}
+	return u, nil
+}
+```
+
+On a write, update Postgres first, then **invalidate** the cached key (`rdb.Del(ctx, key)`) so the next read repopulates from fresh data. The TTL is your backstop: even if an invalidation is missed, the entry expires.
+
+<Callout type="gotcha" title="⚠️ Redis is not durable, and the cache can lie">
+Treat Redis as **disposable**: it's in-memory, so a restart or eviction can drop keys — never make it your only copy of important data. Two traps follow. **(1)** `redis.Nil` is the sentinel for "key not found," and it is **not** a failure — branch on it, don't bubble it up as an error. **(2)** Caches drift out of sync with the database; always set a TTL and invalidate on writes, and accept that cache-aside trades a little staleness for a lot of speed. Keep credentials in the environment — the DSNs above are placeholders, not real hosts.
+</Callout>
+
+Next: organizing all this into a project you can grow — [Project Layout & Dependency Injection](/web/project-layout-and-di/).

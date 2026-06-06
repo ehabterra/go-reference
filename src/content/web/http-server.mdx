@@ -1,0 +1,134 @@
+---
+title: "HTTP Server"
+category: http
+kind: topic
+order: 4
+difficulty: "Beginner"
+status: ready
+intent: "Serving HTTP in net/http — handlers and HandlerFunc, the ResponseWriter and Request, the default ServeMux, and a production-shaped http.Server."
+related:
+  - http-client
+  - routing-and-middleware
+  - rest-apis
+quiz:
+  - q: "What is an http.Handler?"
+    options:
+      - text: "Anything with a ServeHTTP(w http.ResponseWriter, r *http.Request) method"
+        correct: true
+      - text: "A function named handler()"
+        correct: false
+      - text: "A struct provided by net/http"
+        correct: false
+      - text: "A goroutine that listens on a port"
+        correct: false
+    explain: "Handler is a one-method interface: ServeHTTP(ResponseWriter, *Request). http.HandlerFunc adapts a plain func to it, which is why you can pass functions to HandleFunc."
+  - q: "How does net/http handle concurrent requests?"
+    options:
+      - text: "It serves each request in its own goroutine automatically"
+        correct: true
+      - text: "Requests are queued and handled one at a time"
+        correct: false
+      - text: "You must start a goroutine yourself in each handler"
+        correct: false
+      - text: "It uses a thread pool you configure"
+        correct: false
+    explain: "http.Server.Serve accepts connections and runs every request handler in its own goroutine. So handlers must be safe for concurrent use — guard shared state with a mutex or a channel."
+  - q: "Why prefer a configured http.Server over http.ListenAndServe(addr, nil) in production?"
+    options:
+      - text: "Bare ListenAndServe has no timeouts; an http.Server lets you set ReadTimeout/WriteTimeout/IdleTimeout"
+        correct: true
+      - text: "ListenAndServe doesn't support TLS"
+        correct: false
+      - text: "It's slower"
+        correct: false
+      - text: "There's no difference"
+        correct: false
+    explain: "The default server has no timeouts, so a slow client can hold a connection forever (Slowloris). Construct an http.Server with explicit timeouts and your own mux for real deployments."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏪 Analogy">
+An HTTP server is a shop counter. A **handler** is the clerk who serves one customer (request) and hands back a receipt (response). The **mux** is the greeter who reads the sign — `/orders`, `/users` — and points each customer to the right clerk. Go hires a fresh clerk (goroutine) per customer, so the queue never backs up.
+</Callout>
+
+## Handlers all the way down
+
+The whole server is built on one interface — `http.Handler` — with a single method `ServeHTTP(w, r)`. `http.HandlerFunc` lets a plain function satisfy it:
+
+<Mermaid code={`graph LR
+  REQ["*http.Request"] --> MUX["ServeMux<br/>(route by path)"]
+  MUX --> H["Handler.ServeHTTP(w, r)"]
+  H --> W["http.ResponseWriter"]
+  W --> RES["status + headers + body"]`} />
+
+```go
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "hello, world")
+	})
+	// real server (needs a network — run this locally, not in the sandbox):
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
+}
+```
+
+## Run a handler in-process
+
+You don't need a network to test handler logic — `httptest` drives a handler directly with a recorder. This is exactly how you'd unit-test it, and it runs anywhere:
+
+<Playground client:visible title="server.go" code={`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+// a handler reads the request and writes the response
+func greet(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		name = "world"
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "hello, %s", name)
+}
+
+func main() {
+	// httptest runs the handler IN-PROCESS: no socket, no network, safe anywhere
+	req := httptest.NewRequest("GET", "/greet?name=Ada", nil)
+	rec := httptest.NewRecorder()
+
+	greet(rec, req) // call the handler like any function
+
+	res := rec.Result()
+	fmt.Println("status:", res.StatusCode)            // 200
+	fmt.Println("type:  ", res.Header.Get("Content-Type")) // text/plain
+	fmt.Println("body:  ", rec.Body.String())         // hello, Ada
+}`} />
+
+## The ResponseWriter, in order
+
+Write the response in the right sequence — **headers, then status, then body**:
+
+1. `w.Header().Set(...)` — set any headers *first*.
+2. `w.WriteHeader(code)` — send the status line (optional; defaults to `200` on first `Write`).
+3. `w.Write(...)` / `fmt.Fprintf(w, ...)` — the body.
+
+Once you've written the body you can't change the status or headers — they're already on the wire.
+
+<Callout type="gotcha" title="⚠️ Handlers run concurrently; write headers before the body">
+Every request gets its own goroutine, so **any shared state a handler touches must be synchronized** (a [`sync.Mutex`](/concurrency/sync-package/) or a channel) — the [race detector](/stdlib/race-detector/) will catch slips. And the order above is strict: calling `WriteHeader` (or the first `Write`) freezes the status and headers, so set them first. Use `http.Error(w, msg, code)` for clean error responses.
+</Callout>
+
+Next: calling other services — [the HTTP client](/web/http-client/).

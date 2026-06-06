@@ -1,0 +1,124 @@
+---
+title: "Polling"
+category: apis
+kind: topic
+order: 12
+difficulty: "Beginner"
+status: ready
+intent: "When the client just asks again — short polling on a timer vs long polling that holds the request open, their costs, and when polling is the right boring choice."
+related:
+  - server-sent-events
+  - websockets
+  - http-client
+quiz:
+  - q: "What is the difference between short polling and long polling?"
+    options:
+      - text: "Short polling re-requests on a fixed timer; long polling holds the request open until data is ready (or it times out), then the client immediately re-requests"
+        correct: true
+      - text: "Long polling uses WebSockets"
+        correct: false
+      - text: "Short polling is server-push"
+        correct: false
+      - text: "They're the same thing"
+        correct: false
+    explain: "Short polling asks every N seconds whether you like it or not — simple but wasteful. Long polling parks the request server-side until there's something to send (or a timeout), giving near-real-time updates with far fewer empty responses."
+  - q: "What's the main downside of frequent short polling?"
+    options:
+      - text: "Wasted requests — most responses are empty 'nothing changed', burning bandwidth and server work"
+        correct: true
+      - text: "It can't get through firewalls"
+        correct: false
+      - text: "It requires HTTP/2"
+        correct: false
+      - text: "The client can't control the interval"
+        correct: false
+    explain: "If data changes rarely, most polls return 'no change', so you pay request overhead for nothing — and you still lag up to one interval behind. Long polling, SSE or WebSockets fix that; short polling wins on sheer simplicity."
+  - q: "When is plain polling actually the right choice?"
+    options:
+      - text: "Low-frequency or non-urgent updates, restrictive networks, or when you want the simplest thing that works"
+        correct: true
+      - text: "Real-time multiplayer games"
+        correct: false
+      - text: "High-frequency trading feeds"
+        correct: false
+      - text: "Never — always use WebSockets"
+        correct: false
+    explain: "Polling needs no special server infrastructure and sails through any HTTP proxy or firewall. For a status that updates every few minutes, a 30-second poll is simpler and more robust than holding open connections."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚗 Analogy">
+Polling is the kid in the back seat: "Are we there yet? … Are we there yet?" The client just keeps asking. **Short polling** asks on a timer; **long polling** asks once and waits quietly until the driver actually has an answer, then immediately asks again. It's the least clever approach — which is exactly why it's so reliable.
+</Callout>
+
+## Short polling: ask on a timer
+
+The client requests the same endpoint every few seconds; the server answers with the current state. Dead simple, works through any proxy — here's the loop, driven in-process:
+
+<Mermaid code={`graph LR
+  C["client"] -->|"GET /status (t=0s)"| S["server"]
+  S -->|"version=1"| C
+  C -->|"GET /status (t=5s)"| S
+  S -->|"version=2"| C
+  C -->|"GET /status (t=10s)"| S
+  S -->|"version=3"| C`} />
+
+<Playground client:visible title="polling.go" code={`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func main() {
+	// server state that changes between requests
+	version := 0
+	status := func(w http.ResponseWriter, r *http.Request) {
+		version++ // pretend new data arrived since the last poll
+		fmt.Fprintf(w, "version=%d", version)
+	}
+
+	// the client polls the same endpoint on a timer (here: 3 times)
+	for poll := 1; poll <= 3; poll++ {
+		rec := httptest.NewRecorder()
+		status(rec, httptest.NewRequest("GET", "/status", nil))
+		fmt.Printf("poll %d -> %s\n", poll, rec.Body.String())
+	}
+}`} />
+
+In real code the loop is a `time.Ticker`; a polite client adds **jitter and backoff** so a thousand clients don't all hit the server on the same second (the thundering herd).
+
+## Long polling: hold the request open
+
+Instead of answering immediately, the server **parks** the request until there's something new (or a timeout fires), then responds; the client re-requests at once. Fewer empty round-trips, near-real-time — at the cost of a held connection per waiting client:
+
+```go
+func longPoll(w http.ResponseWriter, r *http.Request) {
+	select {
+	case ev := <-updates:           // data arrived — answer now
+		fmt.Fprint(w, ev)
+	case <-time.After(30 * time.Second): // nothing yet — let the client retry
+		w.WriteHeader(http.StatusNoContent)
+	case <-r.Context().Done():      // client gave up
+		return
+	}
+}
+```
+
+## Choosing
+
+<Mermaid code={`graph TD
+  Q["need updates?"] --> A["rarely / non-urgent<br/>→ short polling"]
+  Q --> B["near real-time, server → client<br/>→ long polling or SSE"]
+  Q --> C["two-way, high frequency<br/>→ WebSockets"]`} />
+
+Reach up the ladder only when you need to: **short polling** → **long polling** → **[SSE](/web/server-sent-events/)** → **[WebSockets](/web/websockets/)**. Each step adds real-timeness and complexity.
+
+<Callout type="tip" title="🐹 Boring is a feature">
+Polling has no special server, no held connections (short polling), and no proxy surprises — it just works, everywhere. Add **backoff with jitter** to avoid synchronized stampedes, send a small `ETag`/`If-None-Match` or a `since` cursor so unchanged polls return a cheap `304 Not Modified`, and use a context [timeout](/concurrency/select/) on the client. Don't reach for WebSockets to update a number every minute.
+</Callout>
+
+Next: the wire formats underneath it all — [RPC & Serialization](/web/rpc-and-serialization/).

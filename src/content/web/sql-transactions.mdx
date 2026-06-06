@@ -1,0 +1,117 @@
+---
+title: "SQL Transactions"
+category: data
+kind: topic
+order: 15
+difficulty: "Intermediate"
+status: ready
+intent: "Begin, Commit, Rollback — grouping statements into all-or-nothing units, the defer-rollback safety pattern, ACID, and isolation levels."
+related:
+  - database-sql
+  - postgres-and-redis
+  - graceful-shutdown
+quiz:
+  - q: "Why is `defer tx.Rollback()` a safe pattern even when you intend to commit?"
+    options:
+      - text: "Rollback is a no-op after a successful Commit, so the defer harmlessly cleans up only the error paths"
+        correct: true
+      - text: "Commit and Rollback can both be called and the database merges them"
+        correct: false
+      - text: "It rolls back, then Commit re-applies the changes"
+        correct: false
+      - text: "Go automatically removes the defer once Commit runs"
+        correct: false
+    explain: "After Commit succeeds the transaction is finished, so a later Rollback returns sql.ErrTxDone and changes nothing. Deferring Rollback right after Begin guarantees that any early return — a failed statement, a panic, a validation error — releases the transaction instead of leaking it."
+  - q: "All statements in a transaction must run on…"
+    options:
+      - text: "The single connection bound by tx — use tx.Exec/tx.Query, never db.Exec"
+        correct: true
+      - text: "Any pooled connection; the pool keeps them consistent"
+        correct: false
+      - text: "A brand-new connection per statement"
+        correct: false
+      - text: "The same goroutine, but any connection"
+        correct: false
+    explain: "Begin checks out one connection from the pool and pins it to the *sql.Tx. Every statement in the transaction must go through that tx (tx.ExecContext, tx.QueryContext); calling db.Exec would grab a DIFFERENT pooled connection that is outside the transaction entirely."
+  - q: "What does the 'I' in ACID — isolation — control?"
+    options:
+      - text: "How visible one transaction's in-progress changes are to other concurrent transactions"
+        correct: true
+      - text: "Whether the database file is encrypted"
+        correct: false
+      - text: "How many connections the pool allows"
+        correct: false
+      - text: "Whether committed data survives a crash"
+        correct: false
+    explain: "Isolation governs concurrency: at higher levels (Serializable) transactions behave as if run one-at-a-time, preventing anomalies like dirty/non-repeatable/phantom reads, at the cost of more contention. Durability (the 'D') is the crash-survival guarantee; the two are separate properties."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏦 Analogy">
+A transaction is a bank transfer. Debiting one account and crediting another are two steps, but they must happen as **one** event — if the credit fails, the debit must vanish too. `Commit` makes the whole transfer real; `Rollback` pretends it never started. There is no halfway state where money disappeared.
+</Callout>
+
+## Begin, do the work, commit or roll back
+
+A transaction turns several statements into one all-or-nothing unit. `db.BeginTx` checks out a connection and pins it; you run every statement through the returned `*sql.Tx`; then exactly one of `Commit` or `Rollback` ends it.
+
+<Mermaid code={`graph LR
+  B["BeginTx(ctx)"] --> S1["tx.Exec · debit"]
+  S1 --> S2["tx.Exec · credit"]
+  S2 --> Q{"all ok?"}
+  Q -->|yes| C["Commit"]
+  Q -->|no| R["Rollback"]
+  C --> DONE["changes persisted"]
+  R --> UNDO["changes discarded"]`} />
+
+## The defer-rollback safety pattern
+
+The idiomatic shape defers `Rollback` immediately, so **every** early exit is covered, and only commits on the happy path:
+
+```go
+func transfer(ctx context.Context, db *sql.DB, from, to string, cents int) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	// Safety net: runs on every return below. After a successful Commit
+	// it's a harmless no-op (returns sql.ErrTxDone), so we ignore its error.
+	defer tx.Rollback()
+
+	// Every statement goes through tx, NOT db — same pinned connection.
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE accounts SET balance = balance - $1 WHERE id = $2", cents, from); err != nil {
+		return err // defer rolls back
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE accounts SET balance = balance + $1 WHERE id = $2", cents, to); err != nil {
+		return err // defer rolls back
+	}
+
+	// Commit is the only thing that persists the work.
+	return tx.Commit()
+}
+```
+
+Why this works: once `Commit` succeeds the transaction is over, so the deferred `Rollback` does nothing. But if any statement fails — or the function panics, or a validation check returns early — the defer fires and the half-finished work is discarded. You never leak an open transaction (which would hold a pool connection hostage).
+
+## ACID and isolation levels
+
+A transaction's guarantees are summarized as **ACID**: **Atomicity** (all statements apply or none do), **Consistency** (the database moves from one valid state to another, honoring constraints), **Isolation** (concurrent transactions don't see each other's partial work), and **Durability** (once committed, the data survives a crash). Atomicity is what `Rollback` gives you; durability is what `Commit` promises.
+
+**Isolation** is tunable. `BeginTx` takes a `*sql.TxOptions` where you set the level — from `LevelReadCommitted` (you only see committed data, the common default) up to `LevelSerializable` (transactions behave as if run one at a time). Higher isolation prevents more anomalies (dirty reads, non-repeatable reads, phantom reads) but increases contention and the chance of serialization errors you must retry:
+
+```go
+tx, err := db.BeginTx(ctx, &sql.TxOptions{
+	Isolation: sql.LevelSerializable,
+	ReadOnly:  false,
+})
+```
+
+<Callout type="tip" title="💡 Keep transactions short, route through tx, mind the context">
+Hold a transaction open only as long as needed — it pins a [pool connection](/web/database-sql/) and can block others. Never do slow work (an HTTP call, a long compute) between `Begin` and `Commit`. Make sure **every** statement uses `tx.…`, not `db.…`, or it silently runs outside the transaction on a different connection. And remember the context: if the `ctx` passed to `BeginTx` is cancelled, the transaction is rolled back automatically — handy during [graceful shutdown](/web/graceful-shutdown/), where in-flight work should unwind cleanly.
+</Callout>
+
+Next: picking real datastores — [Postgres & Redis](/web/postgres-and-redis/).

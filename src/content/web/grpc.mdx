@@ -1,0 +1,187 @@
+---
+title: "gRPC"
+category: apis
+kind: topic
+order: 9
+difficulty: "Advanced"
+status: ready
+intent: "Typed, fast service-to-service calls — Protocol Buffers, the four RPC kinds, code generation with protoc, and HTTP/2 streaming over plain REST."
+related:
+  - rest-apis
+  - rpc-and-serialization
+  - http-server
+quiz:
+  - q: "What does the protoc compiler generate from a .proto file for Go?"
+    options:
+      - text: "Typed structs for each message plus client and server stub code"
+        correct: true
+      - text: "A running gRPC server binary"
+        correct: false
+      - text: "JSON schema files"
+        correct: false
+      - text: "An OpenAPI document"
+        correct: false
+    explain: "protoc (with protoc-gen-go and protoc-gen-go-grpc) turns each message into a Go struct and each service into a client stub and a server interface. You implement the server interface; the generated client gives you typed method calls."
+  - q: "Which RPC kind streams many messages from the client to the server and returns a single response?"
+    options:
+      - text: "Client streaming"
+        correct: true
+      - text: "Server streaming"
+        correct: false
+      - text: "Unary"
+        correct: false
+      - text: "Bidirectional streaming"
+        correct: false
+    explain: "Client streaming sends a stream of requests and gets one response (e.g. uploading chunks, then a summary). Server streaming is the mirror; unary is one-in-one-out; bidi streams both ways at once."
+  - q: "When is REST usually the better choice over gRPC?"
+    options:
+      - text: "A public API consumed directly by browsers and third parties"
+        correct: true
+      - text: "High-throughput internal service-to-service calls"
+        correct: false
+      - text: "Streaming telemetry between backend services"
+        correct: false
+      - text: "Strongly-typed contracts shared across languages"
+        correct: false
+    explain: "Browsers can't speak raw gRPC (HTTP/2 framing, binary protobuf) without a proxy like gRPC-Web, and curl-friendly JSON is easier for public consumers. gRPC shines for internal, typed, streaming traffic; REST wins for reach and human readability."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📞 Analogy">
+gRPC is like calling a **typed phone extension** instead of mailing a letter. With REST you address an envelope (a URL), write free-form contents (JSON), and the other side parses whatever arrives. With gRPC you and the callee agree on a **contract** up front — exact method names, exact argument and return types — written once in a `.proto` file. Calling a remote method then feels like calling a local function, and the compiler catches you if you dial the wrong shape.
+</Callout>
+
+## Protocol Buffers: the contract
+
+A gRPC service starts with a `.proto` file. **Messages** describe the data (typed fields with stable numbers); **services** describe the callable methods. This file is the single source of truth, shared by every language.
+
+```proto
+syntax = "proto3";
+
+package todo.v1;
+option go_package = "example.com/todo/gen/todov1";
+
+message GetTodoRequest {
+  int64 id = 1;
+}
+
+message Todo {
+  int64 id = 1;
+  string title = 2;
+  bool done = 3;
+}
+
+service TodoService {
+  // unary: one request in, one response out
+  rpc GetTodo(GetTodoRequest) returns (Todo);
+  // server streaming: one request, a stream of responses
+  rpc ListTodos(ListTodosRequest) returns (stream Todo);
+}
+```
+
+The numbers (`= 1`, `= 2`) are **field tags** — they identify fields on the wire, so you can rename a field freely but must never reuse a tag. That tag-based encoding is what makes protobuf compact and forward/backward compatible.
+
+## Code generation with protoc
+
+You don't write the wire format by hand. The `protoc` compiler plus two Go plugins turn the `.proto` into typed Go: structs for the messages, a **client stub**, and a **server interface** you implement.
+
+```bash
+# install the Go plugins once
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+# generate todo.pb.go (messages) and todo_grpc.pb.go (stubs)
+protoc --go_out=. --go_opt=paths=source_relative \
+       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+       todo.proto
+```
+
+The generated server side is an interface; you supply the logic. The generated client side is a struct with typed methods.
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+
+	"google.golang.org/grpc"
+	todov1 "example.com/todo/gen/todov1"
+)
+
+// implement the generated server interface
+type server struct {
+	todov1.UnimplementedTodoServiceServer
+}
+
+func (s *server) GetTodo(ctx context.Context, req *todov1.GetTodoRequest) (*todov1.Todo, error) {
+	// look the todo up, return a typed message
+	return &todov1.Todo{Id: req.Id, Title: "write Go", Done: false}, nil
+}
+
+func main() {
+	lis, err := net.Listen("tcp", ":50051") // needs a network — run locally, not in the sandbox
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := grpc.NewServer()
+	todov1.RegisterTodoServiceServer(s, &server{})
+	log.Fatal(s.Serve(lis)) // serves gRPC over HTTP/2
+}
+```
+
+Calling it from a client is just a typed method call — the stub handles connection, framing, and serialization:
+
+```go
+conn, err := grpc.NewClient("localhost:50051",
+	grpc.WithTransportCredentials(insecure.NewCredentials()))
+if err != nil {
+	log.Fatal(err)
+}
+defer conn.Close()
+
+client := todov1.NewTodoServiceClient(conn)
+todo, err := client.GetTodo(context.Background(), &todov1.GetTodoRequest{Id: 1})
+// todo is a *todov1.Todo — fully typed, no manual JSON parsing
+```
+
+<Callout type="info" title="ℹ️ Why this isn't a Playground">
+gRPC needs third-party modules (`google.golang.org/grpc`), the external `protoc` compiler, and a real network listener — none of which run in the in-browser sandbox. The blocks above are display-only; copy them into a Go module locally to run them.
+</Callout>
+
+## The four RPC kinds
+
+gRPC runs over **HTTP/2**, whose multiplexed, long-lived streams unlock four call shapes. REST over HTTP/1.1 effectively only gives you the first.
+
+| Kind | Request → Response | Use it for |
+| --- | --- | --- |
+| **Unary** | one → one | ordinary "get / create" calls |
+| **Server streaming** | one → many | a feed, search results, a tail of logs |
+| **Client streaming** | many → one | uploading chunks, then a summary |
+| **Bidirectional** | many ↔ many | chat, live sync, interactive sessions |
+
+In Go, streaming methods hand you a stream object: you loop calling `stream.Send(msg)` and `stream.Recv()` instead of returning a single value.
+
+<Mermaid code={`sequenceDiagram
+  participant C as Client stub<br/>(generated)
+  participant S as Server impl<br/>(your code)
+  Note over C,S: single HTTP/2 connection, multiplexed
+  C->>S: GetTodo(req)  [unary]
+  S-->>C: Todo
+  C->>S: ListTodos(req)  [server stream]
+  S-->>C: Todo (frame 1)
+  S-->>C: Todo (frame 2)
+  S-->>C: Todo (frame 3)`} />
+
+## gRPC vs REST
+
+Reach for **gRPC** for internal, service-to-service traffic where both sides are yours: you get a strongly-typed contract, compact binary payloads, and first-class streaming, all multiplexed over one HTTP/2 connection. Reach for **REST/JSON** when the audience is a browser or a third party — it's human-readable, `curl`-friendly, cacheable by intermediaries, and needs no special client. (Browsers can't speak raw gRPC without a gRPC-Web proxy.)
+
+<Callout type="tip" title="✅ Treat the .proto as an API contract — and evolve it carefully">
+The `.proto` file *is* your API. Check it in, review changes to it like code, and follow the compatibility rules: **never reuse or change a field number**, add new fields with new numbers, and `reserved` the numbers of fields you delete. Add new RPC methods freely, but changing an existing method's request or response type is a breaking change. Get this right and old clients keep working against new servers automatically.
+</Callout>
+
+Next: real-time, full-duplex connections with [WebSockets](/web/websockets/).

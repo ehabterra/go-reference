@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 const { slug, collection = 'patterns', base = '/patterns' } = Astro.props as {
   slug: string;
-  collection?: 'patterns' | 'concurrency' | 'dsa' | 'fundamentals' | 'stdlib';
+  collection?: 'patterns' | 'concurrency' | 'dsa' | 'fundamentals' | 'stdlib' | 'web';
   base?: string;
 };
 const all = (await getCollection(collection)).sort((a, b) => a.data.order - b.data.order);

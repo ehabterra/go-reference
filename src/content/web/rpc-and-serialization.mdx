@@ -1,0 +1,179 @@
+---
+title: "RPC & Serialization"
+category: apis
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "Calling Go functions across a wire — net/rpc and JSON-RPC, plus the serialization choices underneath: gob vs JSON vs protobuf and their trade-offs."
+related:
+  - grpc
+  - encoding-json
+  - websockets
+quiz:
+  - q: "What does serialization (encoding) do?"
+    options:
+      - text: "Converts an in-memory value into a byte stream that can be stored or sent, and back again"
+        correct: true
+      - text: "Encrypts data so it can't be read"
+        correct: false
+      - text: "Compresses files on disk"
+        correct: false
+      - text: "Runs functions on a remote machine"
+        correct: false
+    explain: "Serialization turns a value (a struct, slice, map) into a flat sequence of bytes — for a file or a network — and deserialization rebuilds the value. It is about representation, not secrecy; encryption is a separate concern."
+  - q: "When is encoding/gob the right choice over JSON?"
+    options:
+      - text: "Both ends are Go and you want a fast, compact, self-describing format"
+        correct: true
+      - text: "A browser or another language must read the data"
+        correct: false
+      - text: "You need a human to read the payload"
+        correct: false
+      - text: "You need the smallest possible cross-language wire format"
+        correct: false
+    explain: "gob is Go-specific: it's fast and convenient when both sides are Go programs. For cross-language or browser consumers use JSON (universal, readable); for the most compact cross-language binary use protobuf."
+  - q: "What does net/rpc let you do?"
+    options:
+      - text: "Call a method on a remote Go object almost as if it were local, over a connection"
+        correct: true
+      - text: "Serve a REST API automatically"
+        correct: false
+      - text: "Generate protobuf code"
+        correct: false
+      - text: "Open a WebSocket"
+        correct: false
+    explain: "net/rpc exposes a Go type's eligible methods so a client can invoke them across a connection by name, passing an argument and receiving a reply. It defaults to gob encoding but can use JSON-RPC via net/rpc/jsonrpc."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+**Serialization** is packing a suitcase. Your in-memory value — a struct full of pointers and slices — can't travel as-is; you flatten it into an orderly stream of bytes (pack the case), send or store it, then rebuild the original on the far side (unpack). **RPC** is the courier on top: it packs your arguments, ships them to a remote function, and unpacks the reply — so a call across the network *looks* like a local function call.
+</Callout>
+
+## What serialization is
+
+Every value lives in memory as pointers, headers, and layout the running program understands. To save it to a file or send it across a connection you must turn it into a flat **byte stream** (encode/marshal) and later reconstruct it (decode/unmarshal). Three formats dominate in Go, each a different trade-off:
+
+| Format | Strengths | Weaknesses | Reach for it when |
+| --- | --- | --- | --- |
+| **gob** (`encoding/gob`) | Go-native, fast, compact, self-describing | Go-only | both ends are Go |
+| **JSON** (`encoding/json`) | universal, human-readable, debuggable | larger, slower, text | browsers / cross-language APIs |
+| **protobuf** | smallest, fastest, typed, cross-language | needs a schema + codegen | high-volume polyglot services |
+
+## A gob round-trip, in memory
+
+`gob` is the encoding Go reaches for when both sides are Go. Here's a complete round-trip with **no network at all** — encode a value into a `bytes.Buffer`, decode it straight back, and confirm the value survived. This runs anywhere:
+
+<Playground client:visible title="gob.go" code={`package main
+
+import (
+	"bytes"
+	"encoding/gob"
+	"fmt"
+)
+
+type Point struct {
+	X, Y  int
+	Label string
+	Tags  []string
+}
+
+func main() {
+	original := Point{X: 3, Y: 4, Label: "origin-ish", Tags: []string{"a", "b"}}
+
+	// ENCODE: write the value into an in-memory buffer (no network, no files)
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(original); err != nil {
+		fmt.Println("encode error:", err)
+		return
+	}
+	fmt.Println("encoded bytes:", buf.Len()) // 100
+
+	// DECODE: read it straight back out of the same buffer
+	var decoded Point
+	if err := gob.NewDecoder(&buf).Decode(&decoded); err != nil {
+		fmt.Println("decode error:", err)
+		return
+	}
+
+	fmt.Printf("original: %+v\n", original)
+	fmt.Printf("decoded:  %+v\n", decoded)
+	fmt.Println("round-trip equal:", original.X == decoded.X &&
+		original.Y == decoded.Y &&
+		original.Label == decoded.Label &&
+		len(original.Tags) == len(decoded.Tags))
+}`} />
+
+Swap `gob` for `json` and the code is nearly identical — `json.NewEncoder(&buf).Encode(v)` then `json.NewDecoder(&buf).Decode(&out)` — but you'd get readable text instead of compact binary, at the cost of size and speed.
+
+## net/rpc and JSON-RPC
+
+Go ships an RPC framework in the standard library: `net/rpc`. You register a type whose methods follow one shape — `func (t *T) Method(args A, reply *B) error` — and the server exposes them over a connection. A client then calls `client.Call("T.Method", args, &reply)` and it feels like a local call. By default the wire format is **gob**; `net/rpc/jsonrpc` swaps in **JSON-RPC** so non-Go clients can talk to it.
+
+<Mermaid code={`sequenceDiagram
+  participant C as Client
+  participant E as Encoder (gob / json)
+  participant S as Server (registered methods)
+  C->>E: Call("Arith.Multiply", args, &reply)
+  E->>S: encoded request bytes
+  S->>S: run Multiply(args, reply)
+  S-->>E: encoded reply bytes
+  E-->>C: reply (decoded)`} />
+
+```go
+package main
+
+import (
+	"log"
+	"net"
+	"net/rpc"
+)
+
+type Args struct{ A, B int }
+
+// methods must look like: func (t *T) M(args A, reply *B) error
+type Arith struct{}
+
+func (a *Arith) Multiply(args Args, reply *int) error {
+	*reply = args.A * args.B
+	return nil
+}
+
+func main() {
+	rpc.Register(new(Arith))
+	lis, err := net.Listen("tcp", ":1234") // needs a network — run locally, not in the sandbox
+	if err != nil {
+		log.Fatal(err)
+	}
+	for {
+		conn, err := lis.Accept()
+		if err != nil {
+			continue
+		}
+		go rpc.ServeConn(conn) // each connection in its own goroutine
+	}
+}
+```
+
+A client dials, then calls a registered method by name and gets a typed reply back:
+
+```go
+client, err := rpc.Dial("tcp", "localhost:1234")
+if err != nil {
+	log.Fatal(err)
+}
+var product int
+err = client.Call("Arith.Multiply", Args{A: 6, B: 7}, &product)
+// product == 42
+```
+
+`net/rpc` is Go-to-Go and is in maintenance mode — for new cross-language services prefer [gRPC](/web/grpc/), which gives you the same "call a remote method" feel with a typed contract, streaming, and a polyglot wire format.
+
+<Callout type="gotcha" title="⚠️ Match encoder to decoder, and register your concrete types">
+The cardinal rule of serialization: **both sides must use the same format**. A `gob`-encoded stream is meaningless to a JSON decoder, and vice-versa — there's no auto-detection. With `gob`, when a field is an interface type you must `gob.Register` each concrete type that can appear, or decoding fails at runtime. And gob is **Go-only**: the moment a browser or another language needs to read the payload, switch to JSON or protobuf. Keep the format a deliberate choice, not an accident of whichever encoder you grabbed first.
+</Callout>
+
+Next: persisting data with [database/sql](/web/database-sql/).

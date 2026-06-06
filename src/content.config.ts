@@ -32,6 +32,11 @@ const refSchema = z.object({
     'system',
     'testing',
     'tooling',
+    // networking-&-web categories
+    'net-basics',
+    'http',
+    'apis',
+    'data',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -87,4 +92,9 @@ const stdlib = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa, fundamentals, stdlib };
+const web = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/web' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web };

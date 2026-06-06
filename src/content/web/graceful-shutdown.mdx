@@ -1,0 +1,189 @@
+---
+title: "Graceful Shutdown"
+category: data
+kind: topic
+order: 18
+difficulty: "Intermediate"
+status: ready
+intent: "Catching SIGINT/SIGTERM with signal.NotifyContext, draining in-flight requests via Server.Shutdown, a shutdown timeout, and closing resources in order."
+related:
+  - project-layout-and-di
+  - http-server
+  - context
+quiz:
+  - q: "What's the modern way to turn SIGINT/SIGTERM into a cancellable context?"
+    options:
+      - text: "signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM) — it cancels the context when a signal arrives"
+        correct: true
+      - text: "Poll os.Getenv for a shutdown flag in a loop"
+        correct: false
+      - text: "time.AfterFunc to stop the server after N seconds"
+        correct: false
+      - text: "Catch a panic in main"
+        correct: false
+    explain: "signal.NotifyContext (Go 1.16+) returns a context that is cancelled the first time one of the listed signals is received, plus a stop func to release the handler. You wait on ctx.Done(), then begin shutdown — cleaner than wiring a raw signal channel yourself."
+  - q: "What does http.Server.Shutdown(ctx) do?"
+    options:
+      - text: "Stops accepting new connections and waits for in-flight requests to finish, up to the ctx deadline"
+        correct: true
+      - text: "Kills all connections immediately"
+        correct: false
+      - text: "Restarts the server on a new port"
+        correct: false
+      - text: "Pauses the server until the next request"
+        correct: false
+    explain: "Shutdown gracefully drains: it closes the listeners so no new connections are accepted, then waits for active requests to complete. Pass a context.WithTimeout so draining can't hang forever — if the deadline passes, Shutdown returns and you can force-close. Note ListenAndServe returns http.ErrServerClosed, which is the expected, non-error signal."
+  - q: "What's the correct ordering during shutdown?"
+    options:
+      - text: "Stop accepting new requests, drain in-flight ones, THEN close the database and other resources"
+        correct: true
+      - text: "Close the database first, then drain requests"
+        correct: false
+      - text: "Close everything simultaneously"
+        correct: false
+      - text: "Drain requests, but keep accepting new ones until the deadline"
+        correct: false
+    explain: "Order matters: if you close the database before in-flight requests finish, those requests fail mid-flight. Stop the listener (Server.Shutdown) so no new work arrives, let active handlers complete, and only then close the DB pool, flush logs, and release other resources — outermost-first, like unwinding the stack."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚪 Analogy">
+Graceful shutdown is closing a shop for the night. You **lock the front door** so no new customers enter (stop the listener), but you **let the people already inside finish checking out** (drain in-flight requests) — you don't shove them out mid-purchase. Only once the floor is empty do you **switch off the lights and lock the safe** (close the database). And you give it a deadline: if someone's still browsing at midnight, you usher them out.
+</Callout>
+
+## Signal to context
+
+A modern Go server turns an OS signal into a cancelled context with `signal.NotifyContext`. You wait on `ctx.Done()`, then begin an orderly shutdown:
+
+<Mermaid code={`graph LR
+  SIG["SIGINT / SIGTERM"] --> CTX["signal.NotifyContext<br/>cancels ctx"]
+  CTX --> STOP["1. stop accepting<br/>(Server.Shutdown)"]
+  STOP --> DRAIN["2. drain in-flight<br/>(wait, up to timeout)"]
+  DRAIN --> CLOSE["3. close DB &<br/>resources"]`} />
+
+```go
+func main() {
+	// Cancel ctx on the first SIGINT or SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	srv := &http.Server{Addr: ":8080", Handler: mux}
+
+	// Run the server in its own goroutine so main can wait on the signal.
+	go func() {
+		// ListenAndServe returns ErrServerClosed on graceful shutdown —
+		// that's expected, not a failure.
+		if err := srv.ListenAndServe(); err != nil &&
+			!errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen: %v", err)
+		}
+	}()
+	log.Println("server up on :8080")
+
+	<-ctx.Done() // block until a signal arrives
+	log.Println("shutdown signal received")
+	stop()       // restore default signal handling (a 2nd Ctrl-C now kills)
+
+	gracefulShutdown(srv, db)
+}
+```
+
+## Drain with a timeout, then close in order
+
+`Server.Shutdown(ctx)` stops new connections and waits for active requests — but you must bound the wait with a timeout so a stuck handler can't hang the process forever. Then close the rest, **outermost-first**:
+
+```go
+func gracefulShutdown(srv *http.Server, db *sql.DB) {
+	// Give in-flight requests up to 15s to finish.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// 1 + 2: stop accepting, drain in-flight (returns when drained OR ctx expires).
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("forced shutdown: %v", err) // deadline hit; some requests cut off
+	}
+
+	// 3: now that no requests are running, close downstream resources.
+	if err := db.Close(); err != nil {
+		log.Printf("db close: %v", err)
+	}
+	log.Println("shutdown complete")
+}
+```
+
+The ordering is the whole point: closing `db` **before** `srv.Shutdown` returns would yank the database out from under requests still finishing. Stop the door, empty the floor, *then* turn off the lights.
+
+## Simulate the shutdown sequence
+
+You can model this whole dance with a context and a worker that selects on `ctx.Done()` — no real server, no signals, fully deterministic. Quick requests drain; a slow one is aborted when the deadline hits:
+
+<Playground client:visible title="shutdown.go" code={`package main
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+)
+
+// worker simulates an in-flight request. It races its own work against the
+// shutdown deadline: whichever fires first decides the outcome.
+func worker(ctx context.Context, id int, work time.Duration, done chan<- string) {
+	select {
+	case <-time.After(work):
+		done <- fmt.Sprintf("request %d: completed", id)
+	case <-ctx.Done():
+		done <- fmt.Sprintf("request %d: aborted (%v)", id, ctx.Err())
+	}
+}
+
+func main() {
+	// In a real server this ctx is cancelled by signal.NotifyContext on
+	// SIGINT/SIGTERM, then Server.Shutdown drains within a timeout. Here we
+	// simulate only the shutdown DEADLINE with a timeout: no signals, no
+	// network, fully deterministic.
+	const drainTimeout = 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+
+	fmt.Println("1. stop accepting new connections")
+
+	// Two quick requests finish within the window; one slow request outlives
+	// the deadline and is aborted. Wide gaps keep this deterministic.
+	type req struct {
+		id   int
+		work time.Duration
+	}
+	reqs := []req{
+		{1, 10 * time.Millisecond},
+		{2, 20 * time.Millisecond},
+		{3, 10 * time.Second}, // never finishes before the deadline
+	}
+
+	done := make(chan string, len(reqs))
+	for _, r := range reqs {
+		go worker(ctx, r.id, r.work, done)
+	}
+
+	fmt.Println("2. drain in-flight requests:")
+	results := make([]string, 0, len(reqs))
+	for range reqs {
+		results = append(results, <-done)
+	}
+	sort.Strings(results) // deterministic order regardless of scheduling
+	for _, r := range results {
+		fmt.Println("   -", r)
+	}
+
+	fmt.Println("3. close database and other resources")
+	fmt.Println("shutdown complete")
+}`} />
+
+<Callout type="gotcha" title="⚠️ ErrServerClosed is normal; always bound the drain">
+Two things trip people up. **(1)** `ListenAndServe` and `Serve` return `http.ErrServerClosed` after a graceful `Shutdown` — that is the **success** signal, so check `errors.Is(err, http.ErrServerClosed)` and don't treat it as a crash. **(2)** Never call `Shutdown` with a context that has no deadline: a single wedged handler would block forever. Wrap it in [`context.WithTimeout`](/concurrency/context/), and after the deadline accept that some requests get cut off — that's the bargain. Run the real signal/server code locally; the Playground above models the sequence safely in-process.
+</Callout>
+
+Next: head back to the [Networking & Web overview](/web/), or dig into the tool behind all this — [context](/concurrency/context/).

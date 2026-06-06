@@ -148,4 +148,32 @@ export const STDLIB_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Networking-&-web categories (the journey on /web/). */
+export const WEB_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'net-basics',
+    title: 'Sockets & the net Package',
+    blurb:
+      'The wire underneath everything — TCP and UDP with the net package, the Conn interface, and resolving names and addresses.',
+  },
+  {
+    key: 'http',
+    title: 'HTTP',
+    blurb:
+      'The web in net/http — writing servers and handlers, making client requests, routing and middleware, and serving over TLS.',
+  },
+  {
+    key: 'apis',
+    title: 'APIs & Messaging',
+    blurb:
+      'How services talk — JSON REST APIs, gRPC and protobuf, WebSockets for live connections, and Go’s own RPC and serialization.',
+  },
+  {
+    key: 'data',
+    title: 'Databases & Backend',
+    blurb:
+      'Persisting and structuring a service — database/sql, transactions, Postgres and Redis, project layout, and graceful shutdown.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

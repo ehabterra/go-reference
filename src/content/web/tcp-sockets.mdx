@@ -1,0 +1,132 @@
+---
+title: "TCP Sockets"
+category: net-basics
+kind: topic
+order: 1
+difficulty: "Start here"
+status: ready
+intent: "The reliable byte stream — net.Dial and net.Listen, the Conn interface every connection implements, framing, deadlines, and one goroutine per connection."
+related:
+  - udp-sockets
+  - dns-and-addressing
+  - http-server
+quiz:
+  - q: "What does TCP guarantee that UDP does not?"
+    options:
+      - text: "A reliable, ordered byte stream — bytes arrive once, in order, or the connection fails"
+        correct: true
+      - text: "Lower latency"
+        correct: false
+      - text: "Message boundaries are preserved"
+        correct: false
+      - text: "Encryption"
+        correct: false
+    explain: "TCP is a connection-oriented, reliable, ordered stream of bytes. It does NOT preserve message boundaries — one Write can arrive as several Reads and vice versa, so you frame messages yourself. UDP is connectionless and lossy."
+  - q: "What's the idiomatic Go pattern for a TCP server handling many clients?"
+    options:
+      - text: "Accept in a loop and start a goroutine per connection"
+        correct: true
+      - text: "A single thread with a select() syscall over all sockets"
+        correct: false
+      - text: "A fixed thread pool sized to the CPU count"
+        correct: false
+      - text: "One process per connection"
+        correct: false
+    explain: "for { conn, _ := ln.Accept(); go handle(conn) }. Goroutines are cheap, so a goroutine per connection scales to tens of thousands — the runtime multiplexes them onto threads and epoll/kqueue for you."
+  - q: "Why must you frame your own messages over TCP?"
+    options:
+      - text: "TCP is a stream of bytes with no message boundaries, so you delimit (e.g. newline) or length-prefix"
+        correct: true
+      - text: "Because Go's net package is low-level"
+        correct: false
+      - text: "Because TCP drops packets"
+        correct: false
+      - text: "You don't — TCP preserves Write boundaries"
+        correct: false
+    explain: "A single logical message may span multiple TCP segments, and multiple Writes may coalesce. Use a delimiter (bufio.Scanner on '\\n'), a fixed length, or a length prefix to know where one message ends."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📞 Analogy">
+TCP is a phone call: you dial, a circuit opens, and everything you say arrives at the other end in order, exactly once — or the call drops and you both know. UDP (next page) is a postcard: cheap, fire-and-forget, maybe lost. Most of the web rides on the phone call.
+</Callout>
+
+## A reliable byte stream
+
+Go's `net` package models a TCP connection as a `net.Conn` — which is just an `io.Reader` **and** an `io.Writer` with an address and deadlines. A server **listens** and **accepts**; a client **dials**:
+
+<Mermaid code={`graph LR
+  C["client<br/>net.Dial"] -->|"3-way handshake"| S["server<br/>net.Listen + Accept"]
+  C -->|"Write bytes →"| S
+  S -->|"← Write bytes"| C
+  C -.->|"Close"| S`} />
+
+```go
+// server: accept connections, a goroutine each
+ln, err := net.Listen("tcp", ":9000")
+if err != nil { log.Fatal(err) }
+defer ln.Close()
+for {
+	conn, err := ln.Accept()
+	if err != nil { continue }
+	go handle(conn) // one goroutine per connection
+}
+
+// client: dial and use the Conn as a Reader/Writer
+conn, err := net.Dial("tcp", "example.com:9000")
+if err != nil { log.Fatal(err) }
+defer conn.Close()
+fmt.Fprintln(conn, "hello")
+```
+
+## The Conn interface, hands-on
+
+Real sockets need a network, but a `net.Conn` is an *interface* — so we can exercise the exact same Read/Write mechanics **in memory** with `net.Pipe()`, which returns two connected ends. This runs anywhere, no network involved:
+
+<Playground client:visible title="conn.go" code={`package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net"
+)
+
+func main() {
+	// net.Pipe gives two ends of an in-memory connection — the SAME
+	// net.Conn interface a TCP socket implements, with no network at all.
+	server, client := net.Pipe()
+
+	// the "server" side: read one line, write a framed reply, then close
+	go func() {
+		defer server.Close()
+		line, _ := bufio.NewReader(server).ReadString('\n')
+		fmt.Fprintf(server, "echo: %s", line)
+	}()
+
+	// the "client" side: send a request, read until the server closes
+	fmt.Fprintf(client, "hello\n")
+	reply, _ := io.ReadAll(client)
+	fmt.Print(string(reply)) // echo: hello
+	client.Close()
+}`} />
+
+Notice the `\n` framing: TCP gives you a stream, so the reader uses a delimiter to find where the message ends. `bufio.Scanner` is the usual tool for line-delimited protocols.
+
+## Deadlines, not blocking forever
+
+A network read can hang indefinitely. Set deadlines so a slow or dead peer can't wedge a goroutine:
+
+```go
+conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+n, err := conn.Read(buf)
+// a timeout surfaces as a net.Error with err.Timeout() == true
+```
+
+<Callout type="gotcha" title="🔒 Safe-to-run note + the framing trap">
+**These playgrounds run in-process** (`net.Pipe`, no sockets, no real hosts) so they're safe to execute anywhere — the go.dev sandbox blocks real network access regardless. When you run the *fenced* examples locally, bind servers to `localhost`/`:port` you control, never expose a debug server on `0.0.0.0` in production, and always `defer conn.Close()`. The classic bug: assuming one `Write` equals one `Read`. It doesn't — always frame (delimiter or length prefix) and set deadlines.
+</Callout>
+
+Next: the connectionless cousin — [UDP sockets](/web/udp-sockets/).

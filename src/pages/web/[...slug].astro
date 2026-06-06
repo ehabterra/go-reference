@@ -1,0 +1,26 @@
+---
+import { getCollection, render } from 'astro:content';
+import PageLayout from '../../layouts/PageLayout.astro';
+
+export async function getStaticPaths() {
+  const items = await getCollection('web');
+  return items.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<PageLayout
+  entry={entry}
+  collection="web"
+  base="/web"
+  sectionTitle="Networking & Web"
+  sectionHref="/web/"
+  relatedHeading="Related topics"
+  topicLabel="Web"
+>
+  <Content />
+</PageLayout>

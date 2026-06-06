@@ -1,0 +1,123 @@
+---
+title: "Server-Sent Events"
+category: apis
+kind: topic
+order: 11
+difficulty: "Intermediate"
+status: ready
+intent: "One-way push over plain HTTP — the text/event-stream format, flushing events, auto-reconnect with Last-Event-ID, and when SSE beats WebSockets."
+related:
+  - websockets
+  - polling
+  - http-server
+quiz:
+  - q: "How does Server-Sent Events differ from WebSockets?"
+    options:
+      - text: "SSE is one-way (server → client) over a normal long-lived HTTP response; WebSockets are full-duplex over an upgraded connection"
+        correct: true
+      - text: "SSE is binary, WebSockets are text"
+        correct: false
+      - text: "SSE needs a special protocol; WebSockets use HTTP"
+        correct: false
+      - text: "They're identical"
+        correct: false
+    explain: "SSE is server-to-client only, runs over ordinary HTTP (text/event-stream), and the browser's EventSource auto-reconnects. WebSockets are bidirectional but need the Upgrade handshake. For dashboards/feeds/notifications, SSE is simpler."
+  - q: "What is the wire format of an SSE message?"
+    options:
+      - text: "Text lines like `data: hello` terminated by a blank line (\\n\\n)"
+        correct: true
+      - text: "JSON only"
+        correct: false
+      - text: "A binary frame with a length prefix"
+        correct: false
+      - text: "Whatever Content-Type you set"
+        correct: false
+    explain: "Each event is UTF-8 text: optional `event:` and `id:` lines, one or more `data:` lines, then a blank line to dispatch it. Content-Type must be text/event-stream and the server flushes after each event."
+  - q: "Why must an SSE handler call Flush() (http.Flusher) after writing an event?"
+    options:
+      - text: "Otherwise the event sits in the server's buffer instead of being pushed to the client immediately"
+        correct: true
+      - text: "Flush closes the connection"
+        correct: false
+      - text: "Flush is required to set the status code"
+        correct: false
+      - text: "It isn't needed"
+        correct: false
+    explain: "The response stays open and events trickle out over time, so you must flush each one or it buffers. Type-assert the ResponseWriter to http.Flusher and call Flush() after every event."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📻 Analogy">
+Server-Sent Events is a radio broadcast: you tune in once (open one HTTP request), and the station keeps transmitting updates to you for as long as you listen. You can't talk back on that channel — for that you'd phone in (a separate request, or [WebSockets](/web/websockets/)). For live scores, notifications and dashboards, listening is all you need.
+</Callout>
+
+## One connection, many events
+
+The client makes a normal `GET`; the server keeps the response **open** and writes `text/event-stream` frames over time. The browser's built-in `EventSource` parses them and **auto-reconnects** if the link drops:
+
+<Mermaid code={`graph LR
+  C["client<br/>EventSource(/events)"] -->|"GET, stays open"| S["server"]
+  S -->|"data: 1"| C
+  S -->|"data: 2"| C
+  S -->|"data: 3 …"| C`} />
+
+Each event is just text — `data:` lines ended by a blank line; optional `event:` (a name) and `id:` (for resume):
+
+```text
+event: tick
+id: 42
+data: {"price": 101.5}
+
+```
+
+## Stream events from a handler
+
+An SSE handler sets the content type, then writes-and-**flushes** each event. We can run the exact handler in-process and capture the stream it produces:
+
+<Playground client:visible title="sse.go" code={`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+// events streams three SSE frames over one long-lived response.
+func events(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	flusher, _ := w.(http.Flusher) // real servers push each event out now
+	for i := 1; i <= 3; i++ {
+		fmt.Fprintf(w, "event: tick\ndata: %d\n\n", i)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func main() {
+	// run the handler in-process; the recorder captures the event stream
+	rec := httptest.NewRecorder()
+	events(rec, httptest.NewRequest("GET", "/events", nil))
+
+	fmt.Println("content-type:", rec.Header().Get("Content-Type"))
+	fmt.Print(rec.Body.String())
+}`} />
+
+On a real server you'd `select` on `ctx.Done()` (the client left) and a channel of updates, writing an event whenever data arrives — and set the timeouts carefully so the long-lived response isn't killed (see [graceful shutdown](/web/graceful-shutdown/)).
+
+## SSE vs WebSockets vs polling
+
+| | Direction | Transport | Reconnect | Use it for |
+|---|---|---|---|---|
+| **SSE** | server → client | plain HTTP | built-in (`EventSource`) | feeds, notifications, dashboards |
+| **[WebSockets](/web/websockets/)** | full-duplex | HTTP Upgrade | you handle it | chat, games, collaborative editing |
+| **[Polling](/web/polling/)** | client pulls | plain HTTP | n/a | simple, low-frequency updates |
+
+<Callout type="gotcha" title="⚠️ Flush, watch for proxies, and mind the connection budget">
+Forgetting `Flush()` is the #1 SSE bug — events buffer and the client sees nothing. Some proxies buffer `text/event-stream` too; disable it (e.g. `X-Accel-Buffering: no` for nginx). Each SSE client holds an open connection, so a server has a finite budget — bound it and shed load. SSE carries **text only**; base64 or JSON-encode binary. And remember the browser auto-reconnects and replays from `Last-Event-ID`, so make events idempotent or resumable.
+</Callout>
+
+Next: the simplest approach of all — [polling](/web/polling/).

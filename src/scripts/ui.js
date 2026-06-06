@@ -87,6 +87,7 @@ const CAT_COLOR = {
   complexity: '#f59e0b', linear: '#22c55e', 'trees-graphs': '#8b5cf6', algorithms: '#ec4899',
   basics: '#38bdf8', composite: '#14b8a6', 'types-methods': '#d946ef', idioms: '#f43f5e',
   essentials: '#84cc16', system: '#f97316', testing: '#a855f7', tooling: '#0891b2',
+  'net-basics': '#2563eb', http: '#16a34a', apis: '#db2777', data: '#ca8a04',
 };
 
 function fuzzyScore(q, item) {
