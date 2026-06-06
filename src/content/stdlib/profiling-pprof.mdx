@@ -44,6 +44,28 @@ quiz:
       - text: "The block profile only"
         correct: false
     explain: "A leak means goroutines pile up without exiting. The goroutine profile groups all live goroutines by their stack, so a growing count parked at the same blocking call (e.g. a channel receive) pinpoints the leak's source."
+  - q: "In `go tool pprof` top output, what's the difference between flat and cum?"
+    options:
+      - text: "flat = time spent in the function itself; cum = time including everything it called"
+        correct: true
+      - text: "flat = first call, cum = cumulative across runs"
+        correct: false
+      - text: "They're the same number shown twice"
+        correct: false
+      - text: "flat = CPU, cum = memory"
+        correct: false
+    explain: "flat is the leaf cost — work done directly in that function. cum (cumulative) includes the cost of all functions it calls. A high flat marks the real hot spot; a high cum with low flat is just a caller passing time down the stack."
+  - q: "In a heap profile, how do you see total bytes ever allocated (churn) vs memory currently in use?"
+    options:
+      - text: "sample_index=alloc_space for cumulative allocations; inuse_space (the default) for live memory"
+        correct: true
+      - text: "There's only one number"
+        correct: false
+      - text: "Use the CPU profile for allocations"
+        correct: false
+      - text: "alloc_space shows live memory"
+        correct: false
+    explain: "A heap profile carries several sample types. inuse_space/inuse_objects (default) show what's resident now — good for leaks. alloc_space/alloc_objects show everything ever allocated — good for finding churn that pressures the GC even if it's later freed."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -164,5 +186,12 @@ Ten thousand goroutines blocked on the same channel receive means senders vanish
 <Callout type="gotcha" title="🐹 Optimize the proven hot path, then re-measure">
 The profile ranks cost; resist "optimizing" a function that's 2% of the total. Pick the widest flame, change it, and **profile again** to confirm the win — micro-optimizations sometimes move the bottleneck rather than remove it. And profile a realistic workload: a profile of a toy input lies about production. As the proverb goes, premature optimization is the root of much wasted time — pprof is how you make it timely.
 </Callout>
+
+## See also
+
+- [benchmarks](/stdlib/benchmarks/) — the easiest profiling harness (`-cpuprofile`/`-memprofile`).
+- [the race detector](/stdlib/race-detector/) — the other `go test` instrument, for correctness not speed.
+- [GC & stacks](/concurrency/gc-and-stacks/) — what allocation hot spots cost the garbage collector.
+- [the go toolchain](/stdlib/go-toolchain/) — `go tool pprof` and friends.
 
 Next: catching the bugs that only appear under concurrency — [The Race Detector](/stdlib/race-detector/).

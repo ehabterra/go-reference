@@ -1,0 +1,217 @@
+---
+title: "regexp"
+category: essentials
+kind: topic
+order: 2.5
+difficulty: "Beginner"
+status: ready
+intent: "Pattern matching in Go — compile once with MustCompile, match/find/replace, capture groups (named and numbered), the linear-time RE2 engine and what it deliberately can't do (no backreferences), and when plain strings functions are the better tool."
+related:
+  - strings-and-bytes
+  - fmt-and-io
+  - encoding-json
+quiz:
+  - q: "Why prefer regexp.MustCompile at package level over regexp.MatchString inside a hot loop?"
+    options:
+      - text: "Compiling the pattern is the expensive step; MustCompile does it once and the compiled *Regexp is reused (and safe for concurrent use)"
+        correct: true
+      - text: "MatchString gives wrong results in loops"
+        correct: false
+      - text: "MustCompile is the only way to match"
+        correct: false
+      - text: "There's no performance difference"
+        correct: false
+    explain: "MatchString re-compiles the pattern every call. Compile/MustCompile pays that cost once; the returned *Regexp is immutable and goroutine-safe, so you reuse it everywhere. MustCompile panics on a bad pattern — ideal for package-level constants known at build time."
+  - q: "What does FindStringSubmatch return for a pattern with capture groups?"
+    options:
+      - text: "A slice: index 0 is the whole match, indexes 1+ are the captured groups (nil if no match)"
+        correct: true
+      - text: "Only the first captured group"
+        correct: false
+      - text: "A map of group names to values"
+        correct: false
+      - text: "true or false"
+        correct: false
+    explain: "FindStringSubmatch returns []string where [0] is the entire match and [1], [2], … are the parenthesized groups in order. It returns nil when the pattern doesn't match at all."
+  - q: "Go's regexp uses the RE2 engine. What's the key guarantee that gives you?"
+    options:
+      - text: "Linear-time matching — it can't suffer catastrophic backtracking (ReDoS) on adversarial input"
+        correct: true
+      - text: "It supports every PCRE feature including backreferences"
+        correct: false
+      - text: "It's the fastest engine for every pattern"
+        correct: false
+      - text: "It compiles patterns to machine code"
+        correct: false
+    explain: "RE2 runs in time linear in the input length, which is why it categorically avoids the exponential blowup (ReDoS) that backtracking engines hit. The trade-off: no backreferences and no lookaround — features that require backtracking."
+  - q: "You want to check whether a string contains the literal substring \"http\". What should you use?"
+    options:
+      - text: "strings.Contains — a regex is overkill and slower for fixed substrings"
+        correct: true
+      - text: "regexp.MatchString(\"http\", s)"
+        correct: false
+      - text: "regexp.MustCompile(\".*http.*\")"
+        correct: false
+      - text: "You must use a regex for any search"
+        correct: false
+    explain: "For fixed strings, strings.Contains / HasPrefix / Index are simpler and much faster — no compilation, no engine. Reach for regexp only when you need an actual pattern (classes, repetition, alternation, groups)."
+  - q: "What's special about ReplaceAllStringFunc compared to ReplaceAllString?"
+    options:
+      - text: "It calls a function on each match so the replacement can be computed (e.g. uppercase it), not just a fixed template"
+        correct: true
+      - text: "It only replaces the first match"
+        correct: false
+      - text: "It's the only one that supports $1 expansion"
+        correct: false
+      - text: "It mutates the original string"
+        correct: false
+    explain: "ReplaceAllString uses a template where $1, ${name} expand to captured groups. ReplaceAllStringFunc instead runs your func(string) string on each matched substring, so the replacement is dynamic — masking, case-folding, lookups, etc."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔍 Analogy">
+A fixed-string search (`strings.Contains`) asks "is this exact word here?" A **regular expression** asks "is there anything *shaped like this* here?" — a date, an email, a price, a log line. You describe the shape once; the engine scans the text and finds (or extracts, or rewrites) every place that fits. The cost is that you must first *compile* the shape into a matcher — so you do it once and reuse it.
+</Callout>
+
+## Match, compile, reuse
+
+The quick one-shot is `regexp.MatchString(pattern, s)`, but it compiles the pattern every call. In real code you **compile once** with `regexp.Compile` (returns an error) or `regexp.MustCompile` (panics on a bad pattern — perfect for a package-level constant), then reuse the returned `*regexp.Regexp`. It's immutable and safe to share across goroutines.
+
+<Callout type="tip" title="🧪 In real code, write patterns with backticks">
+Go's idiomatic regex literal is a **backtick raw string** — `` regexp.MustCompile(`\d+`) `` — so backslashes are literal and you don't double them. The playgrounds below use double-quoted strings with `\\` purely because the page embeds them; the compiled pattern is identical. Prefer backticks in your own code.
+</Callout>
+
+<Playground client:visible title="match.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"regexp"
+)
+
+// Compiled once, reusable, goroutine-safe.
+var emailRe = regexp.MustCompile("\\b\\w+@\\w+\\.\\w+\\b")
+
+func main() {
+	text := "contact ada@example.com or bob@test.org for help"
+
+	fmt.Println(emailRe.MatchString(text))        // true
+	fmt.Println(emailRe.FindString(text))         // ada@example.com (first match)
+	fmt.Println(emailRe.FindAllString(text, -1))  // [ada@example.com bob@test.org]
+	fmt.Println(emailRe.FindAllString(text, 1))   // [ada@example.com] (limit = 1)
+
+	// Byte offsets of the first match.
+	fmt.Println(emailRe.FindStringIndex(text))    // [8 23]
+}`} />
+
+## Capturing groups
+
+Parentheses create **capture groups** — sub-parts of the match you want to pull out. `FindStringSubmatch` returns a slice where index 0 is the whole match and 1, 2, … are the groups in order. Groups can be **named** with `(?P<name>…)`, and `SubexpNames` maps names to indexes:
+
+<Playground client:visible title="groups.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"regexp"
+)
+
+var dateRe = regexp.MustCompile("(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})")
+
+func main() {
+	m := dateRe.FindStringSubmatch("today is 2026-06-06 ok")
+	fmt.Println(m)    // [2026-06-06 2026 06 06]
+	fmt.Println(m[1]) // 2026 — first group
+
+	// Resolve groups by name.
+	names := dateRe.SubexpNames()
+	for i, val := range m {
+		if names[i] != "" {
+			fmt.Printf("%s = %s\n", names[i], val)
+		}
+	}
+
+	// FindAllStringSubmatch returns one []string per match.
+	all := dateRe.FindAllStringSubmatch("2026-01-02 and 2025-12-25", -1)
+	fmt.Println(len(all), "matches") // 2 matches
+}`} />
+
+## Replacing
+
+Two replacement styles. `ReplaceAllString` uses a **template** where `$1` / `${name}` expand to captured groups. `ReplaceAllStringFunc` runs **your function** on each match, so the replacement can be computed:
+
+<Playground client:visible title="replace.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+func main() {
+	// Template replacement: reorder captured groups.
+	swap := regexp.MustCompile("(\\w+)\\s+(\\w+)")
+	fmt.Println(swap.ReplaceAllString("Ada Lovelace", "$2, $1")) // Lovelace, Ada
+
+	// Functional replacement: mask every digit.
+	digits := regexp.MustCompile("\\d")
+	masked := digits.ReplaceAllStringFunc("card 4012 8888", func(string) string {
+		return "*"
+	})
+	fmt.Println(masked) // card **** ****
+
+	// Uppercase the first letter of each word.
+	firstLetter := regexp.MustCompile("\\b\\w")
+	title := firstLetter.ReplaceAllStringFunc("go is fun", strings.ToUpper)
+	fmt.Println(title) // Go Is Fun
+}`} />
+
+## Under the hood: the RE2 engine
+
+Go's `regexp` is built on **RE2**, and that choice shapes everything. RE2 guarantees matching in time **linear in the length of the input**, no matter how the pattern is written. Backtracking engines (PCRE, Perl, Java, JavaScript) can take *exponential* time on adversarial patterns like `(a+)+$` against a long string of `a`s — the basis of **ReDoS** denial-of-service attacks. RE2 simply cannot do that.
+
+<Mermaid code={String.raw`graph TD
+  P["pattern source"] --> C["compile → NFA/DFA"]
+  C --> R["*regexp.Regexp (immutable, concurrent-safe)"]
+  R --> M["scan input ONCE, left to right"]
+  M --> G["linear time — no catastrophic backtracking (no ReDoS)"]`} />
+
+The price of that guarantee: RE2 **omits features that require backtracking** — there are **no backreferences** (`\1` referring to an earlier group) and **no lookahead/lookbehind** (`(?=…)`, `(?<=…)`). A pattern from another language that uses those won't compile in Go, and you'll need to restructure it (often by capturing and checking in code instead). Everything else — classes, anchors, alternation, repetition, named groups, Unicode classes like `\p{L}` — is supported. Flags go in the pattern: `(?i)` case-insensitive, `(?s)` dot matches newline, `(?m)` multi-line `^`/`$`.
+
+## Syntax cheat sheet
+
+| Pattern | Matches |
+|---|---|
+| `.` | any char (except newline, unless `(?s)`) |
+| `\d` `\w` `\s` | digit / word char / whitespace |
+| `\D` `\W` `\S` | the negations |
+| `[a-z]` `[^0-9]` | char class / negated class |
+| `^` `$` | start / end (of text, or line with `(?m)`) |
+| `\b` | word boundary |
+| `*` `+` `?` | 0+, 1+, 0-or-1 (greedy) |
+| `*?` `+?` | lazy (fewest) versions |
+| `{n}` `{n,}` `{n,m}` | exact / at-least / range repetition |
+| `(…)` | capture group |
+| `(?P<name>…)` | named capture group |
+| `(?:…)` | non-capturing group |
+| `a\|b` | alternation |
+| `(?i)` `(?m)` `(?s)` | case-insensitive / multiline / dotall flags |
+
+## When to reach for regexp — and when not
+
+- **Use a regex** for genuine patterns: validating/extracting emails, dates, log fields, tokenizing, find-and-replace with structure.
+- **Don't use a regex** for fixed substrings — `strings.Contains`, `HasPrefix`, `Index`, `Cut` are simpler and far faster.
+- **Don't parse structured formats** with regex — use `encoding/json`, `encoding/xml`, or a real parser for HTML/JSON/CSV. Regex on nested formats is a famous source of bugs.
+- **Compile once.** A `MustCompile` at package scope beats compiling inside a function called repeatedly.
+
+<Callout type="gotcha" title="⚠️ Compile once; raw strings; no backreferences">
+Three traps. **(1)** Don't call `regexp.MatchString` / `regexp.Compile` inside a loop — hoist a `MustCompile` to package level (the `*Regexp` is concurrent-safe). **(2)** Write patterns with **backtick raw strings** so backslashes are literal — `` `\d+` `` not `"\\d+"`. **(3)** RE2 has **no backreferences or lookaround**; a pattern that relies on them won't compile, so don't copy PCRE/JS regexes blindly. If `Compile` returns an error, your pattern used an unsupported feature or has a syntax mistake.
+</Callout>
+
+## See also
+
+- [strings & bytes](/stdlib/strings-and-bytes/) — fixed-string search and the faster alternative for non-pattern work.
+- [fmt & io](/stdlib/fmt-and-io/) — formatting the values you extract.
+- [encoding/json](/stdlib/encoding-json/) — parse structured data with a real decoder, not a regex.
+
+Next: turning structs into JSON and back — [encoding/json](/stdlib/encoding-json/).

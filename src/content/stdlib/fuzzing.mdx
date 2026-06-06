@@ -44,6 +44,28 @@ quiz:
       - text: "Sets the number of iterations"
         correct: false
     explain: "f.Add provides seed inputs. The fuzzer runs them directly and uses them as a starting point for mutation. Good seeds (edge cases, realistic values) help the fuzzer reach interesting code faster. The arg types must match the f.Fuzz function signature."
+  - q: "When the fuzzer finds a failing input, what happens to it?"
+    options:
+      - text: "It's saved to testdata/fuzz/<FuzzName>/ and becomes a permanent regression case that plain `go test` reruns"
+        correct: true
+      - text: "It's printed once and forgotten"
+        correct: false
+      - text: "It's emailed to you"
+        correct: false
+      - text: "It deletes the fuzz target"
+        correct: false
+    explain: "A crashing input is written under testdata/fuzz/<FuzzName>/ (commit it). After that, even a normal `go test` run replays it as a regular case, so the bug can't silently come back once fixed."
+  - q: "Why run a fuzz target with plain `go test` (no -fuzz) in CI?"
+    options:
+      - text: "Without -fuzz it just runs the seed corpus and saved failing inputs as ordinary fast tests — keeping regressions caught without an open-ended fuzzing session"
+        correct: true
+      - text: "It fuzzes forever, which is what CI wants"
+        correct: false
+      - text: "It does nothing useful"
+        correct: false
+      - text: "It only compiles the target"
+        correct: false
+    explain: "`-fuzz` runs until you stop it, so it's not for normal CI. Plain `go test` executes the f.Add seeds plus everything in testdata/fuzz as quick deterministic cases — so the corpus and past failures guard the code on every run. Schedule real fuzzing separately."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -147,5 +169,12 @@ func main() {
 <Callout type="gotcha" title="⚠️ f.Add types must match f.Fuzz exactly">
 The arguments to `f.Add` must line up — in count, order, and type — with the parameters of the `f.Fuzz` function (after the leading `*testing.T`). If `f.Fuzz` takes `(t *testing.T, in string, n int)`, every seed must be `f.Add("x", 7)`. A mismatch fails at runtime, not compile time. Also note fuzzing only supports a fixed set of argument types (`string`, `[]byte`, the numeric types, `bool`, `rune`/`byte`) — not arbitrary structs.
 </Callout>
+
+## See also
+
+- [table-driven tests](/stdlib/table-driven-tests/) — cover the cases you *know*; fuzz the ones you don't.
+- [testing basics](/stdlib/testing-basics/) — the `*testing.T` your `f.Fuzz` body receives.
+- [benchmarks](/stdlib/benchmarks/) — the third `testing` mode, for speed rather than correctness.
+- [property-style invariants](/fundamentals/errors/) — round-trips and "never panics" are the bread and butter of fuzz properties.
 
 Next: measuring how fast that code actually runs — [benchmarks](/stdlib/benchmarks/).

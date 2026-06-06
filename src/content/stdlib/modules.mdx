@@ -44,6 +44,28 @@ quiz:
       - text: "Deleting a dependency from the build"
         correct: false
     explain: "`replace example.com/lib => ../lib` points an import at a local path (or a fork) instead of the published module — invaluable for testing an unreleased fix. For multi-module local dev, `go work` is now usually cleaner than committing replace lines."
+  - q: "How is go.sum different from a lock file in other ecosystems?"
+    options:
+      - text: "go.mod already pins exact versions (via MVS), so go.sum isn't for resolution — it records cryptographic checksums for tamper detection"
+        correct: true
+      - text: "go.sum chooses which versions to install"
+        correct: false
+      - text: "go.sum is just a cache of downloads"
+        correct: false
+      - text: "There is no difference"
+        correct: false
+    explain: "In npm/pip, the lock file resolves a version range to concrete versions. In Go, go.mod + Minimal Version Selection already make the version set deterministic. go.sum is purely integrity: a checksum per module (and its go.mod) so a tampered or changed download fails the build."
+  - q: "How does Go handle a v2+ (breaking) major version of a module?"
+    options:
+      - text: "The major version is part of the import path — github.com/foo/bar/v2 — so v1 and v2 can coexist"
+        correct: true
+      - text: "It silently upgrades v1 imports to v2"
+        correct: false
+      - text: "v2 replaces v1 everywhere automatically"
+        correct: false
+      - text: "Go doesn't support major versions"
+        correct: false
+    explain: "Semantic Import Versioning puts the major version in the path for v2 and up (.../v2, .../v3). Because the paths differ, a build can depend on both v1 and v2 of a library at once, and a major bump never breaks code that hasn't migrated."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -145,5 +167,11 @@ $ go build -mod=vendor ./...   # build using the vendored copies
 <Callout type="gotcha" title="🐹 Commit go.sum; never edit it by hand">
 `go.sum` is security infrastructure, not noise — commit it so every build verifies the same bytes you did. Don't hand-edit it; let `go mod tidy` and `go get` maintain it. If a checksum mismatch appears, it means a module's contents changed for that version: investigate before you blow it away with `go clean -modcache`. And run `go mod tidy` before every PR so go.mod/go.sum reflect exactly what the code imports.
 </Callout>
+
+## See also
+
+- [the go toolchain](/stdlib/go-toolchain/) — the `go` command that drives all of this.
+- [packages & modules](/fundamentals/packages-and-modules/) — organizing the code inside a module.
+- [profiling with pprof](/stdlib/profiling-pprof/) — the next step once dependencies build and run.
 
 Next: making that code fast — measure first with [Profiling with pprof](/stdlib/profiling-pprof/).

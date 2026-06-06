@@ -44,6 +44,28 @@ quiz:
       - text: "They run without go test"
         correct: false
     explain: "The check is written a single time; each new scenario is just another row in the cases slice. That keeps the assertions consistent and makes the set of inputs easy to read and extend at a glance."
+  - q: "How do you run just one row of a table test from the command line?"
+    options:
+      - text: "go test -run 'TestName/case_name' — subtests are addressable by the parent/sub path (spaces become underscores)"
+        correct: true
+      - text: "You can't target individual table cases"
+        correct: false
+      - text: "go test -case case_name"
+        correct: false
+      - text: "Comment out the other rows"
+        correct: false
+    explain: "Because t.Run names each case as TestName/sub, -run takes a slash-separated regexp: go test -run TestReverse/unicode. The testing package replaces spaces in subtest names with underscores, so quote/escape accordingly."
+  - q: "When might you key the cases by a map instead of a slice — and what's the trade-off?"
+    options:
+      - text: "A map gives unique-named cases and reads cleanly, but iterates in random order, so use a slice when case order matters"
+        correct: true
+      - text: "Maps run the cases in parallel automatically"
+        correct: false
+      - text: "Maps are always preferred"
+        correct: false
+      - text: "Slices can't hold structs"
+        correct: false
+    explain: "map[string]struct{...} makes the name the key (enforcing uniqueness and dropping a 'name' field), but Go randomizes map iteration, so cases run in no fixed order. A slice preserves order — pick it when one case should run before another, or for deterministic output."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -166,5 +188,35 @@ for _, tc := range cases {
 <Callout type="gotcha" title="⚠️ The loop-variable trap (and why it's gone)">
 With parallel subtests on **Go 1.21 and earlier**, every closure captured the *same* `tc`, so by the time the parallel subtests ran, all of them saw the **last** case. The fix was a `tc := tc` copy at the top of the loop. As of **Go 1.22** the `for range` loop variable is scoped per iteration, so this footgun is fixed and the copy is no longer needed — but you'll still see `tc := tc` in older code, and it does no harm.
 </Callout>
+
+## Slice vs map tables
+
+A **slice** of cases preserves order and lets cases share a `name` field — the default choice. A **map** keyed by name enforces unique names and reads a little cleaner, at the cost of random iteration order:
+
+```go
+// Map-keyed: the key is the case name; iteration order is random.
+cases := map[string]struct {
+	input, want string
+}{
+	"empty":  {"", ""},
+	"word":   {"abc", "cba"},
+	"unicode": {"héllo", "olléh"},
+}
+for name, tc := range cases {
+	t.Run(name, func(t *testing.T) {
+		if got := Reverse(tc.input); got != tc.want {
+			t.Errorf("Reverse(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	})
+}
+```
+
+Reach for the slice form when order matters or you want deterministic output; the map form when each case is independent and you value the uniqueness guarantee.
+
+## See also
+
+- [testing basics](/stdlib/testing-basics/) — the `t` toolbox, `t.Run`, `t.Cleanup`, `t.TempDir`.
+- [fuzzing](/stdlib/fuzzing/) — generate inputs automatically once your table covers the known cases.
+- [benchmarks](/stdlib/benchmarks/) — the same row-per-case idea, measured with `b.N`.
 
 Next: throwing random inputs at your code to find the cases you didn't list — [fuzzing](/stdlib/fuzzing/).

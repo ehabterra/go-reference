@@ -44,6 +44,28 @@ quiz:
       - text: "It imports a C library"
         correct: false
     explain: "The `embed` package with a `//go:embed path` directive over a `string`, `[]byte`, or `embed.FS` variable copies those files into the binary. The result is a single self-contained executable with no loose asset files to ship."
+  - q: "What's the practical difference between `go run .` and `go build`?"
+    options:
+      - text: "go run compiles to a throwaway temp binary and runs it (great for iterating); go build emits a persistent binary you can ship"
+        correct: true
+      - text: "go run is interpreted; go build is compiled"
+        correct: false
+      - text: "go run skips the compiler"
+        correct: false
+      - text: "They are identical"
+        correct: false
+    explain: "Both compile — Go has no interpreter. go run builds to a temporary location, executes it, and discards it, so it's convenient during development. go build writes a real executable to disk for distribution."
+  - q: "Why is gofmt deliberately not configurable?"
+    options:
+      - text: "One canonical format ends style debates and makes every diff about logic, not whitespace — all tools and editors apply the same rules"
+        correct: true
+      - text: "Because configuring it would be slow"
+        correct: false
+      - text: "It actually is configurable via .gofmtrc"
+        correct: false
+      - text: "To save binary size"
+        correct: false
+    explain: "Go's designers chose a single, opinionated format on purpose. Because gofmt has no options, every Go codebase looks the same, code review never argues about braces, and diffs show only meaningful changes."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -170,5 +192,12 @@ app-linux: ELF 64-bit LSB executable, x86-64, statically linked
 <Callout type="gotcha" title="🐹 CGO breaks pure cross-compilation">
 The two-env-var trick works because pure-Go code needs no C compiler. The moment a dependency uses **cgo** (e.g. some SQLite or image libraries), cross-compiling needs a C cross-toolchain and `CGO_ENABLED=1`. Setting `CGO_ENABLED=0` forces a pure-Go, fully static build — the usual choice for minimal container images, at the cost of cgo-only packages.
 </Callout>
+
+## See also
+
+- [Modules & Dependencies](/stdlib/modules/) — `go.mod`, `go get`, and the supply chain `go build` resolves.
+- [packages & modules](/fundamentals/packages-and-modules/) — how the code the toolchain compiles is organized.
+- [testing basics](/stdlib/testing-basics/) — `go test` in depth.
+- [profiling with pprof](/stdlib/profiling-pprof/) and [the race detector](/stdlib/race-detector/) — `go tool` and `-race`.
 
 Next: managing the dependencies those builds pull in — [Modules & Dependencies](/stdlib/modules/).

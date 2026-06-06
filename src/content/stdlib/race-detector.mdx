@@ -44,6 +44,28 @@ quiz:
       - text: "Production builds can't be compiled with -race"
         correct: false
     explain: "The detector adds heavy bookkeeping: roughly 2-20x slower and several times the memory. That overhead is acceptable in tests (`go test -race`) where you want coverage, but unacceptable for production throughput. Run it in CI against your test suite instead."
+  - q: "For a simple shared counter, what's the lightest fix for the race?"
+    options:
+      - text: "sync/atomic (e.g. atomic.Int64.Add) — lock-free for a single value; a mutex is for compound state"
+        correct: true
+      - text: "Add a time.Sleep between increments"
+        correct: false
+      - text: "Make the variable global"
+        correct: false
+      - text: "Run with -race in production"
+        correct: false
+    explain: "A single counter is exactly what sync/atomic is for — atomic.Int64.Add(1) is a lock-free read-modify-write. Reach for sync.Mutex when several fields must change together, or a channel to give one goroutine ownership. time.Sleep is never synchronization."
+  - q: "Which go commands accept the -race flag?"
+    options:
+      - text: "go run, go test, go build, and go install — it instruments the binary at build time"
+        correct: true
+      - text: "only go test"
+        correct: false
+      - text: "only go vet"
+        correct: false
+      - text: "none; -race is a separate tool"
+        correct: false
+    explain: "-race is a build-time instrumentation flag, so any command that compiles accepts it: go run -race, go test -race (the common one), go build -race, go install -race. The instrumented binary then detects races as it runs."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -157,5 +179,12 @@ Or follow Go's motto — *don't communicate by sharing memory; share memory by c
 <Callout type="gotcha" title="🐹 No warning is not a proof of safety">
 `-race` only reports races it **actually observes** on the paths a run exercises — it has no false positives, but plenty of false *negatives*. A clean `go test -race` means "no race seen this run," not "race-free forever." Maximize coverage: run it across your whole suite, with realistic concurrency and `-count` to repeat flaky tests. And never ship a `-race` binary to production — the 2-20x slowdown and memory blowup are for testing, not serving.
 </Callout>
+
+## See also
+
+- [race conditions](/concurrency/race-conditions/) — the live, runnable demo and every fix in depth.
+- [the memory model](/concurrency/memory-model/) — the happens-before rules a race violates.
+- [the sync package](/concurrency/sync-package/) and [atomic](/concurrency/atomic/) — the synchronization that removes a race.
+- [profiling with pprof](/stdlib/profiling-pprof/) — the other `go test` instrument.
 
 Next: see the live, runnable race demo and its fixes in [race conditions](/concurrency/race-conditions/), or head back to the [standard library index](/stdlib/).
