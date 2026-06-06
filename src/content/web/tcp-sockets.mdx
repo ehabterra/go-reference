@@ -5,10 +5,10 @@ kind: topic
 order: 1
 difficulty: "Start here"
 status: ready
-intent: "The reliable byte stream — net.Dial and net.Listen, the Conn interface every connection implements, framing, deadlines, and one goroutine per connection."
+intent: "The reliable byte stream — net.Dial and net.Listen, the Conn interface every connection implements (an io.Reader+Writer), framing a byte stream, read/write deadlines and net.Error, and one goroutine per connection."
 related:
   - udp-sockets
-  - dns-and-addressing
+  - framing-and-protocols
   - http-server
 quiz:
   - q: "What does TCP guarantee that UDP does not?"
@@ -44,18 +44,40 @@ quiz:
       - text: "You don't — TCP preserves Write boundaries"
         correct: false
     explain: "A single logical message may span multiple TCP segments, and multiple Writes may coalesce. Use a delimiter (bufio.Scanner on '\\n'), a fixed length, or a length prefix to know where one message ends."
+  - q: "What is a net.Conn, in interface terms?"
+    options:
+      - text: "An io.Reader AND io.Writer (plus Close, addresses, and deadlines), so it plugs into io.Copy, bufio, and json straight away"
+        correct: true
+      - text: "A struct unique to TCP with no shared interface"
+        correct: false
+      - text: "A channel of bytes"
+        correct: false
+      - text: "A wrapper around *os.File only"
+        correct: false
+    explain: "net.Conn embeds io.Reader and io.Writer, so every connection is a stream you can io.Copy, wrap in bufio, or hand to json.NewDecoder — the same plumbing as files. It adds Close, LocalAddr/RemoteAddr, and SetDeadline."
+  - q: "A blocked conn.Read returns an error whose Timeout() is true. What happened, and is it fatal?"
+    options:
+      - text: "A read deadline elapsed — it's a net.Error with Timeout()==true; not fatal, you can retry or extend the deadline"
+        correct: true
+      - text: "The connection was permanently closed; you must reconnect"
+        correct: false
+      - text: "The peer sent malformed data"
+        correct: false
+      - text: "The OS ran out of file descriptors"
+        correct: false
+    explain: "SetReadDeadline makes a stalled Read return a net.Error with Timeout()==true once the deadline passes. The connection is still usable — extend the deadline and read again, or treat it as an idle-timeout and close. Check via errors.As(err, &netErr)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📞 Analogy">
-TCP is a phone call: you dial, a circuit opens, and everything you say arrives at the other end in order, exactly once — or the call drops and you both know. UDP (next page) is a postcard: cheap, fire-and-forget, maybe lost. Most of the web rides on the phone call.
+TCP is a phone call: you dial, a circuit opens, and everything you say arrives at the other end in order, exactly once — or the call drops and you both know. UDP (next pages) is a postcard: cheap, fire-and-forget, maybe lost. Most of the web rides on the phone call.
 </Callout>
 
 ## A reliable byte stream
 
-Go's `net` package models a TCP connection as a `net.Conn` — which is just an `io.Reader` **and** an `io.Writer` with an address and deadlines. A server **listens** and **accepts**; a client **dials**:
+Go's `net` package models a TCP connection as a **`net.Conn`** — which is just an `io.Reader` **and** an `io.Writer` with an address and deadlines bolted on. That single fact is the key to the whole package: because a connection *is* a Reader/Writer, everything that works on [files and buffers](/stdlib/fmt-and-io/) — `io.Copy`, `bufio`, `json.NewDecoder` — works on a socket unchanged. A server **listens** and **accepts**; a client **dials**:
 
 <Mermaid code={String.raw`graph LR
   C["client<br/>net.Dial"] -->|"3-way handshake"| S["server<br/>net.Listen + Accept"]
@@ -113,20 +135,125 @@ func main() {
 	client.Close()
 }`} />
 
-Notice the `\n` framing: TCP gives you a stream, so the reader uses a delimiter to find where the message ends. `bufio.Scanner` is the usual tool for line-delimited protocols.
+## Framing: where does a message end?
+
+TCP is a **stream**, not a sequence of messages. One `Write` of 100 bytes may arrive as two `Read`s of 60 and 40 — or two Writes may coalesce into one Read. So you need **framing**: an agreed rule for where each message ends. The two common rules are a **delimiter** (a newline, say) and a **length prefix**. Here the server `bufio.Scanner`s on newlines and correctly recovers three distinct messages no matter how TCP chunks them — all over an in-memory `net.Pipe`:
+
+<Playground client:visible title="framing.go" code={String.raw`package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net"
+)
+
+func main() {
+	server, client := net.Pipe()
+
+	// server: split the byte stream back into messages on '\n'
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sc := bufio.NewScanner(server)
+		for sc.Scan() {
+			fmt.Printf("message: %q\n", sc.Text())
+		}
+	}()
+
+	// client: three logical messages, newline-framed
+	io.WriteString(client, "alpha\nbravo\n")
+	io.WriteString(client, "charlie\n") // a separate Write — framing still works
+	client.Close()                       // signals EOF; scanner loop ends
+	<-done
+}`} />
+
+For binary protocols a delimiter is fragile (the payload might contain the delimiter byte), so you prefix each message with its length. That pattern — and designing a full protocol with a header and checksum — gets its own page: [framing & custom protocols](/web/framing-and-protocols/).
 
 ## Deadlines, not blocking forever
 
-A network read can hang indefinitely. Set deadlines so a slow or dead peer can't wedge a goroutine:
+A network read can hang indefinitely — a peer that opened a connection and then went silent will park your goroutine forever. **Deadlines** are the fix: they make a stalled `Read`/`Write` return a `net.Error` with `Timeout()==true` once the wall-clock deadline passes. (Deadlines are absolute times, not durations — re-set them before each operation.) `net.Pipe` honors deadlines too, so this runs in-process:
+
+<Playground client:visible title="deadline.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"time"
+)
+
+func main() {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	// No one ever writes to this pipe, so the Read would block forever —
+	// the deadline turns that into a timeout error instead.
+	client.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+
+	buf := make([]byte, 16)
+	_, err := client.Read(buf)
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		fmt.Println("read timed out — peer is idle, connection still usable")
+	} else {
+		fmt.Println("unexpected:", err)
+	}
+}`} />
+
+In real code: `conn.SetDeadline(time.Now().Add(30*time.Second))` for the whole connection, or `SetReadDeadline`/`SetWriteDeadline` separately. A timeout is **not** fatal — extend and retry, or treat it as an idle client and close.
+
+## One goroutine per connection
+
+The idiomatic server is an `Accept` loop that hands each connection to its own goroutine. Goroutines are cheap (a few KB), so this scales to tens of thousands of connections — the [runtime](/concurrency/scheduler/) multiplexes them onto threads and the OS poller for you, no thread pool to size:
 
 ```go
-conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-n, err := conn.Read(buf)
-// a timeout surfaces as a net.Error with err.Timeout() == true
+func handle(conn net.Conn) {
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
+	sc := bufio.NewScanner(conn)
+	for sc.Scan() {
+		line := sc.Text()
+		fmt.Fprintf(conn, "you said: %s\n", line) // echo, framed
+	}
+}
+
+for {
+	conn, err := ln.Accept()
+	if err != nil { return } // listener closed
+	go handle(conn)          // never block the accept loop
+}
 ```
 
+The rule: **never do slow work in the Accept loop itself** — accept, hand off, loop. Any state shared *between* connection goroutines must be synchronized (a [`sync.Mutex`](/concurrency/sync-package/) or a channel).
+
+## Reference
+
+| Need | Call |
+|---|---|
+| Listen for connections | `net.Listen("tcp", ":9000")` |
+| Accept one connection | `ln.Accept()` → `net.Conn` |
+| Dial a server | `net.Dial("tcp", "host:port")` |
+| Dial with a timeout | `net.DialTimeout` / `net.Dialer{Timeout}.DialContext(ctx, …)` |
+| Read/write | it's an `io.Reader`/`io.Writer` (use `bufio`, `io.Copy`, `json`) |
+| Frame messages | `bufio.Scanner` (delimiter) or a length prefix |
+| Cap a stalled op | `conn.SetDeadline` / `SetReadDeadline` / `SetWriteDeadline` |
+| Detect a timeout | `errors.As(err, &netErr); netErr.Timeout()` |
+| Half-close (writer) | `conn.(*net.TCPConn).CloseWrite()` |
+| Close | `conn.Close()` (always `defer` it) |
+
 <Callout type="gotcha" title="🔒 Safe-to-run note + the framing trap">
-**These playgrounds run in-process** (`net.Pipe`, no sockets, no real hosts) so they're safe to execute anywhere — the go.dev sandbox blocks real network access regardless. When you run the *fenced* examples locally, bind servers to `localhost`/`:port` you control, never expose a debug server on `0.0.0.0` in production, and always `defer conn.Close()`. The classic bug: assuming one `Write` equals one `Read`. It doesn't — always frame (delimiter or length prefix) and set deadlines.
+**These playgrounds run in-process** (`net.Pipe`, no sockets, no real hosts) so they're safe anywhere — the go.dev sandbox blocks real network access regardless. When you run the *fenced* examples locally, bind servers to a `localhost`/`:port` you control, never expose a debug server on `0.0.0.0` in production, and always `defer conn.Close()`. The classic bug: assuming one `Write` equals one `Read`. It doesn't — always frame (delimiter or length prefix) and set deadlines so a silent peer can't wedge a goroutine.
 </Callout>
+
+## See also
+
+- [UDP sockets](/web/udp-sockets/) — the connectionless cousin, with message boundaries but no reliability.
+- [framing & custom protocols](/web/framing-and-protocols/) — length-prefix framing and designing a binary protocol on top of a stream.
+- [fmt & io](/stdlib/fmt-and-io/) — the `io.Reader`/`io.Writer` interfaces a `net.Conn` is built on.
+- [the Go scheduler](/concurrency/scheduler/) — why one goroutine per connection scales.
+- [TLS & HTTPS](/web/tls-and-https/) — wrapping a TCP connection in encryption.
 
 Next: the connectionless cousin — [UDP sockets](/web/udp-sockets/).

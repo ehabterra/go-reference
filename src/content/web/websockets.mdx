@@ -44,6 +44,28 @@ quiz:
       - text: "When you need binary frames"
         correct: false
     explain: "SSE is one-way (server → client) over a normal HTTP response, with built-in reconnection and simpler infrastructure. Choose a WebSocket when you genuinely need both directions; choose SSE for one-way feeds and polling for occasional, infrequent checks."
+  - q: "A WebSocket connection is not safe for concurrent writes. How do you broadcast to many clients?"
+    options:
+      - text: "Give each client a send channel and a single write-pump goroutine; a hub fans messages out to those channels"
+        correct: true
+      - text: "Call conn.Write from every goroutine that has a message"
+        correct: false
+      - text: "Lock the global net stack"
+        correct: false
+      - text: "Open one connection per message"
+        correct: false
+    explain: "Two goroutines writing the same conn corrupt frames. The idiomatic design: one goroutine per connection owns its writes (a write-pump) and reads from a per-client buffered channel; a central hub goroutine owns the client set and pushes each broadcast onto every client's channel."
+  - q: "Why must a WebSocket server check the Origin header on the upgrade request?"
+    options:
+      - text: "Without it, a malicious site can open a socket to your server using a logged-in user's cookies (cross-site WebSocket hijacking)"
+        correct: true
+      - text: "Origin sets the message encoding"
+        correct: false
+      - text: "It's required for the 101 status"
+        correct: false
+      - text: "To enable compression"
+        correct: false
+    explain: "The browser sends cookies on the upgrade request, but (unlike fetch) WebSockets aren't constrained by CORS. If you don't verify Origin, any website can script a connection to your server as the victim — CSWSH. Allow-list expected origins (or use your library's origin option)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -144,6 +166,53 @@ if err := conn.Ping(ctx); err != nil {
 
 Pair this with a heartbeat (ping every N seconds) so dead connections are detected promptly instead of lingering and leaking goroutines.
 
+## The broadcast hub, in-process
+
+A chat or live-dashboard server needs to push one message to *every* connected client. Since a connection can't be written from two goroutines, the pattern is: each client has a **buffered send channel** drained by its own write-pump, and a central **hub** fans each broadcast onto every channel. That fan-out is pure goroutines and channels — no socket needed to run it:
+
+<Playground client:visible title="hub.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func main() {
+	// Each connected client gets its own buffered "send" channel —
+	// in a real server, a write-pump goroutine drains it to the socket.
+	names := []string{"alice", "bob", "cleo"}
+	send := map[string]chan string{}
+	for _, n := range names {
+		send[n] = make(chan string, 8)
+	}
+
+	// The hub's job: fan one message out to every client's channel.
+	broadcast := func(msg string) {
+		for _, ch := range send {
+			select {
+			case ch <- msg:
+			default: // slow client: drop or disconnect instead of blocking the hub
+			}
+		}
+	}
+
+	broadcast("welcome")
+	broadcast("live update")
+
+	// Each client independently drains its queue (its write-pump would do this).
+	sort.Strings(names)
+	for _, n := range names {
+		close(send[n])
+		var got []string
+		for m := range send[n] {
+			got = append(got, m)
+		}
+		fmt.Printf("%-6s received: %v\n", n, got)
+	}
+}`} />
+
+The key safety move is the `default` case: if one client's buffer is full (a slow consumer), the hub **doesn't block** the broadcast for everyone else — it drops or disconnects that client. A real hub runs this loop in a single goroutine that owns the client set (so no locks), with `register`/`unregister` channels for joins and leaves.
+
 ## WebSocket vs SSE vs polling
 
 Pick the lightest tool that fits the direction of your data:
@@ -159,5 +228,13 @@ WebSockets are the most capable but also the most to operate (sticky sessions, c
 <Callout type="gotcha" title="⚠️ Concurrency, origins, and timeouts will bite you">
 A WebSocket handler runs in its own goroutine and a connection isn't safe for concurrent writers — funnel all writes through **one goroutine or a channel**, or you'll corrupt frames. Always check the **Origin** header (or use the library's origin option) so a malicious site can't open a socket to your server on a logged-in user's behalf. And since a live socket may stay idle for long stretches, **disable or lengthen the server's read timeout** for the upgraded connection, and rely on **ping/pong** plus a per-message deadline to detect a dead peer instead.
 </Callout>
+
+## See also
+
+- [Server-Sent Events](/web/server-sent-events/) — simpler one-way push over plain HTTP.
+- [polling](/web/polling/) — the lowest-tech option for infrequent updates.
+- [the sync package](/concurrency/sync-package/) and [channels](/concurrency/channels/) — the concurrency behind the hub.
+- [Pub/Sub pattern](/patterns/pub-sub/) — the fan-out broker generalized.
+- [web security](/web/web-security/) — Origin checking and connection limits.
 
 Next: the simpler one-way alternative — [Server-Sent Events](/web/server-sent-events/).

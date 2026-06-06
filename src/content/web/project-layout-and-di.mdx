@@ -44,6 +44,28 @@ quiz:
       - text: "Interfaces disable error handling"
         correct: false
     explain: "Because the Service only knows the interface, you can substitute any implementation: the real SQL-backed store in production, a hand-written in-memory fake in tests. Since Go satisfies interfaces structurally, the fake needs no special registration — it just implements the methods, so tests stay fast and hermetic."
+  - q: "Where should you define an interface in idiomatic Go?"
+    options:
+      - text: "In the consumer package that uses it (define interfaces where they're used), kept small — the producer just returns a concrete type"
+        correct: true
+      - text: "In the package that implements it, exported for everyone"
+        correct: false
+      - text: "In a central interfaces/ package"
+        correct: false
+      - text: "It doesn't matter"
+        correct: false
+    explain: "Go's convention is 'accept interfaces, return structs' and 'define the interface where it's consumed.' The Service package declares the small Store interface it needs; the database package returns a concrete *SQLStore. This keeps interfaces minimal and avoids a producer dictating a fat interface to all callers."
+  - q: "What belongs in cmd/myapp/main.go?"
+    options:
+      - text: "A thin entry point: read config, construct concrete dependencies, wire them together, and start — almost no business logic"
+        correct: true
+      - text: "All the application's business logic"
+        correct: false
+      - text: "The database schema"
+        correct: false
+      - text: "Only a package declaration"
+        correct: false
+    explain: "main is the composition root: it loads config (env/flags), builds the real Store/Service/Server, injects them, and runs. Logic lives in internal/ packages so it's testable; main just wires. One small main per binary under cmd/."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -189,5 +211,13 @@ func main() {
 <Callout type="tip" title="💡 Plain functions beat DI frameworks in Go">
 You almost never need a DI **framework** in Go. Constructor injection plus a `main` that wires things up is enough, stays type-checked at compile time, and reads top-to-bottom with no hidden magic. Define interfaces **where they're used** (in the consumer's package), keep them **small** — often one or two methods — and let the concrete types live near the database or [HTTP layer](/web/rest-apis/). When wiring grows large, a tool like Google's `wire` *generates* the same plain code for you; a runtime reflection container is rarely worth its opacity.
 </Callout>
+
+## See also
+
+- [interfaces](/fundamentals/interfaces/) — structural satisfaction is what makes injection free.
+- [graceful shutdown](/web/graceful-shutdown/) — `main` also owns orderly teardown of what it wired.
+- [CLI tools with flag](/stdlib/cli-with-flag/) — reading config in `main`.
+- [database/sql](/web/database-sql/) — the concrete `Store` you inject behind an interface.
+- [testing basics](/stdlib/testing-basics/) — passing fakes to constructors for fast tests.
 
 Next: stopping the server cleanly when it's time to deploy — [Graceful Shutdown](/web/graceful-shutdown/).

@@ -1,0 +1,260 @@
+---
+title: "Framing & Custom Protocols"
+category: net-basics
+kind: topic
+order: 3.5
+difficulty: "Intermediate"
+status: ready
+intent: "Turning a TCP byte stream into messages — delimiter vs length-prefix framing, encoding/binary and network byte order, io.ReadFull, and designing a header-plus-payload protocol with a version field and checksum."
+related:
+  - tcp-sockets
+  - udp-sockets
+  - rpc-and-serialization
+quiz:
+  - q: "Why is length-prefix framing more robust than a delimiter for binary messages?"
+    options:
+      - text: "A binary payload can contain the delimiter byte; a length prefix says exactly how many bytes to read, so the payload is never misparsed"
+        correct: true
+      - text: "Delimiters are slower to scan"
+        correct: false
+      - text: "Length prefixes compress the data"
+        correct: false
+      - text: "Delimiters don't work over TCP at all"
+        correct: false
+    explain: "A newline (or any delimiter) is fine for text, but binary data may contain that byte anywhere, splitting a message in the wrong place. A length prefix (e.g. a uint32 count) tells the reader exactly how many payload bytes follow, regardless of their contents."
+  - q: "When reading a length-prefixed payload, why use io.ReadFull instead of conn.Read?"
+    options:
+      - text: "Read may return fewer bytes than asked; io.ReadFull loops until it has exactly the requested count (or errors)"
+        correct: true
+      - text: "Read can't read from a net.Conn"
+        correct: false
+      - text: "io.ReadFull is faster"
+        correct: false
+      - text: "There's no difference"
+        correct: false
+    explain: "A single Read on a stream returns whatever bytes are available now — possibly fewer than the buffer length. After you know a message is N bytes, io.ReadFull(conn, buf[:N]) keeps reading until it has all N (or returns an error), so you never process a half-message."
+  - q: "What is 'network byte order'?"
+    options:
+      - text: "Big-endian — the convention for multi-byte integers on the wire; use binary.BigEndian"
+        correct: true
+      - text: "Little-endian, matching x86 CPUs"
+        correct: false
+      - text: "Whatever the sender's CPU uses"
+        correct: false
+      - text: "A compression scheme"
+        correct: false
+    explain: "Network protocols conventionally send multi-byte integers big-endian (most-significant byte first). Pick one byte order explicitly with encoding/binary (binary.BigEndian is the norm) so a big-endian and a little-endian machine agree on the value."
+  - q: "What does binary.Write require of the value you pass it?"
+    options:
+      - text: "A fixed-size value (or slice/array of fixed-size values) — e.g. a struct of uint32/int16, not a string or a slice header"
+        correct: true
+      - text: "Any Go value, including maps and channels"
+        correct: false
+      - text: "Only a []byte"
+        correct: false
+      - text: "A value implementing json.Marshaler"
+        correct: false
+    explain: "encoding/binary works on fixed-size data: the sized integer/float types, bools, and arrays/structs of them. Variable-length data (strings, slices) has no inherent size on the wire, so you frame it yourself — write a length, then the bytes."
+  - q: "Why add a version field to the header of a custom protocol?"
+    options:
+      - text: "So a newer client/server can detect an old peer and stay backward-compatible instead of misreading the bytes"
+        correct: true
+      - text: "To encrypt the payload"
+        correct: false
+      - text: "It's required by TCP"
+        correct: false
+      - text: "To compress the header"
+        correct: false
+    explain: "Protocols evolve. A version byte lets the receiver branch on the format it's actually being sent, so you can change the layout later without every peer breaking. Pair it with a length prefix (framing) and optionally a checksum or message-type field."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+A [TCP](/web/tcp-sockets/) connection is a conveyor belt of bytes with no dividers. **Framing** is putting your goods in labeled boxes so the receiver knows where one item ends and the next begins. A delimiter is a strip of tape between items (fine until an item *contains* tape); a length prefix is a label on each box saying "this one holds N bytes" — unambiguous even for binary cargo.
+</Callout>
+
+## The stream problem
+
+TCP delivers bytes reliably and in order, but it has **no concept of a message**. One `Write` of a 200-byte message might arrive as a 150-byte `Read` then a 50-byte `Read`; two small Writes might be delivered as one Read. So before you can exchange messages you must agree on **framing** — a rule for where each message ends. Two rules dominate: a **delimiter** and a **length prefix**.
+
+<Mermaid code={String.raw`graph TD
+  W["sender: Write(msgA) Write(msgB)"] --> S["TCP byte stream<br/>(boundaries lost)"]
+  S --> D{"framing rule"}
+  D -->|"delimiter (e.g. \\n)"| R1["split on the delimiter byte"]
+  D -->|"length prefix"| R2["read N, then read N bytes"]
+  R1 --> M["recovered: msgA, msgB"]
+  R2 --> M`} />
+
+Delimiter framing is what [`bufio.Scanner`](/stdlib/fmt-and-io/) does on `\n` — perfect for line-based text protocols (HTTP headers, Redis's RESP, SMTP). It breaks the moment the payload can contain the delimiter, which is why binary protocols use a length prefix instead.
+
+## Length-prefix framing
+
+Write the byte count first (as a fixed-size integer), then the payload. The reader reads the count, then reads *exactly* that many bytes. We do it here over an in-memory `bytes.Buffer` — the same bytes you'd write to a `net.Conn`:
+
+<Playground client:visible title="length-prefix.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+)
+
+// writeFrame: uint32 length prefix (big-endian) + payload.
+func writeFrame(w io.Writer, payload []byte) error {
+	if err := binary.Write(w, binary.BigEndian, uint32(len(payload))); err != nil {
+		return err
+	}
+	_, err := w.Write(payload)
+	return err
+}
+
+// readFrame: read the length, then EXACTLY that many bytes.
+func readFrame(r io.Reader) ([]byte, error) {
+	var n uint32
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, n)
+	_, err := io.ReadFull(r, buf) // loops until all n bytes are read
+	return buf, err
+}
+
+func main() {
+	var stream bytes.Buffer
+	writeFrame(&stream, []byte("hello"))
+	writeFrame(&stream, []byte("a longer second message"))
+
+	for {
+		msg, err := readFrame(&stream)
+		if err == io.EOF {
+			break
+		}
+		fmt.Printf("frame: %q\n", msg)
+	}
+}`} />
+
+The crucial line is `io.ReadFull` — a plain `Read` could return fewer bytes than the frame length, and you'd parse a half-message. `ReadFull` loops until it has them all.
+
+## encoding/binary and byte order
+
+Multi-byte integers must be written in an agreed **byte order**. The network convention is **big-endian** (most-significant byte first), exposed as `binary.BigEndian`. Pick one explicitly so machines with different native endianness agree:
+
+<Playground client:visible title="byteorder.go" code={String.raw`package main
+
+import (
+	"encoding/binary"
+	"fmt"
+)
+
+func main() {
+	const v uint32 = 0x01020304
+
+	be := make([]byte, 4)
+	binary.BigEndian.PutUint32(be, v)
+	fmt.Printf("big-endian:    % x\n", be) // 01 02 03 04 (network order)
+
+	le := make([]byte, 4)
+	binary.LittleEndian.PutUint32(le, v)
+	fmt.Printf("little-endian: % x\n", le) // 04 03 02 01
+
+	// read it back
+	fmt.Printf("decoded BE: %#x\n", binary.BigEndian.Uint32(be))
+}`} />
+
+`encoding/binary` only handles **fixed-size** data (sized ints/floats, bools, and arrays/structs of them). Variable-length data — strings, slices — has no inherent wire size, so you frame it: write a length, then the bytes (exactly the pattern above).
+
+## Designing a protocol: header + payload + checksum
+
+A real protocol wraps each message in a small **header**: a version (so the format can evolve), a message type, the payload length (framing), and often a checksum (to catch corruption a layer below TCP missed, e.g. in a proxy). Here's a compact one — `[version:1][type:1][length:4][crc:4][payload:N]` — encoded and decoded end-to-end in memory:
+
+<Playground client:visible title="protocol.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"hash/crc32"
+	"io"
+)
+
+type Header struct {
+	Version uint8
+	Type    uint8
+	Length  uint32
+	CRC     uint32
+}
+
+func writeMessage(w io.Writer, msgType uint8, payload []byte) error {
+	h := Header{Version: 1, Type: msgType, Length: uint32(len(payload)), CRC: crc32.ChecksumIEEE(payload)}
+	if err := binary.Write(w, binary.BigEndian, h); err != nil {
+		return err
+	}
+	_, err := w.Write(payload)
+	return err
+}
+
+func readMessage(r io.Reader) (uint8, []byte, error) {
+	var h Header
+	if err := binary.Read(r, binary.BigEndian, &h); err != nil {
+		return 0, nil, err
+	}
+	payload := make([]byte, h.Length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return 0, nil, err
+	}
+	if crc32.ChecksumIEEE(payload) != h.CRC {
+		return 0, nil, fmt.Errorf("checksum mismatch: data corrupted")
+	}
+	return h.Type, payload, nil
+}
+
+func main() {
+	var conn bytes.Buffer // stands in for a net.Conn
+	writeMessage(&conn, 7, []byte("PING"))
+
+	typ, payload, err := readMessage(&conn)
+	fmt.Printf("type=%d payload=%q err=%v\n", typ, payload, err)
+}`} />
+
+## Serialization: what goes in the payload
+
+Framing decides *where* a message ends; **serialization** decides *what its bytes mean*. Pick by your constraints:
+
+| Format | Size | Speed | Cross-language | Use when |
+|---|---|---|---|---|
+| **JSON** | large | medium | yes | debuggable, web APIs, config |
+| **Protocol Buffers** | small | fast | yes (schema) | high-throughput RPC ([gRPC](/web/grpc/)) |
+| **`encoding/gob`** | small | fast | **Go-only** | Go-to-Go services, quick wins |
+| **Hand-rolled binary** | smallest | fastest | manual | tight control, fixed layouts |
+| **MessagePack / CBOR** | small | fast | yes | JSON-like but binary |
+
+For most services, JSON over a length prefix (or just [HTTP](/web/http-server/)) is the right default; reach for protobuf when the wire size or parse cost shows up in a profile.
+
+## Reference
+
+| Task | Tool |
+|---|---|
+| Line/text framing | `bufio.Scanner` (delimiter) |
+| Binary framing | length prefix + `io.ReadFull` |
+| Write a sized integer | `binary.Write(w, binary.BigEndian, v)` |
+| Read a sized integer | `binary.Read(r, binary.BigEndian, &v)` |
+| Read exactly N bytes | `io.ReadFull(r, buf)` |
+| Checksum a payload | `crc32.ChecksumIEEE(b)` |
+| Go-to-Go serialization | `encoding/gob` |
+| Cross-language, compact | Protocol Buffers |
+
+<Callout type="gotcha" title="⚠️ Read exactly N, bound the length, fix the byte order">
+Three rules for safe framing. **(1)** Always `io.ReadFull` a framed payload — a bare `Read` can return short and leave you parsing half a message. **(2)** **Never trust a length prefix blindly** from an untrusted peer: `make([]byte, n)` with an attacker-chosen `n` is a memory-exhaustion DoS — cap it (`if n > maxFrame { return err }`). **(3)** Pin the byte order (`binary.BigEndian`) on both ends; relying on the host's native order works until a different CPU joins. These playgrounds run fully in-memory, so they're safe to execute anywhere.
+</Callout>
+
+## See also
+
+- [TCP sockets](/web/tcp-sockets/) — the stream these frames travel over.
+- [UDP sockets](/web/udp-sockets/) — datagrams keep boundaries, so no framing needed (but you still design the payload).
+- [RPC & serialization](/web/rpc-and-serialization/) — `net/rpc` and `encoding/gob` build framing in for you.
+- [encoding/json](/stdlib/encoding-json/) — the most common payload format.
+
+Next: serve requests over the network — [the HTTP server](/web/http-server/).

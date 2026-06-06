@@ -44,6 +44,28 @@ quiz:
       - text: "Open a WebSocket"
         correct: false
     explain: "net/rpc exposes a Go type's eligible methods so a client can invoke them across a connection by name, passing an argument and receiving a reply. It defaults to gob encoding but can use JSON-RPC via net/rpc/jsonrpc."
+  - q: "What method shape must a type expose to be served by net/rpc?"
+    options:
+      - text: "func (t *T) Method(args A, reply *B) error — exported, two args (the second a pointer), returning error"
+        correct: true
+      - text: "Any exported method at all"
+        correct: false
+      - text: "func (t *T) Method(ctx context.Context) (B, error)"
+        correct: false
+      - text: "It must implement an Rpc interface"
+        correct: false
+    explain: "net/rpc only registers methods of the form func (t *T) M(args A, reply *B) error: exported method on an exported type, exactly two arguments where the second is a pointer the method fills in, returning a single error. Anything else is silently skipped."
+  - q: "Why does protobuf need a .proto schema and code generation, while gob and JSON don't?"
+    options:
+      - text: "protobuf is schema-driven — protoc generates typed structs and compact field-tagged encoders for cross-language interop; gob/json reflect over Go types at runtime"
+        correct: true
+      - text: "protobuf is written in C"
+        correct: false
+      - text: "gob and JSON aren't really serialization"
+        correct: false
+      - text: "protobuf can't be used from Go"
+        correct: false
+    explain: "Protobuf trades convenience for speed and polyglot reach: you declare messages in a .proto file, run protoc to generate Go (or Python, Java…) types, and the wire format uses numbered fields — tiny and language-neutral. gob and encoding/json instead use reflection over existing Go types at runtime, so no codegen, but Go-only (gob) or larger/text (JSON)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -170,10 +192,56 @@ err = client.Call("Arith.Multiply", Args{A: 6, B: 7}, &product)
 // product == 42
 ```
 
+### A full RPC round-trip, in-process
+
+You don't need a network to see `net/rpc` work — `net.Pipe` gives two connected `net.Conn` ends, so the server and client can talk **in the same process**. This registers a service, serves it on one end, and calls it from the other:
+
+<Playground client:visible title="rpc.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net"
+	"net/rpc"
+)
+
+type Args struct{ A, B int }
+type Arith struct{}
+
+// the required shape: exported method, args + pointer reply, returns error
+func (a *Arith) Multiply(args Args, reply *int) error {
+	*reply = args.A * args.B
+	return nil
+}
+
+func main() {
+	srv := rpc.NewServer()
+	srv.Register(new(Arith))
+
+	serverConn, clientConn := net.Pipe() // two ends, no network
+	go srv.ServeConn(serverConn)         // serve on one end
+
+	client := rpc.NewClient(clientConn)  // client on the other (gob by default)
+	defer client.Close()
+
+	var product int
+	if err := client.Call("Arith.Multiply", Args{A: 6, B: 7}, &product); err != nil {
+		fmt.Println("call error:", err)
+		return
+	}
+	fmt.Println("Arith.Multiply(6, 7) =", product) // 42
+}`} />
+
 `net/rpc` is Go-to-Go and is in maintenance mode — for new cross-language services prefer [gRPC](/web/grpc/), which gives you the same "call a remote method" feel with a typed contract, streaming, and a polyglot wire format.
 
 <Callout type="gotcha" title="⚠️ Match encoder to decoder, and register your concrete types">
 The cardinal rule of serialization: **both sides must use the same format**. A `gob`-encoded stream is meaningless to a JSON decoder, and vice-versa — there's no auto-detection. With `gob`, when a field is an interface type you must `gob.Register` each concrete type that can appear, or decoding fails at runtime. And gob is **Go-only**: the moment a browser or another language needs to read the payload, switch to JSON or protobuf. Keep the format a deliberate choice, not an accident of whichever encoder you grabbed first.
 </Callout>
+
+## See also
+
+- [gRPC](/web/grpc/) — the modern, typed, cross-language successor to `net/rpc`.
+- [encoding/json](/stdlib/encoding-json/) — the universal, human-readable alternative to gob.
+- [framing & custom protocols](/web/framing-and-protocols/) — what RPC frameworks do for you under the hood.
+- [WebSockets](/web/websockets/) — when you need bidirectional streaming instead of request/reply.
 
 Next: persisting data with [database/sql](/web/database-sql/).

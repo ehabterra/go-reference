@@ -5,11 +5,11 @@ kind: topic
 order: 2
 difficulty: "Beginner"
 status: ready
-intent: "Connectionless datagrams in Go — net.ListenPacket, ReadFrom/WriteTo, DialUDP, no handshake or delivery guarantees, and when UDP beats TCP."
+intent: "Connectionless datagrams in Go — net.ListenPacket and ReadFrom/WriteTo, DialUDP, message boundaries with no delivery guarantees, encoding a datagram payload, MTU and fragmentation, and when UDP beats TCP."
 related:
   - tcp-sockets
+  - framing-and-protocols
   - dns-and-addressing
-  - http-server
 quiz:
   - q: "What does UDP NOT provide that TCP does?"
     options:
@@ -44,6 +44,28 @@ quiz:
       - text: "Loading an HTML page over HTTP/1.1"
         correct: false
     explain: "UDP shines when latency matters more than perfect delivery: DNS, real-time games, VoIP, telemetry/metrics, and QUIC (which builds HTTP/3 on UDP). For exact, ordered, must-arrive bytes, use TCP."
+  - q: "Why does a UDP server use ReadFrom rather than Read?"
+    options:
+      - text: "There's no connection, so ReadFrom also returns the sender's address — you need it to reply"
+        correct: true
+      - text: "Read doesn't exist for UDP sockets"
+        correct: false
+      - text: "ReadFrom is faster"
+        correct: false
+      - text: "ReadFrom decrypts the datagram"
+        correct: false
+    explain: "A single UDP socket serves every client — there's no per-connection object. ReadFrom hands back both the bytes and the *net.UDPAddr they came from, so WriteTo can send the reply to the right peer."
+  - q: "Why keep UDP datagrams small (often ≤ ~1400 bytes)?"
+    options:
+      - text: "A datagram larger than the path MTU is IP-fragmented, and losing any fragment drops the whole datagram"
+        correct: true
+      - text: "Go refuses to send datagrams over 1400 bytes"
+        correct: false
+      - text: "Larger datagrams are encrypted differently"
+        correct: false
+      - text: "UDP has a hard 1400-byte limit in the spec"
+        correct: false
+    explain: "If a datagram exceeds the path MTU it's split into IP fragments; if any fragment is lost, the entire datagram is discarded, so loss probability rises sharply. Staying under ~1400 bytes keeps each datagram to a single packet."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -62,10 +84,10 @@ UDP has no handshake and no connection state. You just send a self-contained **d
   C -->|"datagram 2 (may be lost)"| S
   C -->|"datagram 3 (may arrive first)"| S`} />
 
-The server side opens a packet socket with `net.ListenPacket` and loops on `ReadFrom`, which hands back both the bytes **and** the sender's address so you know where to reply:
+The server side opens a packet socket with `net.ListenPacket` and loops on `ReadFrom`, which hands back both the bytes **and** the sender's address so you know where to reply. One socket serves every client — there's no `Accept`, no per-connection goroutine:
 
 ```go
-// server: one socket serves every client — no Accept, no per-conn goroutine
+// server: one socket serves every client
 pc, err := net.ListenPacket("udp", ":9000")
 if err != nil { log.Fatal(err) }
 defer pc.Close()
@@ -75,15 +97,13 @@ for {
 	n, addr, err := pc.ReadFrom(buf)
 	if err != nil { continue }
 	msg := buf[:n]
-	// reply straight back to the sender's address
-	pc.WriteTo([]byte("echo: "), addr)
-	_ = msg
+	pc.WriteTo([]byte("echo: "+string(msg)), addr) // reply to the sender
 }
 ```
 
 ## Sending datagrams from a client
 
-A client can either use `net.Dial("udp", ...)` (which fixes a default peer so you can `Write`/`Read`) or resolve an address and `WriteTo` it explicitly:
+A client can either `net.Dial("udp", ...)` (which pins a default peer so plain `Write`/`Read` work) or resolve an address and `WriteTo` it explicitly. Because there's no connection, a UDP `Read` can block forever waiting for a reply that may never come — **always set a deadline**:
 
 ```go
 // option A: Dial pins a remote — Write/Read use it, but it's still connectionless
@@ -97,14 +117,12 @@ buf := make([]byte, 1500)
 n, _ := conn.Read(buf)
 fmt.Printf("got %d bytes: %s\n", n, buf[:n])
 
-// option B: explicit address + DialUDP / WriteToUDP for ad-hoc destinations
+// option B: explicit address + DialUDP for ad-hoc destinations
 raddr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:9000")
 uc, _ := net.DialUDP("udp", nil, raddr)
 defer uc.Close()
 uc.Write([]byte("ping"))
 ```
-
-Because there's no connection, a UDP `Read` can block forever waiting for a reply that may never come — **always set a deadline**.
 
 ## Parsing a UDP address, in-process
 
@@ -138,6 +156,41 @@ func main() {
 	fmt.Println("v6 port:", v6.Port)     // 53
 }`} />
 
+## Designing a datagram payload
+
+Since each datagram is one self-contained message, *you* decide its bytes. Text is fine, but binary protocols pack a fixed layout with `encoding/binary` — compact and unambiguous. Here we encode a tiny telemetry record and decode it back, exactly what you'd put in a datagram's payload (pure in-memory, no socket):
+
+<Playground client:visible title="datagram.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+)
+
+// A fixed 8-byte datagram payload: [id uint32][temp int16][flags uint16].
+type Reading struct {
+	ID    uint32
+	Temp  int16
+	Flags uint16
+}
+
+func main() {
+	out := Reading{ID: 42, Temp: -120, Flags: 0b101}
+
+	// encode → the bytes you'd hand to WriteTo
+	var buf bytes.Buffer
+	binary.Write(&buf, binary.BigEndian, out)
+	fmt.Printf("datagram: % x  (%d bytes)\n", buf.Bytes(), buf.Len())
+
+	// decode → what the receiver does after ReadFrom
+	var in Reading
+	binary.Read(bytes.NewReader(buf.Bytes()), binary.BigEndian, &in)
+	fmt.Printf("decoded: %+v\n", in)
+}`} />
+
+Because UDP preserves message boundaries, one datagram = one of these records — no framing needed (that's TCP's problem). See [framing & protocols](/web/framing-and-protocols/) for the binary-encoding details.
+
 ## When to choose UDP
 
 Reach for UDP when **latency beats reliability** and a lost packet is cheaper than waiting for a retransmit:
@@ -146,11 +199,31 @@ Reach for UDP when **latency beats reliability** and a lost packet is cheaper th
 - **Real-time games & VoIP** — last week's position is useless, so don't pay to resend it.
 - **Metrics & telemetry** (e.g. StatsD) — dropping the occasional sample is fine.
 - **QUIC / HTTP/3** — builds its own reliability, ordering, and encryption on top of UDP to dodge TCP's head-of-line blocking.
+- **Multicast** — `net.ListenMulticastUDP` sends one datagram to a whole group; TCP can't multicast at all.
 
 Stick with [TCP](/web/tcp-sockets/) when every byte must arrive, in order, intact.
 
+## TCP vs UDP at a glance
+
+| | TCP | UDP |
+|---|---|---|
+| Connection | yes (handshake) | none |
+| Reliability | guaranteed, retransmits | none — may drop |
+| Ordering | in-order | arbitrary |
+| Boundaries | **none** (stream — you frame) | **preserved** (1 write = 1 datagram) |
+| Server model | `Accept` + goroutine per conn | one socket, `ReadFrom` loop |
+| Read API | `Read` | `ReadFrom` (returns sender addr) |
+| Best for | files, APIs, anything exact | DNS, games, VoIP, metrics, QUIC |
+
 <Callout type="gotcha" title="⚠️ No delivery guarantees, and watch the datagram size">
-**The playground above is pure parsing** — no socket, no network — so it's safe anywhere. When you run the *fenced* examples locally, bind to a `localhost`/port you control. Two traps: (1) UDP gives **no** delivery, ordering, or dedup — if your app needs those, you build them or use TCP/QUIC. (2) Keep datagrams small (often ≤ ~1400 bytes) to avoid IP fragmentation; an oversized datagram that fragments is more likely to be dropped wholesale. And always `SetReadDeadline` — a reply may never come.
+**The playgrounds above are pure parsing/encoding** — no socket, no network — so they're safe anywhere. When you run the *fenced* examples locally, bind to a `localhost`/port you control. Two traps: (1) UDP gives **no** delivery, ordering, or dedup — if your app needs those, build them or use TCP/QUIC. (2) Keep datagrams small (often ≤ ~1400 bytes) to avoid IP fragmentation; an oversized datagram that fragments is dropped wholesale if any fragment is lost. And always `SetReadDeadline` — a reply may never come.
 </Callout>
+
+## See also
+
+- [TCP sockets](/web/tcp-sockets/) — the reliable, ordered, connection-based alternative.
+- [framing & custom protocols](/web/framing-and-protocols/) — `encoding/binary` and laying out a binary message.
+- [DNS & addressing](/web/dns-and-addressing/) — DNS is the classic UDP application.
+- [fmt & io](/stdlib/fmt-and-io/) — the Reader/Writer model the `net` package shares.
 
 Next: turning names into addresses — [DNS & addressing](/web/dns-and-addressing/).

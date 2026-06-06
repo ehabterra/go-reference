@@ -1,0 +1,236 @@
+---
+title: "Web Security"
+category: http
+kind: topic
+order: 7.5
+difficulty: "Intermediate"
+status: ready
+intent: "Defensive defaults for Go web services — security headers and HSTS, parameterized queries against SQL injection, html/template auto-escaping against XSS, body-size limits, constant-time secret comparison, and never leaking internal errors."
+related:
+  - tls-and-https
+  - routing-and-middleware
+  - database-sql
+quiz:
+  - q: "What's the correct defense against SQL injection in Go's database/sql?"
+    options:
+      - text: "Parameterized queries with placeholders (db.Query(\"... WHERE id = $1\", id)) — the driver sends values separately from SQL, so input can't become code"
+        correct: true
+      - text: "Escaping quotes in the user input with strings.ReplaceAll"
+        correct: false
+      - text: "Validating that the input is short"
+        correct: false
+      - text: "Running the query inside a transaction"
+        correct: false
+    explain: "Never build SQL by concatenating user input. Placeholders (?, $1, …) make the driver send the query and the values over separate channels, so a value like \"'; DROP TABLE users;--\" is treated as data, not SQL. Manual escaping is error-prone and not a substitute."
+  - q: "Why use html/template instead of text/template (or fmt) to render user data into a page?"
+    options:
+      - text: "html/template context-aware auto-escapes values, neutralizing injected <script> and attribute/URL/JS injection (XSS)"
+        correct: true
+      - text: "It's faster"
+        correct: false
+      - text: "It supports more template functions"
+        correct: false
+      - text: "It compresses the HTML"
+        correct: false
+    explain: "html/template escapes each interpolated value for where it lands (HTML body, attribute, URL, JS), so <script>steal()</script> becomes inert text. text/template and fmt do zero escaping — using them for HTML is a cross-site-scripting hole."
+  - q: "Why return a generic message to the client but log the real error server-side?"
+    options:
+      - text: "Detailed errors (stack traces, SQL, paths) leak internals that help attackers; the client gets \"500 Internal Server Error\" while you keep the detail in logs"
+        correct: true
+      - text: "Logging is faster than responding"
+        correct: false
+      - text: "Clients can't display long errors"
+        correct: false
+      - text: "It's required by HTTP"
+        correct: false
+    explain: "Echoing raw errors back exposes your stack, queries, file paths, and dependency versions — reconnaissance for an attacker. Log the full error internally (with a request ID) and return a generic, non-revealing message and status to the caller."
+  - q: "What does http.MaxBytesReader(w, r.Body, n) protect against?"
+    options:
+      - text: "A client sending a huge body to exhaust server memory — it caps the body at n bytes and errors past that"
+        correct: true
+      - text: "Slow clients (Slowloris)"
+        correct: false
+      - text: "SQL injection"
+        correct: false
+      - text: "Expired TLS certificates"
+        correct: false
+    explain: "Without a limit, decoding an attacker's multi-gigabyte body can OOM the process. MaxBytesReader wraps r.Body so reads fail once n bytes are exceeded, letting you reject oversized payloads. (Slow-header/Slowloris attacks are handled by server ReadHeaderTimeout instead.)"
+  - q: "Why compare a secret token with subtle.ConstantTimeCompare rather than ==?"
+    options:
+      - text: "== / bytes.Equal can short-circuit on the first differing byte, leaking the match length via timing; ConstantTimeCompare takes the same time regardless"
+        correct: true
+      - text: "ConstantTimeCompare is faster"
+        correct: false
+      - text: "== doesn't work on []byte"
+        correct: false
+      - text: "It also hashes the token"
+        correct: false
+    explain: "A normal comparison returns as soon as bytes differ, so an attacker measuring response time can recover a secret byte-by-byte (a timing side-channel). crypto/subtle.ConstantTimeCompare always scans the full length, removing that signal. Use it for tokens, HMACs, and password-hash comparisons."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛡️ Analogy">
+Shipping a web service without these defaults is leaving the doors unlocked because no one's tried them *yet*. Each measure here is a lock: security headers tell the browser what's allowed, parameterized queries stop input becoming commands, auto-escaping defangs injected markup, and constant-time checks stop an attacker picking the lock by listening to the clicks. None is exotic — they're the baseline a service is expected to ship with.
+</Callout>
+
+## Security headers
+
+A few response headers tell the browser how to defend the user: don't sniff content types, don't allow framing (clickjacking), enforce HTTPS, and restrict where scripts may load from. Set them once in a middleware so every response carries them:
+
+<Playground client:visible title="headers.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")            // don't MIME-sniff
+		h.Set("X-Frame-Options", "DENY")                      // no framing (clickjacking)
+		h.Set("Content-Security-Policy", "default-src 'self'") // restrict sources
+		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	})
+	rec := httptest.NewRecorder()
+	secureHeaders(app).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+
+	for _, k := range []string{"X-Content-Type-Options", "X-Frame-Options",
+		"Content-Security-Policy", "Strict-Transport-Security"} {
+		fmt.Printf("%-28s %s\n", k+":", rec.Header().Get(k))
+	}
+}`} />
+
+Send `Strict-Transport-Security` only over HTTPS (it tells browsers to refuse plain HTTP to your host), and tune the CSP to your app — `default-src 'self'` is a strict starting point.
+
+## SQL injection: parameterize, never concatenate
+
+The number-one database vulnerability comes from building SQL with string concatenation. The fix is **placeholders** — the [`database/sql`](/web/database-sql/) driver sends the query and the values separately, so input can never be parsed as SQL:
+
+```go
+// ☠️ NEVER — user input becomes part of the SQL
+q := "SELECT * FROM users WHERE name = '" + name + "'"
+// name = "'; DROP TABLE users;--"  → catastrophe
+
+// ✅ ALWAYS — placeholders; the value travels as data, not code
+row := db.QueryRow("SELECT id, email FROM users WHERE name = $1", name)
+// also: db.Exec("UPDATE users SET email=$1 WHERE id=$2", email, id)
+```
+
+This is *the* rule: parameterize every query that touches external input. Manual quote-escaping is not a substitute — it's a perennial source of bypasses.
+
+## XSS: let html/template escape for you
+
+Rendering user data into HTML with `fmt` or `text/template` lets an attacker inject `<script>`. [`html/template`](/stdlib/templates/) escapes each value for the context it lands in (HTML, attribute, URL, JS) — automatically and correctly:
+
+<Playground client:visible title="escape.go" code={String.raw`package main
+
+import (
+	"html/template"
+	"os"
+)
+
+func main() {
+	t := template.Must(template.New("p").Parse("<p>Hello, {{.}}</p>\n"))
+
+	// Hostile input is neutralized — it renders as inert text, not a script tag.
+	t.Execute(os.Stdout, "<script>steal()</script>")
+	// <p>Hello, &lt;script&gt;steal()&lt;/script&gt;</p>
+}`} />
+
+Don't defeat it by wrapping untrusted data in `template.HTML` — that marks it *trusted* and re-opens the hole.
+
+## Body limits and timeouts
+
+Two cheap protections against resource-exhaustion. Cap the request body so a giant payload can't OOM you, and give the server timeouts so a slow client (Slowloris) can't tie up connections:
+
+```go
+// per-handler: reject bodies over 1 MiB
+r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+	http.Error(w, "request too large or malformed", http.StatusRequestEntityTooLarge)
+	return
+}
+
+// per-server: cap slow connections (see the HTTP server page)
+srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second}
+```
+
+Pair these with per-client [rate limiting](/concurrency/rate-limiting/) middleware to blunt brute-force and flooding.
+
+## Compare secrets in constant time
+
+Comparing an API token or HMAC with `==` (or `bytes.Equal`) returns as soon as two bytes differ — an attacker timing the response can recover the secret byte by byte. `crypto/subtle.ConstantTimeCompare` always scans the full length:
+
+<Playground client:visible title="token.go" code={String.raw`package main
+
+import (
+	"crypto/subtle"
+	"fmt"
+)
+
+// constant-time equality: same duration whether it mismatches at byte 0 or byte 31
+func tokenEqual(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func main() {
+	const secret = "s3cr3t-api-token"
+	fmt.Println("right token:", tokenEqual("s3cr3t-api-token", secret)) // true
+	fmt.Println("wrong token:", tokenEqual("guess", secret))            // false
+}`} />
+
+Use it for tokens, HMAC verification, and password-hash comparisons (though prefer `bcrypt`/`argon2` for passwords, which compare safely for you).
+
+## Don't leak internal errors
+
+An error message echoed to the client can reveal your stack, SQL, file paths, and library versions — free reconnaissance. **Log the detail; return a generic response:**
+
+```go
+if err != nil {
+	log.Printf("query failed (req %s): %v", reqID, err) // full detail in logs
+	http.Error(w, "internal server error", http.StatusInternalServerError) // generic to client
+	return
+}
+```
+
+## Secure-defaults checklist
+
+| Threat | Defense |
+|---|---|
+| MITM / eavesdropping | [TLS](/web/tls-and-https/) with `MinVersion` TLS 1.2+; HSTS header |
+| SQL injection | parameterized queries (placeholders), never concatenation |
+| XSS | `html/template` auto-escaping; strict CSP |
+| Clickjacking | `X-Frame-Options: DENY` / CSP `frame-ancestors` |
+| MIME sniffing | `X-Content-Type-Options: nosniff` |
+| Oversized body (OOM) | `http.MaxBytesReader` |
+| Slowloris | server `ReadHeaderTimeout` / `ReadTimeout` |
+| Brute force / flooding | per-client [rate limiting](/concurrency/rate-limiting/) |
+| Timing attacks on secrets | `subtle.ConstantTimeCompare` |
+| Info leakage | log details, return generic errors |
+| Secrets in code | env/secret store, never hard-coded or committed |
+
+<Callout type="gotcha" title="⚠️ Security is defaults, not an afterthought">
+**These playgrounds run in-process** (recorder, template, byte compare) — no network — so they're safe anywhere. The mindset: assume every input is hostile and every default is insecure until you've set it. The big ones, in order of how often they bite: **parameterize SQL**, **use `html/template`**, **set timeouts and body limits**, **never `InsecureSkipVerify`**, and **never echo raw errors**. This is a defensive baseline, not a substitute for a real security review of code that handles money, auth, or PII.
+</Callout>
+
+## See also
+
+- [TLS & HTTPS](/web/tls-and-https/) — the encryption layer and certificate verification.
+- [routing & middleware](/web/routing-and-middleware/) — where header/rate-limit/recovery middleware lives.
+- [database/sql](/web/database-sql/) — placeholders and safe query patterns in depth.
+- [templates](/stdlib/templates/) — `html/template`'s context-aware escaping.
+- [rate limiting](/concurrency/rate-limiting/) — bounding abusive clients.
+
+Next: structure your endpoints into a clean API — [REST APIs](/web/rest-apis/).

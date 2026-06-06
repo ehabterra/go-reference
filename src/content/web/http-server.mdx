@@ -5,7 +5,7 @@ kind: topic
 order: 4
 difficulty: "Beginner"
 status: ready
-intent: "Serving HTTP in net/http — handlers and HandlerFunc, the ResponseWriter and Request, the default ServeMux, and a production-shaped http.Server."
+intent: "Serving HTTP in net/http — handlers and HandlerFunc, the ResponseWriter and Request, the Go 1.22 method+pattern ServeMux with PathValue, decoding request bodies, and a production-shaped http.Server with timeouts."
 related:
   - http-client
   - routing-and-middleware
@@ -44,6 +44,28 @@ quiz:
       - text: "There's no difference"
         correct: false
     explain: "The default server has no timeouts, so a slow client can hold a connection forever (Slowloris). Construct an http.Server with explicit timeouts and your own mux for real deployments."
+  - q: "In Go 1.22+, how do you register a handler for GET requests to /users/{id} and read the id?"
+    options:
+      - text: "mux.HandleFunc(\"GET /users/{id}\", h); inside h, r.PathValue(\"id\")"
+        correct: true
+      - text: "Parse r.URL.Path with strings.Split manually"
+        correct: false
+      - text: "You need a third-party router; net/http can't do path params"
+        correct: false
+      - text: "mux.Handle(\"/users/:id\", h)"
+        correct: false
+    explain: "Go 1.22's ServeMux understands method+pattern strings like \"GET /users/{id}\" and exposes wildcards via r.PathValue(\"id\"). Method-based matching and path parameters are now built in — no external router needed for common cases."
+  - q: "What's the safe way to decode a JSON request body in a handler?"
+    options:
+      - text: "json.NewDecoder(r.Body).Decode(&v), check the error, then validate — and consider MaxBytesReader to cap the size"
+        correct: true
+      - text: "io.ReadAll then trust the bytes"
+        correct: false
+      - text: "Assume the body is always valid JSON"
+        correct: false
+      - text: "Read r.URL.Query() instead"
+        correct: false
+    explain: "Decode straight from r.Body with a Decoder, always check the error (malformed JSON, wrong types), and validate the result. Wrap the body in http.MaxBytesReader to reject oversized payloads, and set a Content-Type check for strictness."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -55,35 +77,17 @@ An HTTP server is a shop counter. A **handler** is the clerk who serves one cust
 
 ## Handlers all the way down
 
-The whole server is built on one interface — `http.Handler` — with a single method `ServeHTTP(w, r)`. `http.HandlerFunc` lets a plain function satisfy it:
+The whole server is built on one interface — `http.Handler` — with a single method `ServeHTTP(w, r)`. `http.HandlerFunc` lets a plain function satisfy it, which is why you can hand a function to `HandleFunc`:
 
 <Mermaid code={String.raw`graph LR
-  REQ["*http.Request"] --> MUX["ServeMux<br/>(route by path)"]
+  REQ["*http.Request"] --> MUX["ServeMux<br/>(route by method + path)"]
   MUX --> H["Handler.ServeHTTP(w, r)"]
   H --> W["http.ResponseWriter"]
   W --> RES["status + headers + body"]`} />
 
-```go
-func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "hello, world")
-	})
-	// real server (needs a network — run this locally, not in the sandbox):
-	srv := &http.Server{
-		Addr:         ":8080",
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-	log.Fatal(srv.ListenAndServe())
-}
-```
-
 ## Run a handler in-process
 
-You don't need a network to test handler logic — `httptest` drives a handler directly with a recorder. This is exactly how you'd unit-test it, and it runs anywhere:
+You don't need a network to test handler logic — `httptest` drives a handler directly with a **recorder**. This is exactly how you'd unit-test it, and it runs anywhere (the go.dev sandbox has no real network):
 
 <Playground client:visible title="server.go" code={String.raw`package main
 
@@ -112,9 +116,89 @@ func main() {
 	greet(rec, req) // call the handler like any function
 
 	res := rec.Result()
-	fmt.Println("status:", res.StatusCode)            // 200
-	fmt.Println("type:  ", res.Header.Get("Content-Type")) // text/plain
-	fmt.Println("body:  ", rec.Body.String())         // hello, Ada
+	fmt.Println("status:", res.StatusCode)                  // 200
+	fmt.Println("type:  ", res.Header.Get("Content-Type"))  // text/plain
+	fmt.Println("body:  ", rec.Body.String())               // hello, Ada
+}`} />
+
+## Routing with ServeMux
+
+Since **Go 1.22**, the standard `http.ServeMux` matches on **method and path pattern** and supports **path wildcards** — so common routing no longer needs a third-party router. Register `"GET /users/{id}"` and read the wildcard with `r.PathValue("id")`:
+
+<Playground client:visible title="mux.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func main() {
+	mux := http.NewServeMux()
+
+	// method + path pattern with a {id} wildcard (Go 1.22+)
+	mux.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "get user %s", r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /users", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, "created")
+	})
+
+	// drive the mux in-process with a recorder
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/users/42"},
+		{"POST", "/users"},
+		{"DELETE", "/users/42"}, // no route → 405 Method Not Allowed
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		fmt.Printf("%s %-10s -> %d %q\n", tc.method, tc.path, rec.Code, rec.Body.String())
+	}
+}`} />
+
+## Reading the request body
+
+For a JSON API, decode straight from `r.Body` with a `json.Decoder`, **check the error**, and validate. This handler echoes a decoded payload back as JSON — driven in-process by passing a body to `httptest.NewRequest`:
+
+<Playground client:visible title="json.go" code={String.raw`package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+)
+
+type CreateUser struct {
+	Name string "json:\"name\""
+	Age  int    "json:\"age\""
+}
+
+func createUser(w http.ResponseWriter, r *http.Request) {
+	var in CreateUser
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if in.Name == "" {
+		http.Error(w, "name required", http.StatusUnprocessableEntity)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"id": 1, "name": in.Name})
+}
+
+func main() {
+	body := strings.NewReader("{\"name\":\"Ada\",\"age\":36}")
+	req := httptest.NewRequest("POST", "/users", body)
+	rec := httptest.NewRecorder()
+
+	createUser(rec, req)
+	fmt.Println("status:", rec.Code)        // 201
+	fmt.Print("body:   ", rec.Body.String()) // {"id":1,"name":"Ada"}
 }`} />
 
 ## The ResponseWriter, in order
@@ -125,10 +209,51 @@ Write the response in the right sequence — **headers, then status, then body**
 2. `w.WriteHeader(code)` — send the status line (optional; defaults to `200` on first `Write`).
 3. `w.Write(...)` / `fmt.Fprintf(w, ...)` — the body.
 
-Once you've written the body you can't change the status or headers — they're already on the wire.
+Once you've written the body you can't change the status or headers — they're already on the wire. Use `http.Error(w, msg, code)` for a clean error response.
+
+## A production server
+
+Bare `http.ListenAndServe(addr, nil)` has **no timeouts**, so a slow client can hold a connection open forever (the Slowloris attack). In production, build an explicit `http.Server`:
+
+```go
+srv := &http.Server{
+	Addr:              ":8080",
+	Handler:           mux,
+	ReadHeaderTimeout: 5 * time.Second,  // cap slow-header attacks
+	ReadTimeout:       10 * time.Second,
+	WriteTimeout:      30 * time.Second,
+	IdleTimeout:       60 * time.Second,
+}
+log.Fatal(srv.ListenAndServe()) // run locally — needs a real network
+```
+
+Shut it down cleanly with `srv.Shutdown(ctx)` — see [graceful shutdown](/web/graceful-shutdown/).
+
+## Reference
+
+| Task | API |
+|---|---|
+| Define a handler | `func(w http.ResponseWriter, r *http.Request)` |
+| Adapt a func to Handler | `http.HandlerFunc` |
+| Route by method+path | `mux.HandleFunc("GET /users/{id}", h)` |
+| Read a path wildcard | `r.PathValue("id")` |
+| Read a query param | `r.URL.Query().Get("q")` |
+| Read a header | `r.Header.Get("Authorization")` |
+| Decode a JSON body | `json.NewDecoder(r.Body).Decode(&v)` |
+| Cap body size | `http.MaxBytesReader(w, r.Body, n)` |
+| Set status / error | `w.WriteHeader(code)` / `http.Error(w, msg, code)` |
+| Production server | `&http.Server{...timeouts...}` |
 
 <Callout type="gotcha" title="⚠️ Handlers run concurrently; write headers before the body">
-Every request gets its own goroutine, so **any shared state a handler touches must be synchronized** (a [`sync.Mutex`](/concurrency/sync-package/) or a channel) — the [race detector](/stdlib/race-detector/) will catch slips. And the order above is strict: calling `WriteHeader` (or the first `Write`) freezes the status and headers, so set them first. Use `http.Error(w, msg, code)` for clean error responses.
+Every request gets its own goroutine, so **any shared state a handler touches must be synchronized** (a [`sync.Mutex`](/concurrency/sync-package/) or a channel) — the [race detector](/stdlib/race-detector/) will catch slips. The write order is strict: calling `WriteHeader` (or the first `Write`) freezes the status and headers, so set them first. And always give the server timeouts and bound request bodies — the defaults protect you from nothing.
 </Callout>
+
+## See also
+
+- [HTTP client](/web/http-client/) — the other half: making requests.
+- [routing & middleware](/web/routing-and-middleware/) — composing handlers with cross-cutting concerns.
+- [REST APIs](/web/rest-apis/) — handler conventions for JSON resources.
+- [web security](/web/web-security/) — security headers, body limits, and safe defaults.
+- [graceful shutdown](/web/graceful-shutdown/) — draining in-flight requests on exit.
 
 Next: calling other services — [the HTTP client](/web/http-client/).

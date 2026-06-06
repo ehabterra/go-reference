@@ -44,6 +44,28 @@ quiz:
       - text: "Strongly-typed contracts shared across languages"
         correct: false
     explain: "Browsers can't speak raw gRPC (HTTP/2 framing, binary protobuf) without a proxy like gRPC-Web, and curl-friendly JSON is easier for public consumers. gRPC shines for internal, typed, streaming traffic; REST wins for reach and human readability."
+  - q: "Why must you never change or reuse a protobuf field number?"
+    options:
+      - text: "Field numbers identify fields on the wire; reusing one makes new data deserialize into the wrong field on old peers, silently corrupting it"
+        correct: true
+      - text: "protoc refuses to compile duplicate numbers"
+        correct: false
+      - text: "Numbers must be sequential"
+        correct: false
+      - text: "It changes the field's type"
+        correct: false
+    explain: "The encoding is tag-based: the number, not the name, is what's on the wire. Rename a field freely, but a number is its permanent identity. Reusing a deleted field's number makes an old client read new bytes as the old field — so mark removed numbers `reserved`."
+  - q: "What does running gRPC over HTTP/2 give it that REST over HTTP/1.1 lacks?"
+    options:
+      - text: "Multiplexing many concurrent streams over one connection (no head-of-line blocking) and first-class bidirectional streaming"
+        correct: true
+      - text: "Encryption"
+        correct: false
+      - text: "JSON support"
+        correct: false
+      - text: "Caching by browsers"
+        correct: false
+    explain: "HTTP/2 multiplexes independent streams on a single TCP connection, so many in-flight RPCs (including long-lived streams) share one socket without blocking each other. That's what makes gRPC's server/client/bidirectional streaming efficient — HTTP/1.1 effectively gives you only one request per connection at a time."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -183,5 +205,12 @@ Reach for **gRPC** for internal, service-to-service traffic where both sides are
 <Callout type="tip" title="✅ Treat the .proto as an API contract — and evolve it carefully">
 The `.proto` file *is* your API. Check it in, review changes to it like code, and follow the compatibility rules: **never reuse or change a field number**, add new fields with new numbers, and `reserved` the numbers of fields you delete. Add new RPC methods freely, but changing an existing method's request or response type is a breaking change. Get this right and old clients keep working against new servers automatically.
 </Callout>
+
+## See also
+
+- [RPC & serialization](/web/rpc-and-serialization/) — `net/rpc` and the protobuf-vs-gob-vs-JSON trade-off.
+- [REST APIs](/web/rest-apis/) — the JSON/HTTP alternative for public, browser-facing APIs.
+- [framing & protocols](/web/framing-and-protocols/) — the length-prefix/binary ideas protobuf builds on.
+- [WebSockets](/web/websockets/) — browser-friendly bidirectional streaming.
 
 Next: real-time, full-duplex connections with [WebSockets](/web/websockets/).

@@ -44,6 +44,28 @@ quiz:
       - text: "They only work with cgo"
         correct: false
     explain: "database/sql defines the SQL contract but ships zero drivers — you add pgx (which also offers a richer native API beyond database/sql) for Postgres. Redis isn't SQL at all, so there's no stdlib interface; go-redis is the de-facto client. Both are plain go get dependencies."
+  - q: "Beyond caching, what is Redis commonly used for?"
+    options:
+      - text: "Sessions, rate-limiter counters (INCR + EXPIRE), job queues (lists), pub/sub, and leaderboards (sorted sets)"
+        correct: true
+      - text: "Only caching — nothing else"
+        correct: false
+      - text: "As the primary relational database"
+        correct: false
+      - text: "Storing large files"
+        correct: false
+    explain: "Redis's fast in-memory data structures suit many jobs: a session store with TTL, atomic counters for rate limiting (INCR then EXPIRE), simple queues with lists (LPUSH/BRPOP), pub/sub fan-out, and ranked leaderboards with sorted sets. It's a versatile fast path — just never the only copy of durable data."
+  - q: "On a write that changes a cached entity, what keeps the cache from serving stale data?"
+    options:
+      - text: "Write to Postgres first, then invalidate (Del) or update the cached key — with the TTL as a backstop if an invalidation is missed"
+        correct: true
+      - text: "Nothing; the cache fixes itself"
+        correct: false
+      - text: "Write only to Redis"
+        correct: false
+      - text: "Flush the entire cache on every write"
+        correct: false
+    explain: "Cache-aside on writes: update the source of truth (Postgres), then Del the key so the next read repopulates from fresh data (or write the new value through). The TTL is insurance — even if a Del is missed, the stale entry expires. Flushing the whole cache per write throws away all the benefit."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -133,5 +155,12 @@ On a write, update Postgres first, then **invalidate** the cached key (`rdb.Del(
 <Callout type="gotcha" title="⚠️ Redis is not durable, and the cache can lie">
 Treat Redis as **disposable**: it's in-memory, so a restart or eviction can drop keys — never make it your only copy of important data. Two traps follow. **(1)** `redis.Nil` is the sentinel for "key not found," and it is **not** a failure — branch on it, don't bubble it up as an error. **(2)** Caches drift out of sync with the database; always set a TTL and invalidate on writes, and accept that cache-aside trades a little staleness for a lot of speed. Keep credentials in the environment — the DSNs above are placeholders, not real hosts.
 </Callout>
+
+## See also
+
+- [database/sql](/web/database-sql/) — the generic layer pgx plugs into.
+- [SQL transactions](/web/sql-transactions/) — atomic multi-statement writes on Postgres.
+- [project layout & DI](/web/project-layout-and-di/) — inject the pg pool and redis client into your services.
+- [rate limiting](/concurrency/rate-limiting/) — Redis counters as a distributed limiter.
 
 Next: organizing all this into a project you can grow — [Project Layout & Dependency Injection](/web/project-layout-and-di/).
