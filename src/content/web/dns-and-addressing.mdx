@@ -5,7 +5,7 @@ kind: topic
 order: 3
 difficulty: "Beginner"
 status: ready
-intent: "From names to numbers — net.ParseIP, net/netip, SplitHostPort/JoinHostPort, ports, and the net.Resolver that turns hostnames into IPs."
+intent: "From names to numbers — net.ParseIP and net/netip, SplitHostPort/JoinHostPort, CIDR prefixes and subnet membership, and the net.Resolver that turns hostnames into IPs over the network."
 related:
   - tcp-sockets
   - udp-sockets
@@ -44,6 +44,28 @@ quiz:
       - text: "Returns the MAC address of the host"
         correct: false
     explain: "LookupHost (and the methods on net.Resolver) send a query to a DNS server and return the resolved IPs. It hits the network and can be slow or fail — unlike net.ParseIP/SplitHostPort, which are pure local string parsing."
+  - q: "How do you test whether an IP falls inside a subnet like 10.0.0.0/8?"
+    options:
+      - text: "Parse the prefix with netip.ParsePrefix and call prefix.Contains(addr)"
+        correct: true
+      - text: "Compare the two strings with =="
+        correct: false
+      - text: "There's no way without a DNS lookup"
+        correct: false
+      - text: "Subnets aren't representable in Go"
+        correct: false
+    explain: "netip.ParsePrefix(\"10.0.0.0/8\") yields a netip.Prefix; Contains(addr) reports membership. (The older net.ParseCIDR + IPNet.Contains does the same with []byte types.) Useful for allow-lists and classifying private vs public addresses."
+  - q: "A name resolves to several IPs (IPv4 and IPv6). What should your code assume?"
+    options:
+      - text: "Multiple addresses are normal — Dial tries them in order; don't assume exactly one, and pass a context deadline"
+        correct: true
+      - text: "Exactly one IPv4 address is always returned"
+        correct: false
+      - text: "The first address is guaranteed reachable"
+        correct: false
+      - text: "IPv6 is never returned"
+        correct: false
+    explain: "Hosts commonly have both A (IPv4) and AAAA (IPv6) records, sometimes several each. net.Dial walks the list until one connects (Happy Eyeballs). Treat resolution as returning a set, give it a timeout, and don't cache past the TTL."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -102,6 +124,32 @@ func main() {
 
 A few things to notice: `SplitHostPort` strips the IPv6 brackets, `JoinHostPort` puts them back, and ports are always **strings** in these APIs (`"443"`), because a `host:port` literal is text — convert with `strconv.Atoi` only when you need the number.
 
+## Subnets and CIDR prefixes
+
+A **CIDR prefix** like `10.0.0.0/8` describes a range of addresses — essential for allow-lists, firewall rules, and classifying traffic. `net/netip` models it as a `netip.Prefix`, with `Contains` for membership and `Masked` to normalize to the network address. Pure parsing, so it runs anywhere:
+
+<Playground client:visible title="cidr.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/netip"
+)
+
+func main() {
+	prefix := netip.MustParsePrefix("10.0.0.0/8")
+
+	for _, s := range []string{"10.1.2.3", "192.168.0.1", "10.255.255.255"} {
+		ip := netip.MustParseAddr(s)
+		fmt.Printf("%-15s in %s? %v\n", s, prefix, prefix.Contains(ip))
+	}
+
+	// Masked() zeroes the host bits → the canonical network address.
+	p := netip.MustParsePrefix("192.168.5.130/24")
+	fmt.Println("network:", p.Masked()) // 192.168.5.0/24
+
+	// The classic []byte API does the same: net.ParseCIDR + (*IPNet).Contains.
+}`} />
+
 ## Resolving names with DNS
 
 When you actually need to turn a name into IPs, you hit the network. These calls reach a DNS server, so they can be slow or fail — pass a `context.Context` with a deadline. (Shown as fenced examples because they touch the network and won't run in a sandbox.)
@@ -121,10 +169,29 @@ mxs, err := r.LookupMX(ctx, "example.com")     // mail servers
 _ = err
 ```
 
-Most of the time you never call these directly — `net.Dial("tcp", "example.com:443")` and the HTTP client resolve the name for you under the hood.
+Most of the time you never call these directly — `net.Dial("tcp", "example.com:443")` and the HTTP client resolve the name for you under the hood, trying each returned address in turn.
+
+## Reference
+
+| Task | Call |
+|---|---|
+| Parse an IP literal | `netip.ParseAddr` (or `net.ParseIP`) |
+| Parse `host:port` | `netip.ParseAddrPort` (or `net.SplitHostPort`) |
+| Build `host:port` | `net.JoinHostPort(host, port)` |
+| Parse a subnet | `netip.ParsePrefix("10.0.0.0/8")` |
+| Subnet membership | `prefix.Contains(addr)` |
+| Is it private/loopback? | `addr.IsPrivate()` / `addr.IsLoopback()` |
+| Resolve a name → IPs | `net.LookupIP` / `(*net.Resolver).LookupHost(ctx, …)` |
+| MX / CNAME / TXT records | `net.LookupMX` / `LookupCNAME` / `LookupTXT` |
 
 <Callout type="gotcha" title="⚠️ Parsing is local; resolving is a network call">
-**The playground is pure parsing** (no DNS, no socket) so it's safe and deterministic anywhere. The trap is forgetting that `LookupHost`/`Resolver` methods are **network calls**: they can block, time out, or return multiple addresses (IPv4 *and* IPv6). Always pass a `context` with a timeout, expect more than one IP back, and don't cache results forever — DNS records have a TTL and change. For new code, prefer `net/netip` types so addresses stay comparable and allocation-free.
+**The playgrounds are pure parsing** (no DNS, no socket) so they're safe and deterministic anywhere. The trap is forgetting that `LookupHost`/`Resolver` methods are **network calls**: they can block, time out, or return multiple addresses (IPv4 *and* IPv6). Always pass a `context` with a timeout, expect more than one IP back, and don't cache results past their TTL — DNS records change. For new code, prefer `net/netip` types so addresses stay comparable and allocation-free.
 </Callout>
 
-Next: serve requests over the network — [the HTTP server](/web/http-server/).
+## See also
+
+- [TCP sockets](/web/tcp-sockets/) and [UDP sockets](/web/udp-sockets/) — what you do with a resolved address.
+- [HTTP client](/web/http-client/) — resolves names for you; reuses connections per host.
+- [time](/stdlib/time/) — `context.WithTimeout` for bounding a lookup.
+
+Next: turning a byte stream into messages — [framing & custom protocols](/web/framing-and-protocols/).

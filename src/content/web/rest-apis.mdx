@@ -5,7 +5,7 @@ kind: topic
 order: 8
 difficulty: "Intermediate"
 status: ready
-intent: "JSON over HTTP done right — resources and methods, decoding requests and encoding responses, the status codes that matter, and clean error bodies."
+intent: "JSON over HTTP done right — resources and methods, idempotency, decoding/validating requests and encoding responses, the status codes that matter, consistent error envelopes, and versioning."
 related:
   - http-server
   - routing-and-middleware
@@ -44,6 +44,28 @@ quiz:
       - text: "It changes the status code"
         correct: false
     explain: "A predictable error envelope like {\"error\":\"...\"} lets every client decode responses the same way. Set Content-Type: application/json and an accurate status code on errors too."
+  - q: "What does it mean that PUT and DELETE are idempotent but POST is not?"
+    options:
+      - text: "Repeating the same PUT/DELETE leaves the same end state; repeating a POST may create duplicates — so only auto-retry idempotent methods"
+        correct: true
+      - text: "Idempotent methods are faster"
+        correct: false
+      - text: "POST can't be cached"
+        correct: false
+      - text: "Idempotent means the request body is empty"
+        correct: false
+    explain: "PUT /todos/42 (full replace) and DELETE /todos/42 reach the same state no matter how many times you send them. POST /todos creates a new resource each time, so a client/proxy must not blindly retry it. Idempotency is what makes safe retries possible."
+  - q: "A request hits a known path with an unsupported method (e.g. PATCH on a GET-only route). What's the right response?"
+    options:
+      - text: "405 Method Not Allowed — and Go 1.22's ServeMux returns it automatically when only the method doesn't match"
+        correct: true
+      - text: "404 Not Found"
+        correct: false
+      - text: "200 OK with an empty body"
+        correct: false
+      - text: "500 Internal Server Error"
+        correct: false
+    explain: "404 means the resource path doesn't exist; 405 means the path exists but not for that method. Since Go 1.22 the standard mux distinguishes these and returns 405 (with an Allow header) when a path matches but the method doesn't."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -61,9 +83,19 @@ A REST API treats your data as **resources** at stable addresses — `/todos`, `
   C["GET /todos/{id}"] --> R3["200 · one  /  404 · missing"]
   D["DELETE /todos/{id}"] --> R4["204 · gone"]`} />
 
-Map each method to the right status: **2xx** success (200 OK, 201 Created, 204 No Content), **4xx** the client's fault (400 Bad Request, 404 Not Found, 409 Conflict, 422 Unprocessable), **5xx** the server's fault (500). Returning the correct code is half of a good API.
+Map each method to the right status: **2xx** success (200 OK, 201 Created, 204 No Content), **4xx** the client's fault (400 Bad Request, 401/403 auth, 404 Not Found, 409 Conflict, 422 Unprocessable), **5xx** the server's fault (500). Returning the correct code is half of a good API.
 
-## A handler, end to end
+| Method | Purpose | Idempotent? | Success |
+|---|---|---|---|
+| `GET` | read | yes (safe) | 200 |
+| `POST` | create | **no** | 201 (+ `Location`) |
+| `PUT` | replace | yes | 200 / 204 |
+| `PATCH` | partial update | no | 200 |
+| `DELETE` | remove | yes | 204 |
+
+Idempotency matters for retries: a client or proxy may safely re-send a `GET`/`PUT`/`DELETE`, but re-sending a `POST` can create duplicates.
+
+## Reading a resource
 
 Decode JSON in, encode JSON out, pick the status — driven in-process so it runs anywhere:
 
@@ -116,10 +148,99 @@ func main() {
 	fmt.Print(rec2.Body.String()) // {"error":"not found"}
 }`} />
 
-A `POST` handler is the mirror image: `json.NewDecoder(r.Body).Decode(&todo)`, validate, store, then `writeJSON(w, 201, todo)`.
+## Creating a resource
+
+A `POST` handler is the mirror image: **decode, validate, store, 201**. Validation is non-optional — `Decode` happily accepts partial or unexpected JSON, so check the result and return `422` on bad input. Set a `Location` header pointing at the new resource:
+
+<Playground client:visible title="create.go" code={String.raw`package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+)
+
+type Todo struct {
+	ID    int    "json:\"id\""
+	Title string "json:\"title\""
+}
+
+func main() {
+	nextID := 2
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /todos", func(w http.ResponseWriter, r *http.Request) {
+		var in Todo
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, "{\"error\":\"bad json\"}", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(in.Title) == "" { // validate!
+			http.Error(w, "{\"error\":\"title required\"}", http.StatusUnprocessableEntity)
+			return
+		}
+		in.ID = nextID
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Location", fmt.Sprintf("/todos/%d", in.ID))
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(in)
+	})
+
+	// valid create → 201 + Location
+	rec := httptest.NewRecorder()
+	body := strings.NewReader("{\"title\":\"ship it\"}")
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/todos", body))
+	fmt.Println("status:  ", rec.Code)                       // 201
+	fmt.Println("location:", rec.Header().Get("Location"))   // /todos/2
+	fmt.Print("body:    ", rec.Body.String())                // {"id":2,"title":"ship it"}
+
+	// empty title → 422
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, httptest.NewRequest("POST", "/todos", strings.NewReader("{}")))
+	fmt.Println("\nempty title ->", rec2.Code)               // 422
+}`} />
+
+## A consistent error envelope
+
+Pick one error shape and use it everywhere, so clients decode responses uniformly:
+
+```go
+type APIError struct {
+	Error   string `json:"error"`           // machine-stable code or message
+	Detail  string `json:"detail,omitempty"`
+}
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, APIError{Error: msg})
+}
+```
+
+Return it with the matching status (`writeErr(w, 404, "todo not found")`), and never leak internal details — see [web security](/web/web-security/).
+
+## Reference
+
+| Concern | Choice |
+|---|---|
+| Route | `mux.HandleFunc("GET /todos/{id}", h)` |
+| Decode body | `json.NewDecoder(r.Body).Decode(&v)` + validate |
+| Encode response | `json.NewEncoder(w).Encode(v)` with `Content-Type` |
+| Cap body | `http.MaxBytesReader(w, r.Body, n)` |
+| Reject unknown fields | `dec.DisallowUnknownFields()` |
+| Created | `201` + `Location` header |
+| Client error | `400` / `404` / `409` / `422` |
+| Wrong method | `405` (mux automatic) |
+| Versioning | prefix routes (`/v1/...`) |
 
 <Callout type="gotcha" title="⚠️ Validate input, limit the body, version your API">
-Decoding succeeds on partial or unexpected JSON, so **always validate** the decoded value before trusting it. Cap request bodies with `http.MaxBytesReader` so a giant payload can't exhaust memory, and consider `decoder.DisallowUnknownFields()` for strict APIs. Put cross-cutting concerns (auth, logging) in [middleware](/web/routing-and-middleware/), keep handlers thin, and version your routes (`/v1/...`) from day one — it's far easier than migrating clients later.
+Decoding succeeds on partial or unexpected JSON, so **always validate** the decoded value before trusting it. Cap request bodies with `http.MaxBytesReader` so a giant payload can't exhaust memory, and consider `decoder.DisallowUnknownFields()` for strict APIs. Put cross-cutting concerns (auth, logging, recovery) in [middleware](/web/routing-and-middleware/), keep handlers thin, and version your routes (`/v1/...`) from day one — it's far easier than migrating clients later.
 </Callout>
+
+## See also
+
+- [HTTP server](/web/http-server/) — handlers, the mux, `httptest`.
+- [routing & middleware](/web/routing-and-middleware/) — auth, logging, recovery around handlers.
+- [web security](/web/web-security/) — validation, body limits, safe errors.
+- [gRPC](/web/grpc/) — a typed, high-performance alternative to JSON/HTTP.
+- [encoding/json](/stdlib/encoding-json/) — the marshaling underneath.
 
 Next: typed, high-performance APIs with [gRPC](/web/grpc/).

@@ -5,7 +5,7 @@ kind: topic
 order: 5
 difficulty: "Beginner"
 status: ready
-intent: "Calling services with net/http — http.Get, a configured http.Client with timeouts, building requests, checking status, and always closing the body."
+intent: "Calling services with net/http — http.Get vs a configured http.Client with timeouts, building requests and posting JSON, checking status, closing and draining the body, connection reuse via Transport, and context cancellation."
 related:
   - http-server
   - rest-apis
@@ -44,6 +44,28 @@ quiz:
       - text: "Only if you set Client.FailOnError"
         correct: false
     explain: "An error is returned only for transport-level failures (DNS, connection refused, timeout). A 404 or 500 is a perfectly valid HTTP response, so err is nil — always inspect resp.StatusCode (e.g. if resp.StatusCode != http.StatusOK) before trusting the body."
+  - q: "Why reuse a single *http.Client across your whole application?"
+    options:
+      - text: "The Client (via its Transport) pools and reuses TCP/TLS connections; a fresh client per call defeats keep-alive and re-handshakes every time"
+        correct: true
+      - text: "Clients are expensive structs to allocate"
+        correct: false
+      - text: "Only one client is allowed per process"
+        correct: false
+      - text: "It makes requests single-threaded"
+        correct: false
+    explain: "An *http.Client is safe for concurrent use and its Transport keeps an idle-connection pool. Reusing one client lets requests reuse warm TCP+TLS connections (keep-alive). Creating a client per request throws that away and pays the handshake cost every time."
+  - q: "How do you make an in-flight HTTP request cancellable / give it a deadline?"
+    options:
+      - text: "Build it with http.NewRequestWithContext(ctx, ...) where ctx carries a timeout or is cancelled — Do aborts when ctx is done"
+        correct: true
+      - text: "Call resp.Cancel()"
+        correct: false
+      - text: "Set a global os timeout"
+        correct: false
+      - text: "You can't cancel an HTTP request in Go"
+        correct: false
+    explain: "Attach a context.Context with http.NewRequestWithContext. If the context's deadline passes or it's cancelled, client.Do returns promptly with a context error and the connection is torn down — the right way to bound a single call (Client.Timeout bounds the whole round-trip)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -109,7 +131,7 @@ if resp.StatusCode != http.StatusCreated {
 	log.Fatalf("create failed: %s", resp.Status)
 }
 // decode the JSON response straight from the body stream
-var created struct{ ID int `json:"id"` }
+var created struct{ ID int "json:\"id\"" }
 json.NewDecoder(resp.Body).Decode(&created)
 ```
 
@@ -143,26 +165,117 @@ func main() {
 		return
 	}
 
-	// Set headers on the request value.
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "golearn-demo/1.0")
 
-	// Inspect the fully-built request — exactly what would go on the wire.
 	fmt.Println("method:", req.Method)
-	fmt.Println("scheme:", req.URL.Scheme)
 	fmt.Println("host:  ", req.URL.Host)
 	fmt.Println("path:  ", req.URL.Path)
 	fmt.Println("rawq:  ", req.URL.RawQuery)
 	fmt.Println("accept:", req.Header.Get("Accept"))
-	fmt.Println("agent: ", req.Header.Get("User-Agent"))
 
-	// Read decoded params back out of the parsed URL.
 	got := req.URL.Query()
 	fmt.Println("tags:  ", strings.Join(got["tag"], ","))
 }`} />
 
+## Parsing a response in-process
+
+The flip side of building a request is reading a response. `http.ReadResponse` parses a raw HTTP/1.1 response off any `bufio.Reader` — so you can exercise status, header, and body handling with **no network**, exactly as the client does internally:
+
+<Playground client:visible title="response.go" code={String.raw`package main
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+)
+
+func main() {
+	// A raw HTTP/1.1 response, as bytes off the wire.
+	raw := "HTTP/1.1 200 OK\r\n" +
+		"Content-Type: application/json\r\n" +
+		"Content-Length: 17\r\n" +
+		"\r\n" +
+		"{\"id\":1,\"ok\":true}"
+
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw)), nil)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	fmt.Println("status:    ", resp.StatusCode)                 // 200
+	fmt.Println("ok (2xx)?  ", resp.StatusCode/100 == 2)        // true
+	fmt.Println("type:      ", resp.Header.Get("Content-Type")) // application/json
+
+	body, _ := io.ReadAll(resp.Body) // read to EOF, then Close (deferred)
+	fmt.Println("body:      ", string(body))
+}`} />
+
+## Connection reuse and the Transport
+
+An `*http.Client` is safe for concurrent use, and its `Transport` keeps a **pool of idle keep-alive connections**. Reuse one client and requests reuse warm TCP+TLS connections; make a new client per call and you re-handshake every time. The one rule that keeps the pool healthy: **read the body to EOF, then Close it** — a half-read body can't be returned to the pool.
+
+```go
+var client = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+// to discard a body you don't need but still free the connection:
+io.Copy(io.Discard, resp.Body)
+resp.Body.Close()
+```
+
+## Timeouts, cancellation, and retries
+
+Two layers of control: `Client.Timeout` bounds the **whole** round-trip; a `context` on the request bounds (and can cancel) **that one call**. Transport-level failures are `net.Error`s you can inspect for `Timeout()`:
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+defer cancel()
+req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+resp, err := client.Do(req)
+
+var netErr net.Error
+if errors.As(err, &netErr) && netErr.Timeout() {
+	// transient — safe to retry an idempotent GET with backoff
+}
+```
+
+Only retry **idempotent** requests (GET, PUT, DELETE) automatically; retrying a POST may double-create. Use exponential backoff and a cap.
+
+## Reference
+
+| Task | API |
+|---|---|
+| Quick GET (no timeout!) | `http.Get(url)` |
+| Real client | `&http.Client{Timeout: ...}` (reuse it) |
+| Build a request | `http.NewRequestWithContext(ctx, method, url, body)` |
+| Send it | `client.Do(req)` |
+| Set headers | `req.Header.Set(k, v)` |
+| Encode query params | `url.Values{}.Encode()` |
+| Check success | `resp.StatusCode` (non-2xx is **not** an error) |
+| Read body | `io.ReadAll(resp.Body)` / `json.NewDecoder(resp.Body)` |
+| Free the connection | read to EOF + `resp.Body.Close()` |
+| Tune pooling | `&http.Transport{MaxIdleConnsPerHost: ...}` |
+
 <Callout type="gotcha" title="⚠️ Close the body, check the status, set a timeout">
-**The playground only builds a request — it never sends it**, so it's safe and deterministic. Three real-world traps: (1) **Always `defer resp.Body.Close()`** and read it to EOF, or you leak connections. (2) A non-2xx status is **not** a Go error — `err` is nil for a 404/500, so check `resp.StatusCode` yourself. (3) `http.DefaultClient` (and `http.Get`) have **no timeout** — make one `&http.Client{Timeout: ...}` and reuse it across the app so it can pool connections.
+**The playgrounds build/parse in memory — they never hit the network**, so they're safe and deterministic. Three real-world traps: (1) **Always `defer resp.Body.Close()`** and read it to EOF, or you leak connections and lose pooling. (2) A non-2xx status is **not** a Go error — `err` is nil for a 404/500, so check `resp.StatusCode` yourself. (3) `http.DefaultClient` (and `http.Get`) have **no timeout** — make one `&http.Client{Timeout: ...}` and reuse it across the app so it can pool connections.
 </Callout>
 
-Next: structure these calls into a clean API — [REST APIs](/web/rest-apis/).
+## See also
+
+- [HTTP server](/web/http-server/) — the other end of the request.
+- [REST APIs](/web/rest-apis/) — wrapping client calls into a typed API client.
+- [TLS & HTTPS](/web/tls-and-https/) — how the client verifies certificates.
+- [encoding/json](/stdlib/encoding-json/) — decoding the response body.
+- [context](/concurrency/context/) — deadlines and cancellation for a request.
+
+Next: dispatch and cross-cutting concerns — [routing & middleware](/web/routing-and-middleware/).

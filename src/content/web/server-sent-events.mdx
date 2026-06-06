@@ -44,6 +44,28 @@ quiz:
       - text: "It isn't needed"
         correct: false
     explain: "The response stays open and events trickle out over time, so you must flush each one or it buffers. Type-assert the ResponseWriter to http.Flusher and call Flush() after every event."
+  - q: "What is the id: field for, and how does the browser use it on reconnect?"
+    options:
+      - text: "It tags each event; on reconnect EventSource sends the last id back as the Last-Event-ID header so the server can resume from there"
+        correct: true
+      - text: "It's a unique connection identifier"
+        correct: false
+      - text: "It sets the HTTP status code"
+        correct: false
+      - text: "It has no effect"
+        correct: false
+    explain: "Each event can carry id:. The browser remembers the last one and, after an auto-reconnect, sends it as the Last-Event-ID request header. Your handler can read that and replay only events the client missed — so design events to be resumable or idempotent."
+  - q: "An SSE stream works locally but events arrive in bursts (or never) behind nginx. Likely cause?"
+    options:
+      - text: "A proxy is buffering text/event-stream; disable it (e.g. X-Accel-Buffering: no) so events pass through immediately"
+        correct: true
+      - text: "SSE doesn't work behind proxies at all"
+        correct: false
+      - text: "You forgot to set the status code"
+        correct: false
+      - text: "The browser caches events"
+        correct: false
+    explain: "Reverse proxies often buffer responses, which defeats SSE's incremental delivery. Set X-Accel-Buffering: no (nginx) or the proxy's equivalent, ensure no gzip buffering, and keep flushing on the Go side — your Flush() only helps if nothing downstream re-buffers."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -169,5 +191,12 @@ Set timeouts carefully so the long-lived response isn't cut off, and drain clean
 <Callout type="gotcha" title="⚠️ Flush, watch for proxies, and mind the connection budget">
 Forgetting `Flush()` is the #1 SSE bug — events buffer and the client sees nothing. Some proxies buffer `text/event-stream` too; disable it (e.g. `X-Accel-Buffering: no` for nginx). Each SSE client holds an open connection, so a server has a finite budget — bound it and shed load. SSE carries **text only**; base64 or JSON-encode binary. And remember the browser auto-reconnects and replays from `Last-Event-ID`, so make events idempotent or resumable.
 </Callout>
+
+## See also
+
+- [WebSockets](/web/websockets/) — when you need the client to send too.
+- [polling](/web/polling/) — the lowest-tech option for infrequent updates.
+- [Pub/Sub pattern](/patterns/pub-sub/) — the broker that fans updates out to each subscriber.
+- [graceful shutdown](/web/graceful-shutdown/) — draining long-lived streams on exit.
 
 Next: the simplest approach of all — [polling](/web/polling/).

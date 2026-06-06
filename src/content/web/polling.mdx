@@ -44,6 +44,28 @@ quiz:
       - text: "Never — always use WebSockets"
         correct: false
     explain: "Polling needs no special server infrastructure and sails through any HTTP proxy or firewall. For a status that updates every few minutes, a 30-second poll is simpler and more robust than holding open connections."
+  - q: "What does long polling trade away to get near-real-time updates?"
+    options:
+      - text: "It holds an open connection (and a parked goroutine) per waiting client, so concurrency cost rises with client count"
+        correct: true
+      - text: "It can no longer pass through proxies"
+        correct: false
+      - text: "It requires WebSockets"
+        correct: false
+      - text: "It loses ordering"
+        correct: false
+    explain: "Long polling parks each request server-side until data is ready, so every waiting client ties up a connection and a goroutine. That's cheap in Go (goroutines are light) but still bounded — past SSE/WebSocket scale you must cap concurrent waiters and set a timeout so parked requests eventually return."
+  - q: "How can a polling client make 'nothing changed' responses cheap?"
+    options:
+      - text: "Send an ETag/If-None-Match (or a since cursor); the server replies 304 Not Modified with no body when nothing changed"
+        correct: true
+      - text: "Poll faster"
+        correct: false
+      - text: "Use POST instead of GET"
+        correct: false
+      - text: "Disable keep-alive"
+        correct: false
+    explain: "Conditional requests turn an unchanged poll into a tiny 304 Not Modified (no body), saving bandwidth and serialization. The client sends the last ETag in If-None-Match (or a ?since= cursor); the server compares and either returns 304 or the new data with a fresh ETag."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -120,5 +142,12 @@ Reach up the ladder only when you need to: **short polling** → **long polling*
 <Callout type="tip" title="🐹 Boring is a feature">
 Polling has no special server, no held connections (short polling), and no proxy surprises — it just works, everywhere. Add **backoff with jitter** to avoid synchronized stampedes, send a small `ETag`/`If-None-Match` or a `since` cursor so unchanged polls return a cheap `304 Not Modified`, and use a context [timeout](/concurrency/select/) on the client. Don't reach for WebSockets to update a number every minute.
 </Callout>
+
+## See also
+
+- [Server-Sent Events](/web/server-sent-events/) — server push without holding a request open per poll.
+- [WebSockets](/web/websockets/) — full-duplex when you've outgrown polling.
+- [HTTP client](/web/http-client/) — the client side, with timeouts and backoff.
+- [rate limiting](/concurrency/rate-limiting/) — jitter/backoff to avoid the thundering herd.
 
 Next: the wire formats underneath it all — [RPC & Serialization](/web/rpc-and-serialization/).

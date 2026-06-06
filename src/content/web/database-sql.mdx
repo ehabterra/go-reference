@@ -44,6 +44,28 @@ quiz:
       - text: "Re-run the query to confirm it finished"
         correct: false
     explain: "rows.Next() returning false can mean end-of-data OR an error mid-iteration, so you must check rows.Err() afterward. And you must Close() the rows to return the connection to the pool — defer rows.Close() right after the error check. db.Close() shuts the whole pool and is only for program exit."
+  - q: "Why prefer the ...Context query methods (QueryContext, ExecContext) over the plain ones?"
+    options:
+      - text: "If the request's context is cancelled or times out, the query is cancelled too — freeing the connection instead of blocking on a dead client"
+        correct: true
+      - text: "They're faster"
+        correct: false
+      - text: "They auto-retry failed queries"
+        correct: false
+      - text: "They escape the SQL for you"
+        correct: false
+    explain: "Passing the request's context lets a cancelled/timed-out request abort the in-flight query and return its pooled connection, instead of holding it until the DB finishes. Always thread ctx from the handler down to QueryContext/ExecContext/QueryRowContext."
+  - q: "How do you Scan a column that might be NULL into a Go value?"
+    options:
+      - text: "Use a nullable wrapper — sql.NullString / sql.NullInt64 / sql.Null[T] — and check its .Valid field"
+        correct: true
+      - text: "Scan into a plain string; NULL becomes \"\""
+        correct: false
+      - text: "NULL columns can't be scanned at all"
+        correct: false
+      - text: "Use a *string and ignore nil"
+        correct: false
+    explain: "Scanning SQL NULL into a plain string/int errors. The sql.Null* types (and the generic sql.Null[T] in Go 1.22+) hold both the value and a Valid bool: if Valid is false the column was NULL. A *string pointer also works (nil = NULL), but the Null types are clearer."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -158,8 +180,30 @@ if nickname.Valid {
 }
 ```
 
+## Reference
+
+| Task | API |
+|---|---|
+| Create the pool | `sql.Open(driver, dsn)` → `*sql.DB` (once, at startup) |
+| Verify connectivity | `db.PingContext(ctx)` |
+| Tune the pool | `SetMaxOpenConns` / `SetMaxIdleConns` / `SetConnMaxLifetime` |
+| One row | `db.QueryRowContext(...).Scan(&a, &b)` |
+| Not found | `errors.Is(err, sql.ErrNoRows)` |
+| Many rows | `db.QueryContext` + `rows.Next`/`Scan` + `rows.Close` + `rows.Err` |
+| Write (no rows) | `db.ExecContext(...)` → `RowsAffected()` |
+| Safe values | placeholders (`$1`/`?`), never string-concat |
+| Nullable column | `sql.NullString` / `sql.Null[T]`, check `.Valid` |
+| Reused query | `db.PrepareContext` → `*sql.Stmt` |
+
 <Callout type="gotcha" title="⚠️ The pool is real, the connection is lazy — and never concatenate SQL">
 Three traps catch everyone. **(1)** `sql.Open` doesn't connect — a successful `Open` with an unreachable database returns no error until the first query or `Ping`. **(2)** Leaking rows starves the pool: forget `rows.Close()` and connections never come back, so the app eventually hangs waiting for a free one. Always `defer rows.Close()`. **(3)** **Never** build query text from user input with `fmt.Sprintf` or `+` — use placeholders so the [driver](/web/postgres-and-redis/) keeps data and code apart. These are unrunnable here because they need a real driver and database; verify them locally.
 </Callout>
+
+## See also
+
+- [SQL transactions](/web/sql-transactions/) — grouping statements into all-or-nothing units.
+- [Postgres & Redis](/web/postgres-and-redis/) — picking a driver and a datastore.
+- [web security](/web/web-security/) — parameterized queries as injection defense.
+- [project layout & DI](/web/project-layout-and-di/) — injecting the `*sql.DB` into your services.
 
 Next: grouping statements that must all succeed or all fail — [SQL Transactions](/web/sql-transactions/).

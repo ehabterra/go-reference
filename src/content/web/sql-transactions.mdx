@@ -44,6 +44,28 @@ quiz:
       - text: "Whether committed data survives a crash"
         correct: false
     explain: "Isolation governs concurrency: at higher levels (Serializable) transactions behave as if run one-at-a-time, preventing anomalies like dirty/non-repeatable/phantom reads, at the cost of more contention. Durability (the 'D') is the crash-survival guarantee; the two are separate properties."
+  - q: "The ctx passed to db.BeginTx is cancelled mid-transaction. What happens?"
+    options:
+      - text: "The transaction is rolled back automatically — uncommitted work is discarded"
+        correct: true
+      - text: "It commits what ran so far"
+        correct: false
+      - text: "Nothing; the transaction continues"
+        correct: false
+      - text: "The connection leaks"
+        correct: false
+    explain: "BeginTx binds the transaction to the context. If that context is cancelled or times out before Commit, database/sql rolls the transaction back and releases its connection. This is what makes in-flight work unwind cleanly during request cancellation or graceful shutdown."
+  - q: "Why must you keep a transaction short and avoid slow work between Begin and Commit?"
+    options:
+      - text: "An open transaction pins a pool connection and holds row locks, so slow work between Begin and Commit blocks other transactions and can cause deadlocks/pool exhaustion"
+        correct: true
+      - text: "Long transactions are a compile error"
+        correct: false
+      - text: "Commit only works within one second"
+        correct: false
+      - text: "The context expires after 100ms"
+        correct: false
+    explain: "Between Begin and Commit the transaction holds a connection (out of the pool) and database locks. Doing an HTTP call or heavy computation there blocks other writers, risks deadlocks, and can starve the pool. Gather data first, keep the Begin→Commit window tight, then commit."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -113,5 +135,12 @@ tx, err := db.BeginTx(ctx, &sql.TxOptions{
 <Callout type="tip" title="💡 Keep transactions short, route through tx, mind the context">
 Hold a transaction open only as long as needed — it pins a [pool connection](/web/database-sql/) and can block others. Never do slow work (an HTTP call, a long compute) between `Begin` and `Commit`. Make sure **every** statement uses `tx.…`, not `db.…`, or it silently runs outside the transaction on a different connection. And remember the context: if the `ctx` passed to `BeginTx` is cancelled, the transaction is rolled back automatically — handy during [graceful shutdown](/web/graceful-shutdown/), where in-flight work should unwind cleanly.
 </Callout>
+
+## See also
+
+- [database/sql](/web/database-sql/) — the pool, queries, and scanning that transactions build on.
+- [Postgres & Redis](/web/postgres-and-redis/) — drivers and datastore choices.
+- [graceful shutdown](/web/graceful-shutdown/) — context cancellation rolls in-flight transactions back.
+- [context](/concurrency/context/) — the cancellation `BeginTx` honors.
 
 Next: picking real datastores — [Postgres & Redis](/web/postgres-and-redis/).

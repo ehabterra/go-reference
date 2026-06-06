@@ -5,11 +5,11 @@ kind: topic
 order: 6
 difficulty: "Intermediate"
 status: ready
-intent: "Dispatch and cross-cutting concerns — ServeMux method+path patterns (Go 1.22), path values, and middleware as handlers that wrap handlers."
+intent: "Dispatch and cross-cutting concerns — the Go 1.22 ServeMux (method+path patterns, wildcards, precedence), path values, middleware as Handler-wrapping-Handler, chaining order, and recovery/logging middleware."
 related:
   - http-server
   - rest-apis
-  - tls-and-https
+  - web-security
 quiz:
   - q: "What is middleware in Go's net/http?"
     options:
@@ -44,6 +44,28 @@ quiz:
       - text: "They run concurrently"
         correct: false
     explain: "The outermost wrapper sees the request first. log's handler runs, calls auth's handler, which calls the mux; responses unwind back out through auth then log — like nested function calls, because that's exactly what they are."
+  - q: "A chain helper applies middlewares left-to-right as chain(h, A, B, C). For A to be the OUTERMOST layer, how must it wrap?"
+    options:
+      - text: "Apply in reverse: h = C(h); h = B(h); h = A(h) — so A wraps last and runs first"
+        correct: true
+      - text: "Apply in order A,B,C so A wraps first"
+        correct: false
+      - text: "Order doesn't matter"
+        correct: false
+      - text: "Run them in separate goroutines"
+        correct: false
+    explain: "To make the first-listed middleware outermost (run first), fold the slice from the end: for i := len(mw)-1; i>=0; i-- { h = mw[i](h) }. Then A is applied last, ending up as the outermost wrapper that sees the request first."
+  - q: "Why is a recovery middleware important?"
+    options:
+      - text: "A panic in one handler goroutine would otherwise crash the whole server; recovery turns it into a 500 and keeps serving"
+        correct: true
+      - text: "It retries failed database queries"
+        correct: false
+      - text: "It compresses responses"
+        correct: false
+      - text: "It's required for routing to work"
+        correct: false
+    explain: "Each request runs in its own goroutine, and an unrecovered panic there terminates the process. A recovery middleware defers a recover(), logs the panic, and writes http.StatusInternalServerError — so one bad request can't take the server down. (net/http's own server recovers per-request, but explicit middleware lets you log and shape the response.)"
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -61,15 +83,15 @@ Since **Go 1.22**, `http.ServeMux` routes by method and captures path variables 
 mux := http.NewServeMux()
 mux.HandleFunc("GET /users/{id}", getUser)      // method + wildcard
 mux.HandleFunc("POST /users", createUser)
-mux.HandleFunc("GET /health", health)
+mux.HandleFunc("GET /static/", serveStatic)     // trailing / = subtree
 // inside getUser: id := r.PathValue("id")
 ```
 
-More specific patterns win over less specific ones, and a trailing `/` (`/static/`) matches a subtree.
+The matching rules: a request matches the **most specific** pattern (a fixed path beats a wildcard); a method-specific pattern (`GET /x`) beats a method-less one (`/x`); a trailing-slash pattern (`/static/`) matches the whole subtree; and `{name...}` captures the rest of the path. A request that matches a path but not its method gets an automatic **405 Method Not Allowed**.
 
 ## Middleware wraps a handler
 
-A middleware takes a `Handler` and returns a `Handler` — so they **compose** by nesting. Run it all in-process:
+A middleware takes a `Handler` and returns a `Handler` — so they **compose** by nesting. Run it all in-process with a recorder:
 
 <Mermaid code={String.raw`graph LR
   REQ["request"] --> L["logging"] --> A["auth"] --> M["mux → handler"]
@@ -99,19 +121,117 @@ func main() {
 
 	handler := withRequestID(mux) // wrap the whole mux in one line
 
-	// drive it in-process — no network needed
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/users/42", nil))
 
-	fmt.Println("status:    ", rec.Code)                       // 200
+	fmt.Println("status:    ", rec.Code)                         // 200
 	fmt.Println("request-id:", rec.Header().Get("X-Request-ID")) // req-123
-	fmt.Println("body:      ", rec.Body.String())              // user 42
+	fmt.Println("body:      ", rec.Body.String())                // user 42
 }`} />
 
-Chain several with a small helper: `handler := logging(auth(mux))` reads outermost-first. Many codebases write a `func chain(h Handler, mw ...Middleware) Handler` to apply a slice in order.
+## Chaining middleware, and the order
+
+Real apps stack several. A tiny `chain` helper folds a slice so the **first-listed runs first** (outermost). This playground records the actual entry/exit order so you can see the onion unwind:
+
+<Playground client:visible title="chain.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+)
+
+type Middleware func(http.Handler) http.Handler
+
+// chain applies middlewares so mw[0] is the OUTERMOST (runs first).
+func chain(h http.Handler, mw ...Middleware) http.Handler {
+	for i := len(mw) - 1; i >= 0; i-- {
+		h = mw[i](h)
+	}
+	return h
+}
+
+func trace(name string, log *[]string) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*log = append(*log, "→"+name)
+			next.ServeHTTP(w, r)
+			*log = append(*log, "←"+name)
+		})
+	}
+}
+
+func main() {
+	var log []string
+	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log = append(log, "handler")
+	})
+
+	h := chain(final, trace("log", &log), trace("auth", &log))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+
+	fmt.Println(strings.Join(log, " "))
+	// →log →auth handler ←auth ←log
+}`} />
+
+## A recovery middleware
+
+The most important middleware to write first: one that **recovers from a panic** so a single bad handler can't crash the server. It defers a `recover()`, logs, and returns a 500:
+
+<Playground client:visible title="recovery.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				fmt.Println("recovered panic:", rec) // in real code: log it
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	boom := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("handler blew up")
+	})
+
+	rec := httptest.NewRecorder()
+	recoverer(boom).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+
+	fmt.Println("status:", rec.Code) // 500 — server survives
+}`} />
+
+## Reference
+
+| Concern | How |
+|---|---|
+| Route by method+path | `mux.HandleFunc("GET /users/{id}", h)` |
+| Path variable | `r.PathValue("id")` |
+| Subtree route | trailing `/` (`"/static/"`) |
+| Catch-all wildcard | `{rest...}` |
+| Middleware type | `func(http.Handler) http.Handler` |
+| Apply one | `h = mw(h)` |
+| Apply many (first = outer) | `chain(h, a, b, c)` |
+| Must-have middleware | recovery, request logging, auth |
 
 <Callout type="tip" title="🐹 Middleware is just composition — keep it boring">
-The whole pattern is `func(http.Handler) http.Handler`. Resist a framework until the standard mux genuinely can't express your routes. Common middlewares: request logging, panic [recovery](/fundamentals/panic-recover/) (so one bad handler can't crash the server), auth, CORS, gzip, and [rate limiting](/patterns/semaphore/). Put cross-cutting concerns here and keep handlers focused on one job.
+The whole pattern is `func(http.Handler) http.Handler`. Resist a framework until the standard mux genuinely can't express your routes. Common middlewares: panic [recovery](/fundamentals/panic-recover/) (write this first), request logging, auth, CORS, gzip, and [rate limiting](/concurrency/rate-limiting/). Put cross-cutting concerns here and keep handlers focused on one job. Mind the order — recovery should be outermost so it catches panics from everything inside it.
 </Callout>
 
-Next: shipping JSON with status codes — [building REST APIs](/web/rest-apis/).
+## See also
+
+- [HTTP server](/web/http-server/) — handlers, the mux, and `httptest`.
+- [REST APIs](/web/rest-apis/) — applying these handlers to JSON resources.
+- [web security](/web/web-security/) — security-header and rate-limit middleware.
+- [panic & recover](/fundamentals/panic-recover/) — the mechanism behind recovery middleware.
+
+Next: securing it over the wire — [TLS & HTTPS](/web/tls-and-https/).
