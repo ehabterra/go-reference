@@ -215,5 +215,20 @@
   "intent.errors": "الأخطاء قيم عادية تُرجِعها وتفحصها — sentinels، والتغليف بـ %w، ومطابقتها عبر السلسلة بـ errors.Is و As و Join.",
   "intent.panic-recover": "يجدوِل defer التنظيف، ويفكّ panic المكدّس مشغّلًا تلك الـ defers، ويلتقط recover — داخل defer فقط — حالة panic ويعيدها إلى تحكّم عادي.",
   "intent.packages-and-modules": "كيف يُنظَّم كود Go — حزمة لكل مجلد، وتصدير بأحرف كبيرة (Capitalized)، وترتيب init، ووحدات (go.mod / go.sum) تثبّت الاعتماديات المُصدَّرة.",
-  "intent.reflection": "فحص الأنواع والقيم وتعديلها أثناء التشغيل عبر reflect — Type مقابل Kind، وقراءة حقول الـ struct والوسوم (tags)، وقاعدة المؤشّر/Elem للضبط."
+  "intent.reflection": "فحص الأنواع والقيم وتعديلها أثناء التشغيل عبر reflect — Type مقابل Kind، وقراءة حقول الـ struct والوسوم (tags)، وقاعدة المؤشّر/Elem للضبط.",
+  "intent.fmt-and-io": "التنسيق والبثّ — verbs الـ fmt التي ستستعملها فعلًا، وواجهتا io.Reader/io.Writer الصغيرتان اللتان يتّصل بهما كل شيء، وخطّاف Stringer.",
+  "intent.strings-and-bytes": "عُدّة النصوص — حزمة strings، والبناء الفعّال بـ strings.Builder، وحزمة bytes الموازية، و strconv للتحويل بين الأرقام والسلاسل.",
+  "intent.encoding-json": "تحويل قيم Go إلى JSON والعكس — Marshal و Unmarshal، و struct tags، و omitempty، وفكّ الترميز إلى structs مقابل maps، والبثّ عبر Encoder/Decoder.",
+  "intent.time": "اللحظات والمُدد وتخطيط المرجع الشهير — التنسيق والتحليل، وحساب الوقت، وقياس الزمن المنقضي، والـ timers مقابل tickers.",
+  "intent.files-and-os": "قراءة الملفّات وكتابتها عبر os، والبثّ سطرًا بسطر بـ bufio، والمسارات المحمولة عبر path/filepath، ونقاط دخول os إلى العالم.",
+  "intent.cli-with-flag": "ابنِ أدوات سطر الأوامر بحزمة flag — خيارات بأنواع وقيم افتراضية، ووسائط موضعية، وأوامر فرعية عبر FlagSet، وبدائل متغيّرات البيئة.",
+  "intent.structured-logging": "سجّل سمات مفتاح-قيمة بـ log/slog — معالِجات Text مقابل JSON، والمستويات، و slog.With للحقول المشتركة، ولماذا يتفوّق التسجيل المُنظَّم على fmt.Println في الإنتاج.",
+  "intent.testing-basics": "حزمة testing و go test — كتابة دوال TestXxx، و Errorf مقابل Fatalf، و t.Helper، وعُرف got/want الذي يعمل عبر go test ./...",
+  "intent.table-driven-tests": "النمط الاصطلاحي في Go — شريحة من حالات مُسمّاة تُمرّر عبر اختبارات t.Run الفرعية، مع t.Parallel، فيتوسّع اختبار واحد إلى عشرات المدخلات.",
+  "intent.fuzzing": "الـ fuzzing الأصلي في Go — FuzzXxx مع بذور f.Add و f.Fuzz، وكيف يصطاد الـ fuzzer حالات الـ panic والخصائص المكسورة، و go test -fuzz.",
+  "intent.benchmarks": "قياس السرعة بـ BenchmarkXxx و b.N — قراءة ns/op و B/op و allocs/op، والمقارنة الكلاسيكية بين += و strings.Builder.",
+  "intent.go-toolchain": "أداة واحدة تفعل كل شيء — بناء وتشغيل واختبار وتنسيق وفحص وتوثيق كود Go، إضافةً إلى تضمين الملفّات وبناء ثنائيّات ساكنة لأنظمة أخرى من أمر واحد.",
+  "intent.modules": "إدارة الاعتماديات بعمق — go.mod و go.sum، و go get / mod tidy، والإصدار الدلالي، واختيار الحدّ الأدنى للإصدار، وموجّهات replace، والـ workspaces، والـ vendoring.",
+  "intent.profiling-pprof": "قِس قبل أن تُحسّن — التقط ملفّات CPU والذاكرة (heap) والـ goroutine بـ runtime/pprof أو net/http/pprof، ثم اقرأ المسارات الساخنة في go tool pprof.",
+  "intent.race-detector": "اكتشف السباقات على البيانات تلقائيًا — يُجهّز -race الوصول إلى الذاكرة لرصد القراءات/الكتابات المتزامنة غير المتزامِنة، ويطبع الـ goroutine المتعارضتين، ويشير إلى الحل."
 }
