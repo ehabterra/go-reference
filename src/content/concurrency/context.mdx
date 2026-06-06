@@ -51,37 +51,79 @@ quiz:
       - text: "It panics"
         correct: false
     explain: "ctx.Done() returns a channel that closes on cancellation or deadline; select on it and return. ctx.Err() then reports Canceled or DeadlineExceeded."
+  - q: "After a context is cancelled, what does ctx.Err() return?"
+    options:
+      - text: "context.Canceled for manual cancel, or context.DeadlineExceeded if the deadline fired"
+        correct: true
+      - text: "Always nil"
+        correct: false
+      - text: "The error from the cancelled goroutine"
+        correct: false
+      - text: "io.EOF"
+        correct: false
+    explain: "Err() is nil while the context is live, then returns one of two sentinels. Compare with errors.Is(err, context.DeadlineExceeded) — DeadlineExceeded also satisfies net.Error's Timeout(). context never carries your own error; that's not its job."
+  - q: "Why use a private, unexported key type for ctx.Value instead of a plain string?"
+    options:
+      - text: "An unexported key type can't collide with keys set by other packages, even if the underlying value is identical"
+        correct: true
+      - text: "Strings can't be used as context keys"
+        correct: false
+      - text: "It makes lookups faster"
+        correct: false
+      - text: "It lets the GC collect the value sooner"
+        correct: false
+    explain: "Keys are compared by equality AND type. `type ctxKey int` in your package is a distinct type no other package can name, so two packages both using the string \"id\" — or both using int 0 of different named types — never clash. Export typed getter/setter helpers, not the key."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📢 Analogy">
-A "stop work" order issued at the top of an org chart cascades to every team that was listening — and each one halts. A `context.Context` is that order, flowing down a tree of function calls and goroutines, optionally with a built-in deadline ("stop by 5pm no matter what").
+A "stop work" order issued at the top of an org chart cascades to every team that was listening — and each one halts. A `context.Context` is that order, flowing down a tree of function calls and goroutines, optionally with a built-in deadline ("stop by 5pm no matter what"). The order only ever flows *down*: a parent can cancel its children, but a cancelled child never reaches back up to stop its parent.
 </Callout>
 
-## The four constructors
+## What a Context is
 
-You start from a root and **derive** child contexts; cancelling a parent cancels all its descendants.
+`context.Context` is a small **interface** — four methods — that threads three things through a call tree: a **cancellation signal**, an optional **deadline**, and a bag of **request-scoped values**. It carries no business data and does no work; it is purely a coordination channel that every function in a request's lifetime can observe.
 
-| Constructor | Gives you |
-|---|---|
-| `context.Background()` / `TODO()` | the root (use `TODO` when you haven't wired it yet) |
-| `context.WithCancel(parent)` | a `ctx` + a `cancel()` you call to cancel manually |
-| `context.WithTimeout(parent, d)` | cancels automatically after duration `d` |
-| `context.WithDeadline(parent, t)` | cancels automatically at time `t` |
-| `context.WithValue(parent, k, v)` | attaches a request-scoped value |
+```go
+type Context interface {
+	Done() <-chan struct{}          // closed when this context is cancelled
+	Err() error                     // nil, or Canceled / DeadlineExceeded
+	Deadline() (time.Time, bool)    // when (if ever) it auto-cancels
+	Value(key any) any              // request-scoped lookup up the chain
+}
+```
+
+The mental model: a Context is a **node in a tree**. You never mutate a context — you *derive* a child from a parent, and the child inherits the parent's deadline and values while adding its own. Cancelling a node closes its `Done()` channel and recursively cancels every descendant. That immutability is what makes contexts safe to pass to many goroutines at once: there is nothing to race on.
+
+## The constructors: building the tree
+
+You start from a **root** and derive children. Every derivation returns a *new* context; cancelling a parent cancels all of its descendants, but never the other way around.
+
+| Constructor | Gives you | Auto-cancels? |
+|---|---|---|
+| `context.Background()` | the root for `main`, init, and tests | never |
+| `context.TODO()` | a root placeholder when wiring isn't done yet | never |
+| `context.WithCancel(parent)` | `ctx` + a `cancel()` you call manually | on `cancel()` or parent |
+| `context.WithTimeout(parent, d)` | `ctx` + `cancel()`; fires after duration `d` | yes, after `d` |
+| `context.WithDeadline(parent, t)` | `ctx` + `cancel()`; fires at wall-clock time `t` | yes, at `t` |
+| `context.WithValue(parent, k, v)` | a child carrying one extra key/value | no (no `cancel`) |
+| `context.WithCancelCause(parent)` | like `WithCancel`, but `cancel(err)` records a cause | on `cancel(err)` or parent |
+
+`Background` and `TODO` are identical at runtime — both return an empty, never-cancelled root. The difference is *intent*: `TODO` is a flag to your future self ("a real context belongs here"). `WithTimeout(parent, d)` is just sugar for `WithDeadline(parent, time.Now().Add(d))`.
 
 <Mermaid code={String.raw`graph TD
   B["context.Background()"] --> R["WithTimeout(40ms)"]
-  R --> G1["fetch()"]
+  R --> V["WithValue(requestID)"]
+  V --> G1["fetch()"]
   R --> G2["another call"]
-  R -. "deadline / cancel()" .-> G1
+  R -. "deadline / cancel() closes Done()" .-> G1
   R -. closes Done() .-> G2`} />
 
 ## Deadlines in action
 
-`fetch` races its work against `ctx.Done()`; the 40 ms timeout fires before the 80 ms work finishes. **Run** it:
+`fetch` races its real work against `ctx.Done()`. The 40 ms timeout fires before the 80 ms work finishes, so `fetch` returns `ctx.Err()` — here, `DeadlineExceeded`. **Run** it:
 
 <Playground client:visible title="context.go" code={String.raw`package main
 
@@ -108,22 +150,188 @@ func main() {
 	data, err := fetch(ctx)
 	if err != nil {
 		fmt.Println("error:", err)
-		fmt.Println("was it the deadline?", errors.Is(err, context.DeadlineExceeded))
+		fmt.Println("deadline exceeded?", errors.Is(err, context.DeadlineExceeded))
 		return
 	}
 	fmt.Println("got:", data)
 }`} />
 
+The `select` is the whole pattern: a blocking operation must be *one branch* and `<-ctx.Done()` the *other*. A function that can't be cancelled — a tight CPU loop, a `time.Sleep`, an `io.Read` with no deadline — ignores the context entirely. Cancellation in Go is **cooperative**: nothing is force-killed; each goroutine must choose to notice and return.
+
+## Propagating cancellation down a goroutine tree
+
+`WithCancel` shines when one event must stop *many* workers. Cancel once at the top; every goroutine selecting on the same `ctx.Done()` unblocks. This run launches three workers, cancels after the first result, and watches the rest drain — **deterministically**, because cancellation is driven by a counter, not a clock:
+
+<Playground client:visible title="propagate.go" code={String.raw`package main
+
+import (
+	"context"
+	"fmt"
+	"sync"
+)
+
+// worker emits its id until the context is cancelled, then reports why it stopped.
+func worker(ctx context.Context, id int, out chan<- int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return // ctx.Err() would be context.Canceled here
+		case out <- id:
+		}
+	}
+}
+
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	out := make(chan int)
+
+	var wg sync.WaitGroup
+	for i := 1; i <= 3; i++ {
+		wg.Add(1)
+		go worker(ctx, i, out, &wg)
+	}
+
+	// Drain exactly 6 emissions, then cancel — bounded, so output is deterministic in count.
+	got := 0
+	for got < 6 {
+		<-out
+		got++
+	}
+	cancel()  // one call stops all three workers
+	wg.Wait() // every worker observed ctx.Done() and returned
+
+	fmt.Println("received:", got)
+	fmt.Println("ctx error:", ctx.Err())
+}`} />
+
+Because `cancel()` is idempotent and propagates down the derived tree, you can call it from anywhere — a deferred cleanup, an error path, a signal handler — and every descendant unwinds. The `sync.WaitGroup` here proves all workers actually returned before `main` exits; without it you'd have no happens-before edge guaranteeing they finished (see the [memory model](/concurrency/memory-model/)).
+
+## A worker that returns ctx.Err()
+
+The idiomatic shape for a cancellable unit of work: do a chunk, check `ctx.Done()`, repeat — and surface `ctx.Err()` so the caller learns *why* it stopped. This worker processes a fixed slice but bails the moment the context dies:
+
+<Playground client:visible title="worker-err.go" code={String.raw`package main
+
+import (
+	"context"
+	"fmt"
+)
+
+// process handles items one at a time, honoring cancellation between each.
+func process(ctx context.Context, items []int) (int, error) {
+	sum := 0
+	for _, n := range items {
+		select {
+		case <-ctx.Done():
+			return sum, ctx.Err() // partial result + reason
+		default:
+			sum += n
+		}
+	}
+	return sum, nil
+}
+
+func main() {
+	// A context that is already cancelled before we start.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel up front to force the error path deterministically
+
+	sum, err := process(ctx, []int{1, 2, 3})
+	fmt.Println("sum:", sum)
+	fmt.Println("err:", err) // context canceled
+}`} />
+
+Note the `default` branch: this loop never *blocks* on `ctx.Done()`, it only *polls* it between items. Use a blocking `select` (no `default`) when the work itself blocks; use a polling `select` (with `default`) when the work is CPU-bound and you want a cheap cancellation check between steps.
+
+## Request-scoped values
+
+`WithValue` attaches data that belongs to the *request*, not the function signature — a request ID for logging, an authenticated user, a trace span. Values are looked up by walking *up* the parent chain, so a child sees everything its ancestors set.
+
+<Playground client:visible title="values.go" code={String.raw`package main
+
+import (
+	"context"
+	"fmt"
+)
+
+// Private key type: no other package can construct or collide with it.
+type ctxKey int
+
+const requestIDKey ctxKey = 0
+
+// Typed helpers hide the key — callers never touch ctx.Value directly.
+func withRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey, id)
+}
+
+func requestID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(requestIDKey).(string)
+	return id, ok
+}
+
+func handle(ctx context.Context) {
+	if id, ok := requestID(ctx); ok {
+		fmt.Println("handling request", id)
+	} else {
+		fmt.Println("no request id")
+	}
+}
+
+func main() {
+	ctx := withRequestID(context.Background(), "req-42")
+	handle(ctx)
+
+	handle(context.Background()) // no id set on this branch
+}`} />
+
+The discipline matters: `ctx.Value` is **untyped** (`any` in, `any` out) and invisible in function signatures, so overusing it turns explicit parameters into a hidden, stringly-typed grab bag. Reserve it for data that genuinely crosses many API layers and isn't part of any one function's contract. Everything else should be an ordinary argument.
+
 ## The conventions
 
 <Callout type="go" title="🐹 Five rules that keep context clean">
-**1.** Pass `ctx` as the **first argument**, named `ctx` — never store it in a struct. **2.** `defer cancel()` immediately after `WithCancel`/`WithTimeout`. **3.** Propagate the *same* ctx down; derive children for tighter deadlines. **4.** Use `ctx.Value` only for **request-scoped** data (IDs, auth), never for optional parameters — and use a private key type to avoid collisions. **5.** Honor it: every long-running goroutine should `select` on `ctx.Done()`.
+**1.** Pass `ctx` as the **first argument**, named `ctx` — never store it in a struct. **2.** `defer cancel()` immediately after `WithCancel`/`WithTimeout`/`WithDeadline`, even when the timeout will fire on its own — it releases the timer early and silences `go vet`'s "lostcancel" check. **3.** Propagate the *same* ctx down; derive a child only to *tighten* a deadline or add a value. **4.** Use `ctx.Value` only for **request-scoped** data, with a private key type and typed getters. **5.** Honor it: every long-running or blocking goroutine should `select` on `ctx.Done()`.
+</Callout>
+
+## Internals: how cancellation actually fires
+
+A cancellable context is a struct holding a lazily-created `done` channel, an `err` field, and a set of children. `cancel()` does three things under a mutex: sets `err`, **closes** `done` (which is what wakes every `select`), and walks the children calling *their* cancel — depth-first propagation down the tree. Closing a channel is the synchronization primitive here, which is exactly why a receive on `ctx.Done()` is guaranteed to *see* `ctx.Err()` already set: the close happens-before your receive.
+
+`WithTimeout`/`WithDeadline` add a `time.AfterFunc` timer that calls `cancel` when it fires. That timer is a real resource — calling the returned `cancel()` early (your `defer`) stops the timer immediately instead of letting it run to expiry, which is why "ignore the cancel, the timeout handles it" is a leak, not an optimization. A `WithValue` context, by contrast, has no channel and no timer: it's a thin wrapper that delegates `Done()`/`Err()`/`Deadline()` to its parent and only overrides `Value()`.
+
+## Edge cases and gotchas
+
+- **Calling `cancel()` is always safe and idempotent.** Second and later calls are no-ops; you can `defer cancel()` *and* call `cancel()` on an error path.
+- **`Done()` may return `nil`** for a non-cancellable context (a bare `Background()` or `WithValue` chain with no cancellable ancestor). A receive on a nil channel blocks forever — which in a `select` simply means "this branch never fires," the correct behavior.
+- **A child's deadline can only be *earlier* than its parent's.** `WithTimeout(parent, time.Hour)` on a parent that times out in 1s still dies in 1s — the tighter deadline wins.
+- **`ctx.Err()` is nil until cancellation.** Don't treat a live context's `Err()` as a success signal; check it only after `Done()` fires.
+- **Values are found by type *and* equality.** `ctx.Value(0)` (an `int`) will not find a key stored as `ctxKey(0)` — different types, no match. This is the collision-avoidance feature, not a bug.
+- **`context.Cause(ctx)`** (Go 1.20+) returns the error passed to `cancel(err)` from `WithCancelCause`, letting you attach a *reason* richer than the bare `Canceled` sentinel.
+
+## When to use context — and when not to
+
+| Use a Context for | Use something else for |
+|---|---|
+| cancelling a tree of goroutines from one place | per-goroutine cleanup that isn't request-scoped |
+| timeouts/deadlines on requests, queries, RPCs | retry/backoff policy (pass an explicit config) |
+| request-scoped values (request ID, auth, trace) | optional or required function parameters |
+| graceful shutdown via `signal.NotifyContext` | long-lived application configuration |
+
+The smell test for `WithValue`: if you'd be comfortable making it a named function parameter, make it one. Context values are for data that's *implicitly* present across an entire request and would be noise in every signature in between.
+
+<Callout type="gotcha" title="⚠️ Don't store a Context in a struct">
+It's tempting to stash a `ctx` field on a struct so methods don't each need a `ctx` parameter. Resist it. A struct often outlives a single request, so a stored context goes stale — methods called later honor a cancellation (or deadline) that no longer applies, or worse, hold a reference that keeps a finished request's resources alive. The `go vet` `containedctx` check flags this. **Pass `ctx` as the first argument to each method instead**; the one rare exception is a short-lived struct that *is* a single in-flight request, and even then prefer the explicit parameter.
 </Callout>
 
 ## Where it shows up
 
-- **`http.Request.Context()`** — cancelled when the client disconnects.
-- **`database/sql`** `QueryContext`/`ExecContext` — abort slow queries.
+- **`http.Request.Context()`** — cancelled when the client disconnects or the server shuts down; thread it into every downstream call.
+- **`database/sql`** `QueryContext`/`ExecContext` — abort slow queries when the request dies.
 - **`os/signal.NotifyContext`** — a context cancelled on SIGINT/SIGTERM for graceful shutdown.
+- **`net.Dialer.DialContext`, `exec.CommandContext`** — give blocking I/O and subprocesses a deadline.
 
-Context is the modern replacement for the hand-rolled `done` channel in [pipelines](/patterns/pipeline/); pair it with the [Context & Cancellation pattern](/patterns/context-cancellation/) and [Or-done](/patterns/or-done-channel/).
+## See also
+
+Context drives the [`select`](/concurrency/select/) statement's cancellation branch and coordinates whole [goroutine](/concurrency/goroutines/) trees; it's the modern replacement for the hand-rolled `done` channel in [pipelines](/patterns/pipeline/). Pair it with the [Context & Cancellation pattern](/patterns/context-cancellation/), [Or-done](/patterns/or-done-channel/), and [errgroup](/patterns/errgroup/) for a cancellable group that also collects the first error. The visibility guarantees behind `ctx.Done()` come from the [memory model](/concurrency/memory-model/), and surfacing `ctx.Err()` ties into [error handling in concurrent code](/concurrency/error-handling/).
+
+Next: how `select` multiplexes channels — including the `ctx.Done()` branch above — in [the select statement](/concurrency/select/).

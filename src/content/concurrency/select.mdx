@@ -5,7 +5,7 @@ kind: topic
 order: 6
 difficulty: "Intermediate"
 status: ready
-intent: "Wait on multiple channel operations at once — the basis of timeouts, cancellation, non-blocking I/O and multiplexing."
+intent: "Wait on multiple channel operations at once — the basis of timeouts, cancellation, non-blocking I/O, fan-in, and the event loop."
 related:
   - channels
   - goroutines
@@ -21,10 +21,10 @@ quiz:
         correct: false
       - text: "All of them"
         correct: false
-    explain: "select picks a ready case at random, which prevents one always-ready channel from starving the others."
+    explain: "select picks a ready case at random, which prevents one always-ready channel from starving the others. If you need priority, structure it with nested selects or a default; the language deliberately does not order cases."
   - q: "What does a `default` clause do in a select?"
     options:
-      - text: "Makes the select non-blocking — runs default if no case is ready"
+      - text: "Makes the select non-blocking — it runs default immediately if no case is ready"
         correct: true
       - text: "Runs after every case"
         correct: false
@@ -32,10 +32,10 @@ quiz:
         correct: false
       - text: "Blocks forever"
         correct: false
-    explain: "With a `default`, select never blocks: if no channel op is ready right now, it takes the default branch immediately."
+    explain: "With a `default`, select never blocks: if no channel op is ready at the instant it is evaluated, it takes the default branch. Without a default, select blocks until some case becomes ready."
   - q: "How do you add a timeout to a blocking receive?"
     options:
-      - text: "select on the channel and on <-time.After(d)"
+      - text: "select on the channel and on `<-time.After(d)`"
         correct: true
       - text: "Wrap it in time.Sleep"
         correct: false
@@ -43,28 +43,50 @@ quiz:
         correct: false
       - text: "Use a buffered channel"
         correct: false
-    explain: "`case <-time.After(d):` fires after the duration, so whichever happens first — the value or the timeout — wins the select."
+    explain: "`case <-time.After(d):` fires after the duration, so whichever happens first — the value or the timeout — wins the select. In a hot loop prefer a reusable `time.Timer` or a `context` so you do not allocate a timer per iteration."
+  - q: "What happens when you set a channel variable to nil and use it in a select case?"
+    options:
+      - text: "That case is disabled — a nil channel is never ready, so select skips it"
+        correct: true
+      - text: "The select panics"
+        correct: false
+      - text: "That case is chosen immediately"
+        correct: false
+      - text: "The select returns an error"
+        correct: false
+    explain: "A nil channel blocks forever, so its case can never be selected. Assigning nil to a channel variable is the idiomatic way to turn a branch off once it is exhausted — for example after a producer closes, so you stop selecting on the dead channel."
+  - q: "An empty `select {}` with no cases does what?"
+    options:
+      - text: "Blocks the goroutine forever"
+        correct: true
+      - text: "Returns immediately"
+        correct: false
+      - text: "Panics at compile time"
+        correct: false
+      - text: "Spins, burning CPU"
+        correct: false
+    explain: "`select {}` has no case that can ever proceed, so it blocks forever without spinning. If it is the only goroutine left, the runtime's deadlock detector fires. It is occasionally used to park main, though a WaitGroup or signal is usually clearer."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🎛️ Analogy">
-`select` is a switchboard operator watching several lines. Whichever line rings first, they answer it. If two ring at once, they pick one at random. With a "default" instruction, they don't wait at all — if no line is ringing this instant, they move on.
+`select` is a switchboard operator watching several lines. Whichever line rings first, they answer it. If two ring at once, they pick one at random so no caller is ever permanently ignored. With a "default" instruction they do not wait at all — if no line is ringing this instant, they move on to other work. That single primitive is how Go programs juggle timeouts, cancellation, and many channels without threads-and-locks gymnastics.
 </Callout>
 
 ## What select does
 
-`select` blocks until **one** of its channel operations can proceed, then runs that case. It's how you compose multiple channels — receives, sends, timeouts, cancellation — into one coordination point.
+`select` blocks until **one** of its channel operations can proceed, then runs that one case. Each case is a single channel send or receive; the case whose operation is *ready* wins. It is the multiplexer that turns several independent channels — data, timeouts, cancellation — into one coordination point, the way a `switch` chooses a branch except it chooses by *readiness* rather than by value.
 
 ```go
 select {
 case v := <-c1:
-	use(v)
-case c2 <- x:        // a send can be a case too
+	use(v)         // a receive that succeeded
+case c2 <- x:      // a SEND can be a case too
 	sent()
 case <-done:
-	return            // cancellation
+	return         // cancellation
 }
 ```
 
@@ -73,17 +95,28 @@ case <-done:
   C2["c2 (data)"] --> SEL
   DONE["done (cancel)"] --> SEL
   TIME["time.After (timeout)"] --> SEL
-  SEL --> A["run the first ready case"]`} />
+  SEL --> A["run exactly one ready case"]`} />
 
-## Three behaviors to know
+How it evaluates, precisely: Go first computes the channel operand (and any send value) of *every* case, once, top to bottom. Then it considers which operations can proceed *right now*. If one or more can, it picks one — uniformly at random when several are ready — and runs it. If none can and there is a `default`, it runs `default`. If none can and there is no `default`, the goroutine parks until some case becomes ready. So `select` evaluates all operands but executes exactly one case.
 
-- **Random choice:** if several cases are ready, one is picked **uniformly at random** — this prevents starvation.
-- **`default` → non-blocking:** with a `default`, select returns immediately if nothing is ready.
-- **Empty `select{}` blocks forever** — occasionally used to park `main` while goroutines run (but usually a `sync.WaitGroup` or signal is clearer).
+## The four behaviors to internalize
 
-## Timeout and non-blocking, in one run
+| Behavior | Rule |
+|---|---|
+| **One case runs** | exactly one ready case executes; the rest do not |
+| **Random among ready** | if several are ready, one is chosen uniformly at random — prevents starvation |
+| **`default` → non-blocking** | with a `default`, select never blocks; it runs `default` when nothing is ready |
+| **No ready case, no default** | the goroutine blocks until a case becomes ready |
+| **`nil` channel case** | never ready, silently skipped — the basis of disabling a case |
+| **empty `select{}`** | blocks forever (no case can ever proceed) |
 
-<Playground client:visible title="select.go" code={String.raw`package main
+The **random** choice is deliberate and load-bearing: it guarantees that a channel which is *always* ready cannot starve the others. The cost is that `select` gives you no priority — if you genuinely need "drain the urgent channel first," you express it explicitly with a nested `select` plus a `default`, as shown later.
+
+## Timeout, and non-blocking, in one run
+
+`time.After(d)` returns a channel that delivers one value after `d` elapses. Put it in a `select` and you get a timeout: whichever fires first — the real value or the deadline — wins. Add a `default` and you get a non-blocking poll that never waits.
+
+<Playground client:visible title="timeout-and-poll.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -93,19 +126,20 @@ import (
 func main() {
 	ch := make(chan string)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		ch <- "result"
 	}()
 
-	// Timeout pattern: whichever fires first wins.
+	// Timeout pattern: whichever is ready first wins.
 	select {
 	case v := <-ch:
 		fmt.Println("got:", v)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 		fmt.Println("timed out")
 	}
 
-	// Non-blocking check: don't wait at all.
+	// Non-blocking receive: don't wait at all. The value is already
+	// consumed above, so nothing is ready and default runs.
 	select {
 	case v := <-ch:
 		fmt.Println("got:", v)
@@ -114,8 +148,179 @@ func main() {
 	}
 }`} />
 
-<Callout type="go" title="🐹 Two sharp edges">
-**`time.After` in a hot loop leaks timers** — each call allocates a timer that lives until it fires. In a tight `for { select … }`, create one `time.NewTimer` and `Reset` it, or drive cancellation with a `context`. And remember: **a `nil` channel blocks forever**, so setting a channel variable to `nil` *disables* its `select` case — a handy trick for turning a branch off once it's done.
+Because the goroutine sleeps 20ms but the timeout is 200ms, the receive always wins the first select, and the second select always hits `default` — deterministic output.
+
+## Non-blocking send and the drain idiom
+
+`default` works for sends too. A non-blocking send drops the value (or takes an alternate path) when the receiver is not ready — useful for "latest value wins" telemetry or for a best-effort notify that must never block the sender.
+
+```go
+select {
+case metrics <- sample:   // try to send
+default:                  // receiver busy — drop this sample, keep going
+}
+```
+
+A close cousin is **draining**: empty a channel without blocking once it is closed or empty, by looping a non-blocking receive until `default` fires.
+
+## Cancellation with a done channel
+
+The most important `select` idiom is watching a cancellation signal alongside real work. A goroutine that does anything blocking should also be selecting on a `done` (or `ctx.Done()`) channel, so it can stop promptly instead of leaking. Because a closed channel is permanently ready (it yields the zero value forever), `case <-done:` fires the instant `done` is closed — and stays fired, so it works for every goroutine watching it.
+
+<Playground client:visible title="cancellation.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// worker sends squares until told to stop via done.
+func worker(done <-chan struct{}, out chan<- int) {
+	for i := 1; ; i++ {
+		select {
+		case out <- i * i:
+			// produced a value
+		case <-done:
+			return // cancelled — stop promptly, no leak
+		}
+	}
+}
+
+func main() {
+	done := make(chan struct{})
+	out := make(chan int)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() { defer wg.Done(); worker(done, out) }()
+
+	// Take exactly three values, then cancel.
+	got := []int{}
+	for i := 0; i < 3; i++ {
+		got = append(got, <-out)
+	}
+	close(done) // broadcast: tell the worker to stop
+	wg.Wait()
+
+	fmt.Println(got) // [1 4 9]
+}`} />
+
+In real code you would use [`context.Context`](/concurrency/context/) instead of a hand-rolled `done` channel — `ctx.Done()` *is* a channel, so it drops straight into the same `select`, and it adds deadlines and propagation for free.
+
+## Disabling a case with nil
+
+A `nil` channel is never ready, so its `select` case can never be chosen. Setting a channel variable to `nil` therefore **turns a branch off** — invaluable when one input is exhausted (its producer closed) but you still want to keep selecting on the others. Without it you would busy-spin on the closed channel, which is *always* ready and returns zero values endlessly.
+
+<Playground client:visible title="fan-in-disable.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func gen(vals ...int) <-chan int {
+	c := make(chan int)
+	go func() {
+		defer close(c)
+		for _, v := range vals {
+			c <- v
+		}
+	}()
+	return c
+}
+
+func main() {
+	a := gen(1, 2, 3)
+	b := gen(10, 20)
+
+	merged := []int{}
+	// Loop until BOTH channels are closed. We nil out each one as it
+	// closes so its case stops being selected (a closed channel is
+	// always ready and would otherwise spin returning zeros).
+	for a != nil || b != nil {
+		select {
+		case v, ok := <-a:
+			if !ok {
+				a = nil // disable this case
+				continue
+			}
+			merged = append(merged, v)
+		case v, ok := <-b:
+			if !ok {
+				b = nil // disable this case
+				continue
+			}
+			merged = append(merged, v)
+		}
+	}
+
+	sort.Ints(merged) // order across two channels is nondeterministic
+	fmt.Println(merged) // [1 2 3 10 20]
+}`} />
+
+This is **fan-in**: merging several input channels into one. The `nil`-out trick is what lets the loop keep running on the live channels and exit cleanly only when all inputs are done.
+
+## The for-select event loop
+
+Wrapping `select` in a `for` gives an **event loop** — a goroutine that reacts to whichever of several events arrives, over and over, until told to stop. This single shape underlies state machines, schedulers, connection handlers, and most long-lived service goroutines.
+
+<Playground client:visible title="event-loop.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	work := make(chan int)
+	done := make(chan struct{})
+
+	go func() {
+		work <- 1
+		work <- 2
+		work <- 3
+		close(done) // signal end of stream
+	}()
+
+	total := 0
+	// for { select } event loop: handle work until done fires.
+	for {
+		select {
+		case n := <-work:
+			total += n
+		case <-done:
+			fmt.Println("total:", total) // total: 6
+			return
+		}
+	}
+}`} />
+
+Note a subtlety in this example: `done` is closed *after* the three sends, but because `work` is unbuffered the sends rendezvous before `close(done)` runs, so all three are counted before the loop sees `done`. When ordering between data and a done signal matters, prefer closing the *data* channel and ranging, or drain remaining work after `done` fires.
+
+<Callout type="gotcha" title="⚠️ time.After in a hot loop leaks timers">
+Each `time.After(d)` call allocates a `time.Timer` that lives until it fires — about `d` later — even if the `select` chose a different case. Inside a tight `for { select … }` that runs thousands of times a second, those pending timers pile up and waste memory. The fix is to create **one** timer outside the loop and `Reset` it, or to drive the timeout from a `context` with a deadline:
+
+```go
+t := time.NewTimer(d)
+defer t.Stop()
+for {
+	t.Reset(d)
+	select {
+	case v := <-ch:
+		use(v)
+	case <-t.C:
+		return
+	}
+}
+```
+
+The related sharp edge is the **nil-channel** rule: a `nil` channel blocks forever, so setting a channel variable to `nil` *disables* its `select` case. That is a feature (see fan-in above), but an accidentally-nil channel is also a silent forever-block — if a `select` mysteriously never fires a case, check whether that channel is nil.
 </Callout>
 
-This composition — receive, timeout, cancel — is the engine behind every concurrency pattern: [Pipeline](/patterns/pipeline/), [Fan-in/out](/patterns/fan-in-fan-out/), [Or-done](/patterns/or-done-channel/) and [Context](/patterns/context-cancellation/).
+## When to use select
+
+- **Reach for `select`** whenever a goroutine must wait on more than one thing: a value *or* a timeout, work *or* cancellation, several inputs at once.
+- **Add a `default`** only when you truly want non-blocking behavior — a poll, a best-effort send, a drain. A stray `default` in a loop turns a clean block into a CPU-burning busy-wait.
+- **Do not use `select` for a single channel** — a plain `<-ch` is clearer. `select` earns its keep with two or more cases.
+- **Prefer `context` over hand-rolled `done`** for cancellation in anything that crosses an API boundary; `ctx.Done()` slots into the same `select` and carries deadlines.
+
+This composition — receive, timeout, cancel, merge — is the engine behind every higher-level concurrency pattern: [Pipeline](/patterns/pipeline/), [Fan-in / Fan-out](/patterns/fan-in-fan-out/), [Or-done](/patterns/or-done-channel/), [Worker pool](/patterns/worker-pool/) and [Context cancellation](/patterns/context-cancellation/).
+
+Next: the lock-and-coordinate primitives that complement channels — [the sync package](/concurrency/sync-package/).

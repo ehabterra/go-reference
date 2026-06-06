@@ -5,7 +5,7 @@ kind: topic
 order: 1
 difficulty: "Start here"
 status: ready
-intent: "What concurrency actually is, why it is not parallelism, and the CSP model Go is built on."
+intent: "Concurrency is structure (independent activities); parallelism is simultaneous execution. CSP, GOMAXPROCS, channels vs mutexes, and Amdahl's law."
 related:
   - race-conditions
   - goroutines
@@ -44,6 +44,28 @@ quiz:
       - text: "time.Sleep durations"
         correct: false
     explain: "GOMAXPROCS caps how many goroutines execute simultaneously. You can have a million goroutines (concurrency) but only GOMAXPROCS of them run in parallel at any instant."
+  - q: "A program is 95% parallelizable. By Amdahl's law, what is the most you can speed it up, no matter how many cores you add?"
+    options:
+      - text: "20× — the 5% sequential part caps the total speedup at 1 / 0.05"
+        correct: true
+      - text: "Unbounded — more cores always means proportionally faster"
+        correct: false
+      - text: "95× — the speedup equals the parallel fraction times 100"
+        correct: false
+      - text: "2× — concurrency never more than doubles throughput"
+        correct: false
+    explain: "Amdahl's law caps speedup at 1/(1-P) as cores → ∞. With P=0.95 the serial 5% limits you to 1/0.05 = 20×, so beyond a point extra goroutines and cores buy almost nothing."
+  - q: "When should you reach for a channel instead of a mutex?"
+    options:
+      - text: "When you are transferring ownership of data or coordinating between goroutines"
+        correct: true
+      - text: "Always — mutexes are deprecated in Go"
+        correct: false
+      - text: "Only inside the standard library"
+        correct: false
+      - text: "Whenever the critical section is tiny and hot"
+        correct: false
+    explain: "Channels shine for moving data and orchestrating who-does-what; a mutex is the simpler, faster tool for guarding a struct's internal state in a small hot critical section. Match the primitive to the intent."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -57,10 +79,12 @@ One barista taking an order, then starting the espresso, then steaming milk, the
 
 > **"Concurrency is a property of the code; parallelism is a property of the running program."** — Katherine Cox-Buday, *Concurrency in Go* (O'Reilly, 2017), p. 23
 
-- **Concurrency** is *structure*: composing independent activities that *could* run in any order or overlap.
-- **Parallelism** is *execution*: those activities actually running at the same instant on multiple cores.
+- **Concurrency** is *structure*: composing a program out of independent activities that *could* run in any order or overlap. It is a way of **writing** code — of breaking a problem into pieces that don't depend on a fixed sequence.
+- **Parallelism** is *execution*: those activities actually running at the same instant on multiple cores. It is a property of the **machine the code happens to run on**.
 
-Concurrent code on a single core is **interleaved**, not parallel — the runtime rapidly switches between tasks. Give it more cores (via `GOMAXPROCS`) and the same concurrent code becomes parallel, with no rewrite.
+The cleanest way to feel the difference: a well-written concurrent program runs *correctly* on a single core (interleaved) and *faster* on many cores (parallel) — **without changing a line**. You design for concurrency; you get parallelism for free when the hardware allows it. That separation is the whole point. You reason about *structure* once, and the runtime decides *how many hands* do the work.
+
+Concurrent code on a single core is **interleaved**, not parallel — the runtime rapidly switches between tasks, giving each a slice of time. Give it more cores (via `GOMAXPROCS`) and the same concurrent code becomes parallel, with no rewrite.
 
 <Mermaid code={String.raw`graph LR
   subgraph S1["Concurrent · 1 core (interleaved)"]
@@ -71,51 +95,230 @@ Concurrent code on a single core is **interleaved**, not parallel — the runtim
     P2["core 2:  B → B → B"]
   end`} />
 
+## A mental model: composition vs simultaneity
+
+Rob Pike's framing (from his 2012 talk *Concurrency is not Parallelism*) is the one to keep in your head:
+
+- **Concurrency is the composition of independently executing things.** It is a *design* concern — how you decompose a problem so its parts don't have to wait on each other.
+- **Parallelism is the simultaneous execution of (possibly related) computations.** It is an *implementation/runtime* concern — how many of those parts actually move at once.
+
+Concurrency *enables* parallelism but does not require it. A concurrent design is a better structure even on one core, because it lets independent work overlap (especially when one part is blocked waiting on I/O). Parallelism without concurrency is also possible — a vector instruction doing eight multiplies at once is parallel but not "concurrent" in the structural sense. Go's contribution is making the **concurrent structure** so cheap to express (goroutines + channels) that you reach for it to *model* the problem, and let the runtime turn it into parallelism where it can.
+
+| | Concurrency | Parallelism |
+|---|---|---|
+| What it is | A way to **structure** code | A way to **run** code |
+| Concerned with | Dealing with many things *at once* (design) | Doing many things *at once* (execution) |
+| Needs multiple cores? | No — works on one core, interleaved | Yes — simultaneous means ≥2 cores |
+| Go primitive | goroutines, channels, `select` | `GOMAXPROCS` and the scheduler |
+| Failure mode | races, deadlocks, leaks | the *same* races, now easier to hit |
+| You control it by | how you decompose the problem | how many threads run Go code |
+
+## Under the hood: who actually runs concurrently
+
+A goroutine is **not** an OS thread. The Go runtime multiplexes many goroutines (**G**) onto a small set of OS threads (**M**), each thread bound to a logical processor (**P**). The number of **P**s is `GOMAXPROCS`, and that is the real cap on how many goroutines execute Go code *at the same instant*.
+
+So there are two separate dials:
+
+- **How many goroutines exist** — set by your code (`go ...`). Can be millions.
+- **How many run in parallel** — set by `GOMAXPROCS` (default: the number of logical CPUs since Go 1.5). Usually a handful.
+
+That gap is exactly the concurrency/parallelism distinction made concrete: a million-goroutine program on a 8-core machine has a million units of *concurrency* but at most 8-way *parallelism*. The scheduler interleaves the rest. (The full M:N machinery — work-stealing, preemption, syscall handoff — lives in [the Go scheduler](/concurrency/scheduler/).)
+
+You can read and even override the dial:
+
+```go
+import "runtime"
+
+n := runtime.GOMAXPROCS(0) // 0 = "just tell me the current value"
+runtime.GOMAXPROCS(1)      // force single-threaded execution of Go code
+
+// NumGoroutine reports how many goroutines currently exist — concurrency,
+// which is unrelated to how many are running in parallel.
+live := runtime.NumGoroutine()
+_ = n
+_ = live
+```
+
+<Callout type="tip" title="🧪 Same code, two cores' worth of behavior">
+Set the environment variable `GOMAXPROCS=1` and your concurrent program still runs *correctly* — just never in parallel. Then set it to your core count and it speeds up with no code change. If correctness depends on `GOMAXPROCS`, you have a [race condition](/concurrency/race-conditions/), not a working program: concurrency bugs are bugs at `GOMAXPROCS=1` too, even if they only *show* under parallelism.
+</Callout>
+
 ## CSP — the model Go chose
 
-Most languages stop their concurrency abstraction at **OS threads** and shared memory guarded by locks. Go reaches back to Tony Hoare's 1978 **Communicating Sequential Processes**: model your program as independent processes that **communicate over channels** rather than share memory.
+Most languages stop their concurrency abstraction at **OS threads** and shared memory guarded by locks. Go reaches back to Tony Hoare's 1978 paper **Communicating Sequential Processes**: model your program as independent sequential processes that **communicate over channels** rather than share memory.
+
+The shift is subtle but freeing. In the lock-based world you reason about *which goroutine may touch which byte when* — a global, fragile invariant. In the CSP world you reason about *messages*: a value is owned by exactly one goroutine at a time, and ownership is **handed over** by sending it on a channel. The channel itself provides the synchronization, so there is no shared mutable state to guard.
 
 <Callout type="go" title="🐹 The Go proverb">
 **"Don't communicate by sharing memory; share memory by communicating."** Go gives you two new primitives below the OS thread — **goroutines** (cheap concurrent functions) and **channels** (typed communication) — so you can model concurrency at the level of your *problem*, not at the level of thread management.
 </Callout>
 
+Here is the proverb made literal. Instead of a counter protected by a lock, a single goroutine *owns* the counter, and everyone else mutates it by **sending requests** — no mutex anywhere, yet no race:
+
+<Playground client:visible title="share-by-communicating.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// One goroutine owns 'count'. Others ask it to mutate via a channel.
+	requests := make(chan int) // each int is "add this much"
+	done := make(chan int)     // owner returns the final total
+
+	go func() {
+		count := 0 // owned by THIS goroutine alone — no lock needed
+		for delta := range requests {
+			count += delta
+		}
+		done <- count
+	}()
+
+	// Senders never touch 'count' directly; they communicate.
+	for i := 1; i <= 100; i++ {
+		requests <- 1
+	}
+	close(requests) // signal: no more work
+
+	fmt.Println("total:", <-done) // 100, deterministic, race-free
+}`} />
+
+The state is shared (everyone affects `count`), but it is shared *by communicating*, not by reaching into the same memory. That is the entire idea.
+
 ## Channels or mutexes?
 
-Both coordinate goroutines; pick by intent:
+Both coordinate goroutines; pick by **intent**, not habit. Channels are not "better" than mutexes — they solve a different shape of problem. A good rule of thumb (from the Go team's wiki): if you are *moving data* or *deciding who does what*, use a channel; if you are *guarding the internal state of one thing*, use a [mutex](/concurrency/sync-package/).
 
-| Scenario | Use |
-|---|---|
-| Transferring **ownership** of data between goroutines | **Channel** |
-| Guarding a struct's **internal state** | **Mutex** |
-| Coordinating multiple pieces of logic | **Channel** |
-| A tight, performance-critical section | **Mutex** (channels synchronize internally) |
+| Scenario | Use | Why |
+|---|---|---|
+| Transferring **ownership** of data between goroutines | **Channel** | the send/receive *is* the handoff |
+| Coordinating multiple pieces of logic / orchestration | **Channel** | `select` composes events cleanly |
+| Distributing units of work to a pool | **Channel** | a queue with built-in backpressure |
+| Guarding a struct's **internal state** | **Mutex** | simplest tool for a local invariant |
+| A tight, performance-critical critical section | **Mutex** | channels synchronize internally and cost more |
+| A simple flag / counter under contention | **Mutex** or [atomic](/concurrency/atomic/) | no message to send, just protect a field |
+
+When unsure, start with the one that makes the code *clearest*. A `sync.Mutex` around a cache is more obvious than a channel-based "actor"; a pipeline of stages is far clearer with channels than with shared slices and locks. See [channels](/concurrency/channels/) and the [sync package](/concurrency/sync-package/) for the mechanics of each.
 
 ## See concurrency in action
 
-Three goroutines run concurrently; the runtime interleaves them, so the order is **not** deterministic. Edit and **Run** (run it twice — the order can change):
+Three goroutines run concurrently; the runtime interleaves them, so the **completion order is not deterministic**. We synchronize with a `sync.WaitGroup` and assert only stable facts. Edit and **Run** (run it twice — the interleaving can change):
 
 <Playground client:visible title="concurrency.go" code={String.raw`package main
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
 func main() {
-	var wg sync.WaitGroup
-	for _, task := range []string{"take order", "pull espresso", "steam milk"} {
+	tasks := []string{"take order", "pull espresso", "steam milk"}
+
+	var (
+		mu   sync.Mutex
+		done []string
+		wg   sync.WaitGroup
+	)
+	for _, task := range tasks {
 		wg.Add(1)
 		go func(t string) { // each task is an independent, concurrent activity
 			defer wg.Done()
-			fmt.Println("doing:", t)
+			mu.Lock()
+			done = append(done, t) // record completion under a lock
+			mu.Unlock()
 		}(task)
 	}
 	wg.Wait() // join: wait for all of them
-	fmt.Println("all tasks done — order is not guaranteed")
+
+	sort.Strings(done) // sort so OUTPUT is deterministic even though timing isn't
+	fmt.Println("completed (sorted):", done)
+	fmt.Println("count:", len(done)) // always 3 — a stable fact
 }`} />
 
-<Callout type="gotcha" title="⚠️ More goroutines ≠ faster">
-Concurrency is a *design tool*, not automatically a speedup. **Amdahl's Law** says your maximum speedup is capped by the part that must stay sequential, and goroutines add scheduling and communication overhead. Reach for concurrency to model independent work and to overlap I/O — not as a reflex to make everything "parallel."
+## Interleaving on one core vs parallel on many
+
+The same concurrent program behaves differently depending on `GOMAXPROCS`, yet produces the same *result*. Here we force single-threaded execution to prove the structure is independent of the parallelism:
+
+<Playground client:visible title="gomaxprocs.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+)
+
+func main() {
+	prev := runtime.GOMAXPROCS(1) // run Go code on ONE OS thread: interleaved, never parallel
+	defer runtime.GOMAXPROCS(prev)
+
+	const workers = 4
+	var wg sync.WaitGroup
+	results := make([]int, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(id int) { // concurrent regardless of GOMAXPROCS
+			defer wg.Done()
+			sum := 0
+			for n := 1; n <= 1000; n++ {
+				sum += n
+			}
+			results[id] = sum // disjoint indices: no overlap, no lock needed
+		}(i)
+	}
+	wg.Wait()
+
+	fmt.Println("GOMAXPROCS:", runtime.GOMAXPROCS(0))
+	fmt.Println("each worker summed 1..1000 =", results[0]) // 500500
+	fmt.Println("all workers agree:", results[0] == results[workers-1])
+}`} />
+
+Bump that `GOMAXPROCS(1)` to `GOMAXPROCS(4)` and the *answer never changes* — only the timing does. Correct concurrent code is robust to the number of cores; that robustness is the test of a clean design.
+
+## Amdahl's law — more goroutines ≠ faster
+
+Parallelism's payoff is capped by the part of your program that *must* stay sequential. **Amdahl's law** states that if a fraction `P` of the work can be parallelized, the maximum speedup with `N` cores is:
+
+```text
+speedup(N) = 1 / ((1 - P) + P/N)
+```
+
+As `N → ∞` this approaches `1 / (1 - P)`. So a program that is 95% parallelizable caps out at **20×** *no matter how many cores you throw at it* — the serial 5% dominates. Worse, real goroutines add **scheduling, communication, and synchronization overhead**, so past a point each extra goroutine makes things *slower*, not faster.
+
+<Playground client:visible title="amdahl.go" code={String.raw`package main
+
+import "fmt"
+
+// theoretical max speedup for a parallel fraction P on N cores
+func speedup(P float64, N int) float64 {
+	return 1 / ((1 - P) + P/float64(N))
+}
+
+func main() {
+	for _, P := range []float64{0.50, 0.90, 0.95, 0.99} {
+		fmt.Printf("P=%.2f  | 4 cores: %5.2fx | 16 cores: %5.2fx | ceiling: %6.2fx\n",
+			P, speedup(P, 4), speedup(P, 16), 1/(1-P))
+	}
+}`} />
+
+The takeaway: concurrency is a *design tool* for modeling independent work and overlapping I/O — not a magic "make it parallel, make it fast" button. Profile first; the bottleneck is often the serial fraction (I/O, a lock, a single shared queue), and adding goroutines there only adds overhead.
+
+## When to reach for concurrency
+
+- **Model genuinely independent activities.** A server handling many connections, a pipeline of transformation stages, a fan-out of identical jobs — these are *naturally* concurrent and the code is clearer for it.
+- **Overlap I/O latency.** While one goroutine blocks on a network or disk read, others make progress. This is where concurrency wins even on a single core — the speedup comes from hiding wait time, not from extra CPUs.
+- **Don't parallelize for its own sake.** If the work is a tight CPU loop with no independent structure, concurrency adds overhead and bugs for little gain. Measure; respect Amdahl.
+- **Keep ownership clear.** The easiest concurrent code to get right is code where each piece of data has exactly one owner at a time — enforced by channels, or by a [mutex](/concurrency/sync-package/) when state is local.
+
+<Callout type="gotcha" title="⚠️ More goroutines ≠ faster (and may be a bug, not a slowdown)">
+Concurrency is a *design tool*, not automatically a speedup. **Amdahl's Law** caps your maximum speedup at the part that must stay sequential, and goroutines add scheduling and communication overhead — so beyond a point, extra goroutines make a program *slower*. Worse, a concurrent design that "works" only because `GOMAXPROCS=1` serializes it is hiding a [data race](/concurrency/race-conditions/): the bug is there at one core and merely *surfaces* under parallelism. Always run with `-race`, and reach for concurrency to model independent work and overlap I/O — not as a reflex to make everything "parallel."
 </Callout>
+
+## See also
+
+- [Goroutines](/concurrency/goroutines/) — the cheap concurrent functions that make this structure practical.
+- [Channels](/concurrency/channels/) — typed communication, the CSP primitive.
+- [The Go scheduler](/concurrency/scheduler/) — how M:N multiplexing turns concurrency into parallelism.
+- [Race conditions](/concurrency/race-conditions/) — the first failure mode, and why `-race` matters.
+- [The Go memory model](/concurrency/memory-model/) — what "happens before" actually guarantees.
 
 Next up: the failure modes that make concurrency hard — starting with [race conditions](/concurrency/race-conditions/).

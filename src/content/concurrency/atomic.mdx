@@ -5,7 +5,7 @@ kind: topic
 order: 8
 difficulty: "Intermediate"
 status: ready
-intent: "Lock-free reads and writes of a single value — when atomics beat a mutex, the typed atomic.X helpers, and compare-and-swap."
+intent: "Lock-free single-word operations — the typed atomic.Int64/Bool/Pointer, when atomics beat a mutex, compare-and-swap loops, and snapshot swaps."
 related:
   - sync-package
   - race-conditions
@@ -18,20 +18,20 @@ when_avoid:
   - "You need to keep several values consistent together — that's a mutex's job."
   - "The logic is more than one read/modify/write — atomics protect one variable, not an invariant."
 quiz:
-  - q: "What does atomic give you that a plain variable doesn't?"
+  - q: "What does an atomic operation give you that a plain variable access doesn't?"
     options:
-      - text: "An indivisible read-modify-write on a single value, with no lock"
+      - text: "An indivisible read-modify-write on a single value, lock-free, that other goroutines are guaranteed to see"
         correct: true
       - text: "Protection for an entire struct"
         correct: false
-      - text: "Automatic retries"
+      - text: "Automatic retries on conflict"
         correct: false
-      - text: "Ordered logging"
+      - text: "Ordered logging of every change"
         correct: false
-    explain: "atomic operations (Add, Load, Store, Swap, CompareAndSwap) on one value are indivisible and lock-free — but they only guard that single value."
-  - q: "Which should you prefer in modern Go (1.19+)?"
+    explain: "Atomic operations (Load, Store, Add, Swap, CompareAndSwap) on one value are indivisible — no goroutine can observe a half-updated word — and they carry the memory-ordering guarantees that make the write visible to other goroutines. But they only guard that single value."
+  - q: "Which API should you prefer in modern Go (1.19+)?"
     options:
-      - text: "The typed atomics — atomic.Int64, atomic.Bool, atomic.Pointer[T]"
+      - text: "The typed atomics — atomic.Int64, atomic.Bool, atomic.Pointer[T] — with methods like .Add and .Load"
         correct: true
       - text: "The free functions like atomic.AddInt64 on a raw int64"
         correct: false
@@ -39,18 +39,40 @@ quiz:
         correct: false
       - text: "The volatile keyword"
         correct: false
-    explain: "The typed atomics (atomic.Int64, atomic.Bool, atomic.Pointer[T]) make it impossible to accidentally mix atomic and non-atomic access, and they handle alignment for you. Go has no volatile keyword."
+    explain: "The typed atomics make it impossible to accidentally mix atomic and non-atomic access (the field type itself is atomic.Int64), and they guarantee correct 64-bit alignment even on 32-bit platforms. Go has no volatile keyword. The old free functions still work but are easy to misuse."
   - q: "When is CompareAndSwap (CAS) the right tool?"
     options:
-      - text: "Lock-free update loops — change the value only if it hasn't changed since you read it"
+      - text: "Lock-free update loops — commit a new value only if the variable hasn't changed since you read it, else re-read and retry"
         correct: true
-      - text: "Sorting a slice"
+      - text: "Sorting a slice in place"
         correct: false
-      - text: "Reading a value once"
+      - text: "Reading a value exactly once"
         correct: false
-      - text: "Closing a channel"
+      - text: "Closing a channel from multiple goroutines"
         correct: false
-    explain: "CAS sets new only if the current value still equals old; on failure you re-read and retry. It's the building block of lock-free counters, stacks and flags."
+    explain: "CAS sets new only if the current value still equals old; on failure you re-read and retry the whole compute. It's the building block of lock-free counters, max-trackers, stacks, and one-shot flags."
+  - q: "You have an atomic.Int64 balance and a separate atomic.Int64 lastTxn that must always agree. Can atomics keep them consistent?"
+    options:
+      - text: "No — atomics make each word indivisible individually, but another goroutine can observe balance updated and lastTxn not yet; you need a Mutex to change the pair together"
+        correct: true
+      - text: "Yes, just Store both and they update together"
+        correct: false
+      - text: "Yes, if you Load both in the same statement"
+        correct: false
+      - text: "Yes, atomics are transactional across variables"
+        correct: false
+    explain: "Atomicity is per-variable. Two atomic stores are two separate events; a reader can land between them and see a torn invariant. The moment correctness spans more than one value, you need a Mutex (or pack both fields into one struct and swap it via atomic.Pointer)."
+  - q: "Why does a CAS loop need to RE-READ the value inside the loop after a failed swap?"
+    options:
+      - text: "A failed CAS means another goroutine changed the value; the old you compared against is stale, so you must reload and recompute before retrying"
+        correct: true
+      - text: "Because Load is cheaper than CompareAndSwap"
+        correct: false
+      - text: "To give other goroutines a chance to run"
+        correct: false
+      - text: "Re-reading is optional and only improves performance"
+        correct: false
+    explain: "CAS fails exactly when the current value no longer equals the old value you passed — i.e. someone raced you. Retrying with the same stale old would just fail again forever. You reload the current value, recompute your candidate against it, and try once more."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -60,11 +82,22 @@ import Playground from '../../components/islands/Playground.tsx';
 A mutex locks the whole room so one person edits the ledger at a time. An atomic counter is a turnstile: each person pushes through and the count ticks up indivisibly — no room to lock, no door to wait at. Great for *one* number; useless if you need several things to change together.
 </Callout>
 
+## Mental model: one indivisible word
+
+`sync/atomic` performs operations on a **single machine word** that no other goroutine can observe half-finished. A plain `n++` is actually three steps — load `n`, add one, store it back — and two goroutines can interleave those steps and lose an update; that's the classic [data race](/concurrency/race-conditions/). `counter.Add(1)` collapses those three steps into one hardware instruction that the CPU guarantees is indivisible.
+
+There are two halves to the guarantee, and the second is the one people forget:
+
+1. **Indivisibility** — no goroutine ever sees a torn, half-written value.
+2. **Visibility / ordering** — an atomic `Store` *publishes* the write, and a matching atomic `Load` *observes* it, with happens-before guarantees defined by the [Go memory model](/concurrency/memory-model/). This is why you can't simulate an atomic with a plain `volatile`-style variable: plain reads and writes carry no ordering, so a reader might never see the writer's update at all.
+
+The cost story is why you'd bother. An atomic operation is a single CPU instruction (with a memory barrier) — no goroutine parking, no scheduler involvement, no contention queue. On a hot counter hammered by many cores it can be dramatically faster than a mutex, which under contention forces goroutines to park and wake. The catch: an atomic protects exactly **one word**. The instant your invariant spans two values, you're back to a [mutex](/concurrency/sync-package/).
+
 ## One value, no lock
 
-`sync/atomic` performs indivisible operations on a single value. The racy counter from [Race Conditions](/concurrency/race-conditions/) becomes correct — and lock-free. Prefer the **typed atomics** (Go 1.19+); they prevent mixing atomic and plain access. **Run** it:
+The racy counter from [Race Conditions](/concurrency/race-conditions/) becomes correct — and lock-free. Prefer the **typed atomics** (Go 1.19+); the field's type *is* `atomic.Int64`, so every access goes through an atomic method and you can't accidentally read it plainly. **Run** it:
 
-<Playground client:visible title="atomic.go" code={String.raw`package main
+<Playground client:visible title="atomic-counter.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -73,7 +106,7 @@ import (
 )
 
 func main() {
-	var counter atomic.Int64 // typed atomic — always accessed atomically
+	var counter atomic.Int64 // typed atomic — every access is atomic by construction
 	var wg sync.WaitGroup
 
 	for i := 0; i < 1000; i++ {
@@ -88,41 +121,192 @@ func main() {
 	fmt.Println("counter =", counter.Load()) // always 1000
 }`} />
 
-## The operations
+Compare that to the racy version — `var counter int64; go func(){ counter++ }()` — which `go run -race` flags instantly and which prints a number *less* than 1000 because increments get lost. The atomic costs you nothing in syntax and buys you correctness.
+
+## The operations and the types
+
+Every typed atomic exposes the same small, powerful vocabulary:
 
 | Operation | What it does |
 |---|---|
 | `Load()` | read the current value atomically |
 | `Store(v)` | write a value atomically |
-| `Add(n)` | atomic increment/decrement (returns the new value) |
-| `Swap(v)` | set new, return old, atomically |
+| `Add(n)` | atomic add (returns the new value); `Add(-1)` to decrement |
+| `Swap(v)` | set new, return the old value, atomically |
 | `CompareAndSwap(old, new)` | set new **only if** current == old; returns whether it swapped |
 
-Beyond integers: `atomic.Bool` for flags, `atomic.Pointer[T]` for swapping whole values (config reloads), and the older `atomic.Value` for arbitrary types.
+And the types that carry them:
+
+| Type | For | Notes |
+|---|---|---|
+| `atomic.Int64` / `Int32` / `Uint64` / `Uint32` | counters, sizes, bitsets | `Add`/`Swap`/`CAS` available |
+| `atomic.Bool` | one-shot flags, shutdown signals | `Load`/`Store`/`Swap`/`CAS` (no `Add`) |
+| `atomic.Pointer[T]` | swap a whole immutable snapshot | type-safe, GC-aware; replaces unsafe casts |
+| `atomic.Value` | swap an arbitrary value (pre-generics) | all stores must be the same concrete type |
+| `atomic.Uintptr` | low-level pointer-sized integers | rare; prefer `Pointer[T]` for real pointers |
 
 ## Compare-and-swap — lock-free updates
 
-CAS is the heart of lock-free algorithms: read, compute, and commit only if nobody changed the value underneath you — otherwise retry.
+`CompareAndSwap` is the heart of lock-free algorithms: read the current value, compute a candidate, and **commit only if nobody changed it underneath you** — otherwise re-read and retry. Here's an atomic max across 1000 goroutines.
 
 <Mermaid code={String.raw`graph LR
-  R["read old"] --> C{"CAS(old, new)?"}
-  C -->|swapped| D["done"]
+  R["read old"] --> P{"candidate beats old?"}
+  P -->|no| D["done"]
+  P -->|yes| C{"CAS(old, candidate)?"}
+  C -->|swapped| D
   C -->|value changed| R`} />
 
-```go
-// Atomically take the max, lock-free
-for {
-	old := best.Load()
-	if candidate <= old || best.CompareAndSwap(old, candidate) {
-		break
+<Playground client:visible title="atomic-max.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+// atomicMax raises best to candidate if candidate is larger — lock-free.
+func atomicMax(best *atomic.Int64, candidate int64) {
+	for {
+		old := best.Load()
+		if candidate <= old {
+			return // someone already has a bigger (or equal) value
+		}
+		if best.CompareAndSwap(old, candidate) {
+			return // we won the race; committed
+		}
+		// CAS failed: another goroutine moved best — loop and re-read
 	}
 }
-```
+
+func main() {
+	var best atomic.Int64
+	var wg sync.WaitGroup
+
+	// Each goroutine i proposes the value i; the max of 0..999 is 999.
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func(v int64) {
+			defer wg.Done()
+			atomicMax(&best, v)
+		}(int64(i))
+	}
+
+	wg.Wait()
+	fmt.Println("max =", best.Load()) // always 999
+}`} />
+
+The shape — `Load`, decide, `CompareAndSwap`, loop on failure — is the universal CAS pattern. Notice the re-read inside the loop: a failed CAS means `old` is now stale, so you must reload and recompute before retrying. Under heavy contention a CAS loop can spin a few times; that's fine for short computations but is why CAS isn't a free lunch when the contended section is expensive.
+
+## A one-shot flag with atomic.Bool
+
+`atomic.Bool` is the clean way to express a flag that many goroutines read and at most one flips. Using `CompareAndSwap(false, true)` makes the flip itself a race-winning gate — exactly one goroutine succeeds.
+
+<Playground client:visible title="atomic-flag.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+// done is a one-way flag: flipped to true exactly once via CompareAndSwap.
+var done atomic.Bool
+
+func main() {
+	var wg sync.WaitGroup
+	var winners atomic.Int64 // how many goroutines won the flip
+
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Only the first caller flips false -> true; the rest fail the CAS.
+			if done.CompareAndSwap(false, true) {
+				winners.Add(1)
+			}
+		}()
+	}
+
+	wg.Wait()
+	fmt.Println("flag is set:", done.Load())           // true
+	fmt.Println("exactly one winner:", winners.Load()) // 1
+}`} />
+
+This is the right tool for "has shutdown started?" or "did we already log this once?" — a single boolean read on a hot path with no lock. (For *waiting* on a flag rather than just checking it, a closed channel or [`context`](/concurrency/context/) composes better with `select`.)
+
+## atomic.Pointer — swap a whole snapshot
+
+The killer use of `atomic.Pointer[T]` is **hot configuration reload**: hold the current config behind an atomic pointer, and to update, build a brand-new immutable snapshot and `Store` it in one atomic write. Readers do a single `Load` and get a complete, consistent value — no lock, no torn read, no per-field racing. This is how you dodge the "two values must agree" limitation: you make them *one* value (a struct) and swap the pointer.
+
+<Playground client:visible title="atomic-snapshot.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+// Config is an immutable snapshot; we swap the whole thing, never mutate it.
+type Config struct {
+	Version int
+	Name    string
+}
+
+func main() {
+	var cfg atomic.Pointer[Config]
+	cfg.Store(&Config{Version: 1, Name: "v1"}) // publish the initial snapshot
+
+	var wg sync.WaitGroup
+
+	// One writer hot-swaps the config to a new immutable snapshot.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cfg.Store(&Config{Version: 2, Name: "v2"})
+	}()
+
+	// Many readers each grab a consistent snapshot via a single Load.
+	var sawV1, sawV2 atomic.Int64
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c := cfg.Load() // one read = one whole, consistent Config
+			switch c.Version {
+			case 1:
+				sawV1.Add(1)
+			case 2:
+				sawV2.Add(1)
+			}
+		}()
+	}
+
+	wg.Wait()
+	// Every reader saw a valid snapshot — no torn reads, no version 0.
+	fmt.Println("all reads valid:", sawV1.Load()+sawV2.Load() == 1000) // true
+	fmt.Println("final version:", cfg.Load().Version)                   // 2
+}`} />
+
+The discipline that makes this safe: the pointed-to `Config` is **never mutated after it's stored**. Writers always allocate a fresh struct and swap the pointer. `atomic.Pointer[T]` is the type-safe, generics-era replacement for the older `atomic.Value` (which works too but accepts `any` and panics if you store two different concrete types).
+
+## When atomics beat a mutex — and when they don't
+
+| Situation | Reach for |
+|---|---|
+| A single counter incremented from many goroutines | **atomic** (`Int64.Add`) |
+| A boolean flag read on a hot path | **atomic** (`Bool`) |
+| Swap an entire immutable config/snapshot | **atomic** (`Pointer[T]`) |
+| Two+ fields that must change together (balance + lastTxn) | **mutex** |
+| A map, slice, or any multi-step read-modify-write | **mutex** |
+| Read-heavy structured state | **RWMutex** (or `atomic.Pointer` to an immutable copy) |
+| Code that isn't actually hot | **mutex** — simpler, and the speed never mattered |
 
 <Callout type="gotcha" title="⚠️ Atomics guard one variable — not an invariant">
-The moment correctness depends on **two** values agreeing (e.g. a slice's length and its backing data, or "balance and last-transaction"), atomics can't help — you need a `Mutex` so the pair changes together. Also: never mix atomic and non-atomic access to the same variable, and on 32-bit platforms misaligned 64-bit fields panic (the typed atomics avoid this for you).
+The moment correctness depends on **two** values agreeing (a slice's length and its backing data, or "balance and last-transaction"), atomics can't help — two atomic stores are two separate events, and a reader can land between them. Use a `Mutex` so the pair changes together, or pack the fields into one struct and swap it with `atomic.Pointer`. Also: **never mix atomic and non-atomic access** to the same variable (the typed atomics make this structurally impossible), and on 32-bit platforms a misaligned 64-bit field panics — the typed atomics align it for you, which the old free functions did not.
 </Callout>
 
 <Callout type="go" title="🐹 Atomic vs mutex — a rule of thumb">
-One counter or flag on a hot path → **atomic**. A handful of fields that must stay consistent → **mutex**. Don't reach for atomics to shave nanoseconds off code that isn't hot; measure first with `-race` and `pprof`.
+One counter, flag, or snapshot pointer on a hot path → **atomic**. A handful of fields that must stay consistent → **mutex**. Don't reach for atomics to shave nanoseconds off code that isn't hot — measure first with `go test -race` (to prove there's a race) and `pprof` (to prove it's the bottleneck). And remember the deeper guarantee: an atomic `Store`/`Load` pair carries the happens-before edge that publishes your data, which is governed by the [memory model](/concurrency/memory-model/).
 </Callout>
+
+Next: the rules that decide when one goroutine is guaranteed to see another's writes — [the Go memory model](/concurrency/memory-model/).

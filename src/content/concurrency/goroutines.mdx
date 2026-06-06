@@ -5,7 +5,7 @@ kind: topic
 order: 4
 difficulty: "Beginner"
 status: ready
-intent: "Go's lightweight, runtime-scheduled concurrent functions — the fork-join model, their tiny cost, and how to avoid leaks."
+intent: "Go's lightweight, runtime-scheduled concurrent functions — the fork-join model, their tiny cost, M:N scheduling, and how to avoid leaks."
 related:
   - channels
   - select
@@ -44,6 +44,28 @@ quiz:
       - text: "Nothing; the GC collects blocked goroutines"
         correct: false
     explain: "Goroutines aren't GC'd while blocked. One stuck on a channel send/receive forever leaks its stack and whatever it references. Always give it a termination path (done channel or context)."
+  - q: "An unrecovered panic in a goroutine — what happens to the program?"
+    options:
+      - text: "The whole program crashes; you cannot recover it from another goroutine"
+        correct: true
+      - text: "Only that goroutine dies; the rest keep running"
+        correct: false
+      - text: "main's deferred recover() catches it"
+        correct: false
+      - text: "The scheduler restarts the goroutine automatically"
+        correct: false
+    explain: "A panic unwinds only its own goroutine's stack. If no deferred recover() in THAT goroutine handles it, the runtime terminates the entire process. recover() in main or another goroutine cannot catch it."
+  - q: "Why did Go 1.22 change the for-loop variable semantics?"
+    options:
+      - text: "So each iteration gets a fresh variable, fixing goroutines that all captured the shared loop variable"
+        correct: true
+      - text: "To make loops run in parallel automatically"
+        correct: false
+      - text: "To allow break inside goroutines"
+        correct: false
+      - text: "To speed up range over integers"
+        correct: false
+    explain: "Pre-1.22 the loop variable was shared across iterations, so a goroutine closing over it often saw the final value. Go 1.22 gives each iteration its own copy, removing the classic capture bug."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -55,16 +77,18 @@ An OS thread is a full-time employee — expensive to hire, heavy to manage. A g
 
 ## Starting a goroutine
 
-Prefix any call with `go` and it runs concurrently:
+A goroutine is a function running **concurrently** with the rest of your program. Prefix any call with `go` and it runs in its own independently-scheduled branch:
 
 ```go
 go sayHello()            // a named function
-go func() { work() }()   // an anonymous function
+go func() { work() }()   // an anonymous function, called immediately
 ```
+
+The `go` statement returns *immediately* — it does **not** wait for the function to finish, and it has no return value to give you (a goroutine's result must come back through a channel or shared state). That fire-and-keep-going behavior is the whole point, and also the source of every goroutine pitfall: the parent and the new goroutine now race forward together, and you must arrange for them to meet again.
 
 ## The fork-join model
 
-The `go` statement **forks** a new branch of execution. To be sure it actually ran (and finished), you need a **join point** — most often `sync.WaitGroup`. Without one, `main` can return before the goroutine ever runs.
+The `go` statement **forks** a new branch of execution. To be sure it actually ran (and finished), you need a **join point** — a place where the parent waits for the branch to rejoin. Most often that is `sync.WaitGroup.Wait()`, but a channel receive or `errgroup.Wait()` serves the same role. Without a join point, `main` can return before the goroutine ever runs — and when `main` returns, the whole program exits, taking every goroutine with it, finished or not.
 
 <Mermaid code={String.raw`graph TD
   M["main"] -->|go| W1["worker 1"]
@@ -75,7 +99,7 @@ The `go` statement **forks** a new branch of execution. To be sure it actually r
   W3 --> J
   J --> E["main continues"]`} />
 
-Edit and **Run**:
+`sync.WaitGroup` is a counter: `Add(n)` before you fork, `Done()` (usually deferred) as each branch finishes, and `Wait()` blocks until the counter hits zero. Edit and **Run**:
 
 <Playground client:visible title="goroutines.go" code={String.raw`package main
 
@@ -99,26 +123,239 @@ func main() {
 	fmt.Println("all workers finished")
 }`} />
 
-## They're cheap
+<Callout type="tip" title="🧪 Add before you go, Done with defer">
+Call `wg.Add(1)` in the parent *before* the `go` statement, never inside the goroutine — otherwise `Wait()` may run before `Add` and miss the branch entirely. And always `defer wg.Done()` so the count drops even if the goroutine returns early or panics-then-recovers. Pass the `*sync.WaitGroup` by **pointer**; copying a WaitGroup breaks it.
+</Callout>
 
-- **~2–4 KB** initial stack (vs ~1 MB for an OS thread), and it **grows on demand**.
-- Context switches are far cheaper than OS-thread switches because the runtime, not the kernel, schedules them.
-- Result: a single program can run **hundreds of thousands to millions** of goroutines. Treat them as a near-free resource — but not a *free* one.
+## They're cheap — that's why the model works
 
-## Two gotchas
+The reason Go can hand you `go` as a casual keyword is that goroutines are *dramatically* lighter than threads:
 
-<Callout type="go" title="🐹 The loop-variable capture (fixed in Go 1.22)">
-Before Go 1.22, a goroutine in a `for` loop captured the **shared** loop variable, so they often all saw the final value:
+| | OS thread | Goroutine |
+|---|---|---|
+| Initial stack | ~1 MB (fixed or large) | **~2–4 KB**, grows on demand |
+| Created/destroyed by | the kernel (syscall) | the Go runtime (user space) |
+| Switched by | the kernel scheduler | the Go scheduler (no syscall) |
+| Practical maximum | thousands | **hundreds of thousands to millions** |
+| Identity | has a thread ID | intentionally *no* exposed ID |
+
+- The **~2–4 KB** initial stack is allocated from the heap and **grows and shrinks on demand** — the runtime copies the stack to a bigger region when a goroutine needs more, so you don't pre-pay for deep recursion.
+- **Context switches are cheap** because the runtime, not the kernel, schedules them: switching goroutines on the same thread is roughly a function-call's worth of work, with no trip into the kernel.
+- The result: spawning a goroutine costs on the order of *hundreds of nanoseconds*, and a single program can comfortably run **millions** of them. Treat goroutines as a near-free resource — but, as the leaks section shows, not a *free* one.
+
+This Playground spins up 100,000 goroutines and shows they all really ran — something you would never attempt with OS threads:
+
+<Playground client:visible title="cheap.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+func main() {
+	const n = 100_000
+	var ran int64
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			atomic.AddInt64(&ran, 1) // atomic: many goroutines, one counter
+		}()
+	}
+	wg.Wait()
+	fmt.Printf("spawned and joined %d goroutines\n", atomic.LoadInt64(&ran))
+}`} />
+
+## Under the hood: M:N scheduling
+
+Goroutines do not map one-to-one to threads. The runtime multiplexes many goroutines (**G**) onto a small number of OS threads (**M**), coordinated through logical processors (**P**) whose count is `GOMAXPROCS`. This is an **M:N scheduler**: *M* goroutines run on *N* threads, with *N* far smaller than *M*.
+
+```text
+millions of G  →  a handful of P (= GOMAXPROCS)  →  as many M (OS threads) as needed
+```
+
+When a goroutine blocks on a channel or a mutex, the scheduler **parks** it and runs another on the same thread — no kernel involvement, no thread sitting idle. When a goroutine blocks on a *syscall* (a real I/O wait), the runtime can hand its **P** to another **M** so other goroutines keep running. Idle **P**s steal work from busy ones. That machinery — work-stealing, preemption, syscall handoff — is what makes "just start a goroutine" a sound default. The full mechanics live in [the Go scheduler](/concurrency/scheduler/).
+
+The practical consequence for you: a blocked goroutine costs almost nothing (it's just parked), so designs that start one goroutine per connection or per job are normal and idiomatic in Go.
+
+## Passing arguments vs capturing variables
+
+A goroutine running a closure *captures* the variables it references — it shares them with the parent, which is a frequent source of surprise. The classic case is a loop. Before **Go 1.22**, the loop variable was **shared across iterations**, so a goroutine that closed over it often saw the loop's *final* value by the time it actually ran:
 
 ```go
+// PRE-1.22 BUG: all goroutines share one 's', usually printing the last item N times
 for _, s := range items {
-	go func() { fmt.Println(s) }() // pre-1.22: prints the last item N times
+    go func() { fmt.Println(s) }()
 }
 ```
 
-Go 1.22 made each iteration get its own variable, so this is fixed in modern Go. On older versions (or to be explicit), pass it as an argument: `go func(s string) { ... }(s)`.
-</Callout>
+Go 1.22 changed `for` semantics so **each iteration gets its own copy** of the loop variable, fixing this for modern code. But the underlying lesson outlives the loop fix: **a closure captures variables by reference, so pass anything you want a stable snapshot of as an explicit argument.** Arguments are evaluated at the `go` statement and copied in, immune to later mutation:
+
+<Playground client:visible title="capture.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+func main() {
+	items := []string{"alpha", "bravo", "charlie"}
+
+	var mu sync.Mutex
+	var got []string
+	var wg sync.WaitGroup
+
+	for _, s := range items {
+		wg.Add(1)
+		// Pass s as an argument: each goroutine gets its OWN copy, captured now.
+		// This is correct on every Go version, 1.22 or older.
+		go func(item string) {
+			defer wg.Done()
+			mu.Lock()
+			got = append(got, item)
+			mu.Unlock()
+		}(s)
+	}
+	wg.Wait()
+
+	sort.Strings(got) // sort so output is deterministic; scheduling order is not
+	fmt.Println(got)  // [alpha bravo charlie]
+}`} />
+
+## Goroutine leaks and how to avoid them
+
+A goroutine is **not** garbage-collected while it is blocked — the GC can only reclaim a goroutine that has *returned*. A goroutine stuck forever on a channel send or receive is a **leak**: it holds its stack and everything it captured (closures, buffers, references) for the life of the program. Leaks are silent — no error, no crash — and they accumulate, eventually exhausting memory in a long-running server.
+
+The rule: **every goroutine you start must have a guaranteed path to termination.** The two standard mechanisms are a **`done` channel** the goroutine `select`s on, or a [`context.Context`](/concurrency/context/) whose `Done()` channel does the same. Here a long-lived worker exits cleanly when signaled, instead of blocking forever:
+
+<Playground client:visible title="done-channel.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// worker processes jobs until 'done' is closed, then returns — no leak.
+func worker(jobs <-chan int, done <-chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case j, ok := <-jobs:
+			if !ok {
+				return // jobs channel closed: nothing left to do
+			}
+			fmt.Println("processed job", j)
+		case <-done:
+			fmt.Println("worker told to stop")
+			return // termination path: we can ALWAYS get out
+		}
+	}
+}
+
+func main() {
+	jobs := make(chan int)
+	done := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go worker(jobs, done, &wg)
+
+	jobs <- 1
+	jobs <- 2
+	close(done) // signal the worker to stop, even though jobs is still open
+	wg.Wait()   // join: confirm the worker actually returned
+
+	fmt.Println("main: worker has exited cleanly")
+}`} />
+
+Notice the worker can exit *two* ways — the jobs channel closing **or** the `done` signal. That "more than one way out" is the heart of leak-free design. For the reusable patterns, see [Or-done channel](/patterns/or-done-channel/) and [Context & cancellation](/patterns/context-cancellation/).
 
 <Callout type="gotcha" title="⚠️ Every goroutine needs an exit">
-Goroutines are **not** garbage-collected while blocked. A goroutine waiting forever on a channel that never receives a value is a **leak** — it holds its stack and everything it captured. The rule: every goroutine you start must have a guaranteed path to termination, usually a `done` channel or a [`context`](/concurrency/context/) you `select` on. See [Or-done](/patterns/or-done-channel/) and [Context & Cancellation](/patterns/context-cancellation/).
+Goroutines are **not** garbage-collected while blocked. A goroutine waiting forever on a channel that never receives a value is a **leak** — it holds its stack and everything it captured. The rule: every goroutine you start must have a guaranteed path to termination, usually a `done` channel or a [`context`](/concurrency/context/) you `select` on. A common leak: starting a goroutine that *sends* on an unbuffered channel whose receiver has already gone away — it blocks on the send forever. When in doubt, ask "if the consumer disappears, how does this goroutine get out?"
 </Callout>
+
+## A panic in a goroutine crashes the whole program
+
+This one surprises people coming from languages with per-thread exception isolation. A `panic` unwinds only the **panicking goroutine's** stack. If no `recover()` in a deferred call *in that same goroutine* handles it, the runtime **terminates the entire process** — every other goroutine dies too. A `recover()` in `main`, or in some other goroutine, **cannot** catch a panic raised elsewhere.
+
+```go
+func main() {
+    defer func() { recover() }() // does NOT save you — wrong goroutine
+    go func() {
+        panic("boom") // unhandled here ⇒ the whole program crashes
+    }()
+    time.Sleep(time.Second)
+}
+```
+
+The fix is to recover **inside** the goroutine that might panic — typically the first thing it defers — and turn the failure into a value (an error on a channel, a logged message) the rest of the program can handle:
+
+<Playground client:visible title="goroutine-panic.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// safeWork runs fn and converts a panic into an error, so it cannot crash
+// the process. The recover MUST be in the goroutine that panics.
+func safeWork(fn func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic: %v", r)
+		}
+	}()
+	fn()
+	return nil
+}
+
+func main() {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errs []error
+
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			err := safeWork(func() {
+				if id == 1 {
+					panic("worker 1 hit a bug")
+				}
+			})
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	fmt.Println("program survived; recovered errors:", len(errs))
+	for _, e := range errs {
+		fmt.Println(" -", e)
+	}
+}`} />
+
+See [panic & recover](/fundamentals/panic-recover/) for the full semantics, including why you should recover only at well-defined boundaries.
+
+## When to use a goroutine
+
+- **One per independent activity.** A connection, a request, a pipeline stage, a background poll — anything that has its own lifecycle. This is the natural unit.
+- **To overlap waiting.** While one goroutine blocks on I/O, others run. This is where concurrency pays off even on a single core — see [concurrency vs parallelism](/concurrency/concurrency-vs-parallelism/).
+- **Not for tiny CPU work.** Starting a goroutine to do a few microseconds of arithmetic costs more in scheduling than it saves. Batch small work; reserve goroutines for things that are genuinely independent or genuinely block.
+- **Always with an owner and an exit.** Before you type `go`, answer two questions: *who joins this goroutine?* and *how does it stop?* If you can't answer both, you're writing a leak.
+
+## See also
+
+- [Channels](/concurrency/channels/) — how goroutines communicate and hand off ownership of data.
+- [`select`](/concurrency/select/) — wait on multiple channels at once; the basis of `done`-channel termination.
+- [The Go scheduler](/concurrency/scheduler/) — the M:N machinery that runs millions of goroutines on a few threads.
+- [Concurrency vs parallelism](/concurrency/concurrency-vs-parallelism/) — what `go` buys you, and what it doesn't.
+- [Worker pool](/patterns/worker-pool/) — the canonical "bounded fan-out" goroutine pattern.
+
+Next: how goroutines actually talk to each other — [channels](/concurrency/channels/).

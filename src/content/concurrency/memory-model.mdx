@@ -44,45 +44,72 @@ quiz:
       - text: "That you don't need synchronization"
         correct: false
     explain: "A data race can happen to produce the right answer today and the wrong one tomorrow, on another CPU, or under load. Only a happens-before edge makes visibility guaranteed."
+  - q: "What precisely is a 'data race' in Go?"
+    options:
+      - text: "Two goroutines access the same location concurrently, at least one writes, and nothing synchronizes them"
+        correct: true
+      - text: "Any time two goroutines run at the same time"
+        correct: false
+      - text: "Two goroutines reading the same variable"
+        correct: false
+      - text: "A deadlock between two mutexes"
+        correct: false
+    explain: "All three conditions are required: same memory, concurrent (no happens-before edge ordering them), and at least one write. Two concurrent reads are fine; a read plus a write with no synchronization is undefined behavior."
+  - q: "Why isn't a plain `for !done {}` spin-loop on a shared bool a valid way to wait for another goroutine?"
+    options:
+      - text: "Without a synchronizing operation there's no happens-before edge, so the loop may never observe the write to done"
+        correct: true
+      - text: "Spin loops are always a compile error in Go"
+        correct: false
+      - text: "Because time.Sleep is required inside every loop"
+        correct: false
+      - text: "Because bool isn't safe to read"
+        correct: false
+    explain: "It's a data race: one goroutine writes done, the other reads it, nothing synchronizes them. The compiler may hoist the read out of the loop or the CPU may never see the new value. Use a channel, a sync primitive, or an atomic — each is a happens-before edge."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🏃 Analogy">
-A relay race: the second runner may not start until the baton is in hand. The baton is **synchronization** — passing it is what guarantees "I'm done, and here's the state." Without passing a baton, the next runner has no promise about where the first one got to. In Go, channels and locks *are* the baton.
+A relay race: the second runner may not start until the baton is in hand. The baton is **synchronization** — passing it is what guarantees "I'm done, and here's the state." Without passing a baton, the next runner has no promise about where the first one got to. In Go, channels and locks *are* the baton. No baton, no guarantee — even if the runners happen to line up correctly this once.
 </Callout>
 
 ## What the memory model is
 
-The Go memory model answers one question: **when is a read guaranteed to see a particular write?** The answer is the **happens-before** relation. If event A happens-before event B, then B sees everything A did. If there's *no* happens-before edge between a write in one goroutine and a read in another, you have a [data race](/concurrency/race-conditions/) and the result is undefined — full stop.
+The Go memory model answers exactly one question: **when is a read in one goroutine guaranteed to see a particular write from another?** The answer is the **happens-before** relation. If event A happens-before event B, then B is guaranteed to observe everything A did. If there is *no* happens-before edge between a write in one goroutine and a read in another, you have a [data race](/concurrency/race-conditions/) and the result is **undefined behavior** — not "probably the old value," not "occasionally wrong," but no guarantee whatsoever.
 
-## Within one goroutine
+The mental model worth carrying: think of each goroutine as running on its own CPU with its own private cache, free to reorder its own instructions and free to *not* publish its writes to anyone else. A synchronizing operation — a channel send, a mutex unlock, an atomic store — is the *only* thing that forces a write to become visible to another goroutine, and forces an ordering between them. Everything else is invisible across the goroutine boundary by default.
 
-Inside a single goroutine, statements happen-before in **program order** (the compiler may reorder, but never in a way you could observe from that goroutine). The subtlety is **across** goroutines — where program order tells you nothing.
+## Within one goroutine: program order
+
+Inside a single goroutine, reads and writes appear to happen in **program order**. The compiler and CPU may reorder instructions for speed, but never in a way that goroutine itself could detect — `a = 1; b = 2` always *looks* like `a` was set first from inside that goroutine. The catch: this guarantee is local. Another goroutine watching `a` and `b` may see the writes land in *either* order, because program order says nothing about what *other* goroutines observe. That gap is the entire reason the memory model exists.
 
 ## The edges that cross goroutines
 
-These are the operations that establish happens-before *between* goroutines:
+These are the operations that establish happens-before *between* goroutines. Memorize this table — it is the whole contract:
 
 | Synchronizing event | The guarantee |
 |---|---|
+| **`go` statement** | everything before `go f()` happens-before `f` begins running |
 | **Channel send → receive** | a send happens-before the receive that gets that value completes |
 | **Channel close → receive** | the close happens-before a receive that returns the zero value |
-| **Mutex `Unlock` → next `Lock`** | the unlock happens-before the next lock returns |
-| **`sync.Once.Do`** | the one execution happens-before every `Do` returns |
-| **`WaitGroup`** | `Done()` calls happen-before `Wait()` returns |
-| **`go` statement** | it happens-before the new goroutine starts |
-| **`atomic`** | a synchronizing atomic write happens-before the read that observes it |
+| **Buffered channel** | the kth receive happens-before the (k+C)th send completes (C = capacity) |
+| **Mutex `Unlock` → next `Lock`** | the nth `Unlock` happens-before the (n+1)th `Lock` returns |
+| **`sync.Once.Do`** | the single execution of `f` happens-before any `Do(f)` returns |
+| **`WaitGroup`** | all `Add`/`Done` before `Wait` happen-before `Wait` returns |
+| **`atomic` (Go 1.19+)** | a release store happens-before the acquire load that observes it |
+
+Two things to internalize. First, **`time.Sleep`, scheduling order, and "the goroutines started close together" create *nothing*** — timing is not synchronization. Second, the `go` statement is one-directional: starting a goroutine orders the parent's prior writes *before* the child runs, but goroutine *exit* establishes nothing on its own — you need a channel, `WaitGroup`, or join to learn the child finished.
 
 <Mermaid code={String.raw`graph LR
   W["G1: write msg"] --> C["G1: close(done)"]
-  C -.happens-before.-> R["G2: <-done"]
-  R --> U["G2: read msg → sees the write"]`} />
+  C -.happens-before.-> R["G2: receive on done"]
+  R --> U["G2: read msg, sees the write"]`} />
 
 ## Proof: the baton is the channel
 
-Here the close-before-receive edge guarantees the receiver sees the write to `msg`. It is **always** "hello", never the empty string. **Run** it:
+Here the close-before-receive edge guarantees the receiver sees the write to `msg`. It is **always** "hello", never the empty string — the close in G1 happens-before the receive in `main`, and the write precedes the close in program order, so by transitivity the write is visible after the receive. **Run** it:
 
 <Playground client:visible title="memory_model.go" code={String.raw`package main
 
@@ -101,12 +128,90 @@ func main() {
 	fmt.Println(msg) // always "hello" — never ""
 }`} />
 
-Delete the channel and read `msg` directly after `go func(){ msg = "hello" }()` and you have a race: it might print `hello`, might print `""`, might be flagged by `-race`. The channel isn't decoration — it's the synchronization that makes the write visible.
+### The racy version — never write this
+
+Delete the channel and read `msg` directly, and you have a textbook data race:
+
+```go
+// BROKEN: data race, undefined behavior
+var msg string
+go func() { msg = "hello" }() // write, no synchronization
+fmt.Println(msg)              // read, racing the write
+// may print "hello", may print "", may be reordered, flagged by -race
+```
+
+There is no happens-before edge between the write and the read, so any outcome is permitted. It might print `hello` a million times on your laptop and `""` once in production. The channel in the working version isn't decoration — it is the synchronization that *makes the write visible*.
+
+## A second baton: the mutex
+
+Channels aren't the only baton. A `sync.Mutex` establishes the same kind of edge: the nth `Unlock` happens-before the (n+1)th `Lock` returns, so whatever you wrote while holding the lock is visible to the next goroutine that acquires it. This counter is **always 1000**, with no race, because every increment is fenced by lock/unlock:
+
+<Playground client:visible title="mutex_hb.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	counter := 0
+
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mu.Lock()
+			counter++ // safe: Unlock happens-before the next Lock
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait() // Done() happens-before Wait() returns, so all writes are visible here
+	fmt.Println("counter:", counter) // always 1000
+}`} />
+
+Two happens-before edges work together here: the mutex orders the increments against each other, and the `WaitGroup` guarantees `main` sees the final value after `Wait()` returns. Drop the mutex and the same loop becomes a race that prints some number *below* 1000 — lost updates from concurrent read-modify-write.
+
+## How happens-before composes
+
+Happens-before is a **partial order**: it is transitive (A→B and B→C gives A→C) but not total — many pairs of events have *no* ordering at all, and that's exactly the dangerous case. The two diagrams above are really one transitive chain: `write msg` → `close(done)` (program order in G1) → `receive` (the channel edge) → `read msg` (program order in G2). Synchronization gives you the middle link; program order within each goroutine supplies the ends. This is why "publish your data, *then* signal" is the universal recipe: do all your writes, *then* perform the synchronizing operation, so a reader that observes the signal also observes the writes.
+
+## Internals: why your CPU and compiler conspire against you
+
+The model is abstract on purpose, but the reasons it must exist are concrete. A modern CPU has per-core store buffers and caches; a write by core A may sit in A's store buffer, invisible to core B, until a memory fence flushes it. Separately, both the **compiler** and the **CPU** reorder independent instructions to hide latency — Go has **no `volatile` keyword** to opt out. A synchronizing operation compiles down to a memory fence (or a locked instruction) that does two jobs at once: it prevents reordering across that point *and* forces buffered writes to become globally visible. That is the machine-level meaning of "establishes a happens-before edge." The race detector (`-race`) instruments every memory access and watches for two accesses to the same address with no edge between them — it finds real races, but only on code paths your test actually exercises, so a clean run is evidence, not proof.
+
+## Edge cases worth knowing
+
+- **Atomics were formalized in Go 1.19.** Before that, the spec didn't define their happens-before behavior; since 1.19 a release-store/acquire-load pair on `sync/atomic` types is a proper edge — but plain (non-atomic) access to the same variable from another goroutine is still a race.
+- **Buffered channels still synchronize, just with slack.** Capacity decouples send and receive in *time*, but the kth receive still happens-before the (k+C)th send completes — useful for bounding a producer without losing visibility.
+- **`sync.Once` guarantees the initialization is visible**, not merely that `f` ran once: every `Do` caller that returns is guaranteed to see the writes `f` made. This is why it's the canonical lazy-init primitive.
+- **A nil-channel operation blocks forever** and provides no edge — it never completes, so it can't synchronize anything.
+- **Finalizers and `runtime.Gosched()` are not synchronization.** Yielding the scheduler changes *timing*, never *visibility*; relying on it is the same bug as `time.Sleep`.
+- **Double-checked locking without atomics is broken in Go.** Reading a flag outside the lock to "fast-path" past it is a race; use `sync.Once` or an atomic load instead.
+
+## The practical rule
+
+| Don't reason about... | Reach for... |
+|---|---|
+| whether a write "should" be visible | a [channel](/concurrency/channels/) send/receive |
+| clever instruction ordering | a [`sync.Mutex`](/concurrency/sync-package/) Lock/Unlock |
+| `time.Sleep` to "let it settle" | a [`sync.WaitGroup`](/concurrency/sync-package/) or join |
+| one-time init flags | [`sync.Once`](/concurrency/sync-package/) |
+| a hand-rolled visible counter/flag | a [`sync/atomic`](/concurrency/atomic/) operation |
+| "it passed on my machine" | `go test -race` in CI |
 
 <Callout type="gotcha" title="⚠️ 'It worked' is not 'it's correct'">
-Racy code can produce the right answer a million times and then fail in production on a different CPU, a busier machine, or after a compiler upgrade. Go has **no `volatile`**, and you cannot reason your way to visibility with `time.Sleep` or clever ordering. The only guarantees are the happens-before edges above.
+Racy code can produce the right answer a million times and then fail in production on a different CPU, a busier machine, after a compiler upgrade, or simply under load. Go has **no `volatile`**, and you cannot reason your way to visibility with `time.Sleep`, `runtime.Gosched`, or clever statement ordering. The *only* guarantees are the happens-before edges in the table above. If you can't point at the specific edge that orders a write before a read, you have a bug — even if it hasn't bitten yet.
 </Callout>
 
 <Callout type="go" title="🐹 You rarely cite the memory model — you obey it">
-In practice you don't reason about happens-before directly; you reach for a [channel](/concurrency/channels/), a [`sync`](/concurrency/sync-package/) primitive, or an [atomic](/concurrency/atomic/) — each of which *is* a happens-before edge — and run `go test -race`. The memory model is the why beneath all of them.
+In practice you don't reason about happens-before by hand; you reach for a [channel](/concurrency/channels/), a [`sync`](/concurrency/sync-package/) primitive, or an [atomic](/concurrency/atomic/) — each of which *is* a happens-before edge — and you run `go test -race`. The slogan, straight from Go's authors: **"Don't communicate by sharing memory; share memory by communicating."** And the corollary: when you *must* share memory, synchronize it, and let the race detector check you. The memory model is the *why* beneath every concurrency primitive.
 </Callout>
+
+## See also
+
+Every primitive in this site is a concrete instance of a happens-before edge: [channels](/concurrency/channels/) (send/receive and close), the [`sync` package](/concurrency/sync-package/) (Mutex, WaitGroup, Once), and [`sync/atomic`](/concurrency/atomic/) (release/acquire). The failure mode the model defines away is the [data race](/concurrency/race-conditions/); the runtime that schedules these goroutines is the [scheduler](/concurrency/scheduler/), and [`context`](/concurrency/context/) relies on a channel close as its synchronizing edge.
+
+Next: the primitives that *are* these edges — buffered and unbuffered [channels](/concurrency/channels/) and how close synchronizes.

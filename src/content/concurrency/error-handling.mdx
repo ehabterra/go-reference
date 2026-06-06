@@ -5,7 +5,7 @@ kind: topic
 order: 12
 difficulty: "Intermediate"
 status: ready
-intent: "A goroutine can't just return an error to its caller — how to propagate failures with the Result pattern, errgroup, and well-formed errors."
+intent: "A goroutine can't return an error to its caller — propagate failures with the Result pattern, first-error cancellation, errgroup, and per-goroutine recover."
 related:
   - context
   - channels
@@ -13,7 +13,7 @@ related:
 quiz:
   - q: "Why can't a goroutine just `return err` to its parent?"
     options:
-      - text: "It runs independently — there's no caller to return to; the error must travel over a channel or be collected"
+      - text: "It runs independently — there's no caller stack to return to; the error must travel over a channel or be collected"
         correct: true
       - text: "Because Go forbids returning errors from goroutines"
         correct: false
@@ -21,105 +21,383 @@ quiz:
         correct: false
       - text: "It can, and the parent receives it automatically"
         correct: false
-    explain: "`go f()` discards f's return values. To get an error out, send it on a channel (often bundled with the result) or use a helper like errgroup."
-  - q: "What does errgroup add over a plain WaitGroup?"
+    explain: "`go f()` launches f on its own stack and immediately discards whatever f returns — there is no caller waiting on that frame. To get an error out you must send it somewhere the parent reads: a channel (often bundled with the result), a shared variable guarded by a mutex, or a helper like errgroup that does this for you."
+  - q: "In the Result pattern, what should the worker goroutine do when it hits an error?"
     options:
-      - text: "It captures the first error and (with WithContext) cancels the other goroutines"
+      - text: "Put the error in the Result struct and send it home — let the consumer decide to retry, skip, or abort"
         correct: true
-      - text: "It makes goroutines faster"
+      - text: "Log it and return, swallowing the error"
         correct: false
-      - text: "It retries failed goroutines"
+      - text: "panic so the parent notices"
         correct: false
-      - text: "It logs automatically"
+      - text: "Close the channel immediately"
         correct: false
-    explain: "errgroup.Group.Go takes a func() error; Wait returns the first non-nil error, and WithContext cancels siblings on the first failure."
-  - q: "How do you wrap an error so callers can still inspect the cause?"
+    explain: "A worker reports; the owner decides. Logging-and-swallowing hides failures from the code that has the context to handle them, and panicking from a worth-handling error crashes the program. Bundle the (value, err) and send it on the channel — the consumer chooses the policy."
+  - q: "What does errgroup add over a plain sync.WaitGroup?"
     options:
-      - text: "fmt.Errorf(\"...: %w\", err), then errors.Is / errors.As to unwrap"
+      - text: "It captures the first non-nil error and (with WithContext) cancels the sibling goroutines"
+        correct: true
+      - text: "It makes goroutines run faster"
+        correct: false
+      - text: "It retries failed goroutines automatically"
+        correct: false
+      - text: "It logs every error for you"
+        correct: false
+    explain: "A WaitGroup only counts; it has no notion of an error. errgroup.Group.Go takes a `func() error`, Wait blocks and returns the first error any task produced, and WithContext gives you a context that is cancelled the moment the first task fails — so the rest can stop early instead of doing wasted work."
+  - q: "A goroutine you launched calls code that panics, and nothing recovers inside it. What happens?"
+    options:
+      - text: "The panic unwinds that goroutine's stack and, finding no recover, crashes the entire program"
+        correct: true
+      - text: "Only that goroutine dies; the program keeps running"
+        correct: false
+      - text: "The parent goroutine's deferred recover catches it"
+        correct: false
+      - text: "Go converts it to an error returned from `go`"
+        correct: false
+    explain: "An unrecovered panic propagates up its own goroutine's stack and then takes down the whole process — there is no per-goroutine isolation. `recover` only works in the same goroutine that panicked, so a parent can never catch a child's panic. Risky workers must defer their own recover and turn the panic into an error they send home."
+  - q: "How do you wrap an error so callers can still inspect the underlying cause?"
+    options:
+      - text: "fmt.Errorf with the %w verb, then errors.Is / errors.As to unwrap"
         correct: true
       - text: "errors.New(err.Error())"
         correct: false
-      - text: "Convert it to a string and concatenate"
+      - text: "Convert it to a string and concatenate context"
         correct: false
-      - text: "panic(err)"
+      - text: "Return panic(err) and recover later"
         correct: false
-    explain: "The %w verb wraps an error so errors.Is/As can match the underlying cause. errors.Join (Go 1.20) combines several errors into one."
+    explain: "`fmt.Errorf(\"fetch %s: %w\", url, err)` wraps the cause so errors.Is (sentinel match) and errors.As (type match) can still find it through the layers. errors.New(err.Error()) and string concatenation flatten the chain — the cause becomes unrecoverable. errors.Join (Go 1.20) combines several errors into one inspectable value."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🛰️ Analogy">
-A goroutine is a field agent who can't shout back across the building. To report a failure it has to send a message back through a channel — and a good message says *what* failed, *where*, and *whether to retry* — not just "something went wrong."
+A goroutine is a field agent who can't shout back across the building. There is no return wire to the parent's desk — to report a failure the agent has to radio it home over a channel. And a good radio message says *what* failed, *where*, and *whether it's worth retrying* — not just "something went wrong." The whole topic is really one question: **once you can't `return`, how does bad news get home?**
 </Callout>
 
 ## The problem: `go f()` swallows the return
 
-Launching `go doWork()` throws away whatever `doWork` returns, error included. You need an explicit path for the error to travel home. Two idioms cover almost everything.
+A normal call hands its return values back to the frame that called it. A goroutine has no such frame waiting on it — `go doWork()` launches `doWork` on a fresh stack and the `go` statement returns *immediately*, discarding everything `doWork` produces, error included:
 
-## The Result pattern
+```go
+go func() error {
+	return errors.New("boom") // this error goes nowhere — silently dropped
+}()
+```
 
-Bundle the value and its error in one struct and send it on a channel. The consumer decides what to do with each. **Run** it:
+The compiler will not even let you write `err := go f()`. So the first mental shift is this: **an error from a goroutine is not a return value, it's a message you have to route.** Every technique below is just a different channel for that message — a `chan Result`, a context cancellation, a shared variable behind a mutex, or a library that wires one of those up for you.
 
-<Playground client:visible title="results.go" code={String.raw`package main
+## The Result pattern: bundle value and error, send it home
+
+The workhorse idiom: define a struct that carries *either* a successful value *or* an error, and send it on a channel. The worker fills in the struct; the consumer reads it and decides what to do. This keeps the two halves of an operation — its output and its failure — travelling together, so a result is never silently divorced from the error that explains it.
+
+<Mermaid code={String.raw`graph LR
+  W1["worker 1"] -->|Result{Value}| CH(("results chan"))
+  W2["worker 2 (fails)"] -->|Result{Err}| CH
+  W3["worker 3"] -->|Result{Value}| CH
+  CH --> C["consumer: decide retry / skip / abort"]`} />
+
+Here we **fan out** one goroutine per job, each sending a `Result`, and collect them. Sorting the collected results makes the output deterministic no matter what order the goroutines finish in. **Run** it:
+
+<Playground client:visible title="result-fan-out.go" code={String.raw`package main
 
 import (
-	"errors"
 	"fmt"
+	"sort"
+	"sync"
 )
 
-// Result carries either a body or an error — never decide for the caller.
+// Result bundles a job's identity, its output, and its error.
+// A goroutine can't return — so it SENDS this home instead.
 type Result struct {
-	URL  string
-	Body string
-	Err  error
+	Job   int
+	Value int
+	Err   error
 }
 
-func fetchAll(urls []string) <-chan Result {
-	out := make(chan Result)
-	go func() {
-		defer close(out)
-		for _, u := range urls {
-			if u == "bad" {
-				out <- Result{URL: u, Err: errors.New("connection refused")}
-				continue
-			}
-			out <- Result{URL: u, Body: "200 OK"}
-		}
-	}()
-	return out
+// process squares the job number, but "fails" on the number 3.
+func process(job int) (int, error) {
+	if job == 3 {
+		return 0, fmt.Errorf("job %d: cannot process unlucky number", job)
+	}
+	return job * job, nil
 }
 
 func main() {
-	for r := range fetchAll([]string{"a", "bad", "c"}) {
+	jobs := []int{1, 2, 3, 4, 5}
+	results := make(chan Result)
+
+	// Fan out: one goroutine per job, each reporting via the channel.
+	var wg sync.WaitGroup
+	for _, j := range jobs {
+		wg.Add(1)
+		go func(job int) {
+			defer wg.Done()
+			v, err := process(job)
+			results <- Result{Job: job, Value: v, Err: err}
+		}(j)
+	}
+
+	// Closer goroutine: once every worker is done, close the channel
+	// so the range loop below terminates.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect everything. Sort so output is deterministic regardless of
+	// the order goroutines happen to finish in.
+	var ok []Result
+	var firstErr error
+	for r := range results {
 		if r.Err != nil {
-			fmt.Printf("%-3s → error: %v\n", r.URL, r.Err)
+			if firstErr == nil {
+				firstErr = r.Err
+			}
 			continue
 		}
-		fmt.Printf("%-3s → %s\n", r.URL, r.Body)
+		ok = append(ok, r)
 	}
+	sort.Slice(ok, func(i, j int) bool { return ok[i].Job < ok[j].Job })
+
+	for _, r := range ok {
+		fmt.Printf("job %d -> %d\n", r.Job, r.Value)
+	}
+	fmt.Println("first error:", firstErr)
 }`} />
 
-The key discipline: the goroutine **reports** the error and lets the main goroutine **decide** (retry, skip, abort). It never logs-and-swallows on its own.
+Two disciplines make this pattern safe:
 
-## errgroup — wait, first error, cancel the rest
+- **The worker reports, the owner decides.** A worker never logs-and-swallows or panics on a handleable error; it puts the error in the struct and sends it. The consumer — which has the surrounding context — chooses to retry, skip, or abort.
+- **Always drain the channel, and have exactly one closer.** A separate goroutine doing `wg.Wait(); close(results)` is the canonical way to close *after* all senders finish. Closing from a sender, or from multiple goroutines, panics. If the consumer might stop reading early, give the workers a [context](/concurrency/context/) to bail out on so they don't block forever on a send.
 
-When you fan work out and any task may fail, [`golang.org/x/sync/errgroup`](/patterns/errgroup/) is the tool: `g.Go(func() error {…})`, and `g.Wait()` returns the first error while a shared `context` cancels the siblings.
+## Collecting *all* the errors
+
+Sometimes you want every failure, not just the first — a batch validation that lists everything wrong at once, say. Keep collecting `Result.Err` values and combine them with **`errors.Join`** (Go 1.20+), which returns a single error whose message lists each cause and which still matches every joined error via `errors.Is`:
+
+```go
+var errs []error
+for r := range results {
+	if r.Err != nil {
+		errs = append(errs, r.Err)
+	}
+}
+if err := errors.Join(errs...); err != nil {
+	return err // one error value, but errors.Is(err, ErrX) still works for each cause
+}
+```
+
+`errors.Join(nil, nil)` is `nil`, so you don't need to special-case the empty slice.
+
+## First error wins — and cancel the rest
+
+For most fan-out work the right policy is the opposite of *collect everything*: **stop at the first failure and cancel the siblings** so they don't burn time on results you'll throw away. The mechanism is a shared [context](/concurrency/context/) — the first goroutine to fail calls `cancel()`, and every other goroutine watching `ctx.Done()` unwinds.
+
+This is exactly what `errgroup` (next section) automates. Here it is hand-rolled with stdlib only, so you can see the moving parts — a `sync.Once` to record only the first error, and `cancel()` to tell the rest to quit. **Run** it:
+
+<Playground client:visible title="first-error-cancel.go" code={String.raw`package main
+
+import (
+	"context"
+	"fmt"
+	"sync"
+)
+
+// task simulates work that respects cancellation. Task 2 fails;
+// the others notice the cancelled context and stop early.
+func task(ctx context.Context, id int) error {
+	if id == 2 {
+		return fmt.Errorf("task %d failed", id)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err() // context.Canceled — a sibling already failed
+	default:
+		return nil
+	}
+}
+
+func main() {
+	// A hand-rolled errgroup: shared context, first error wins, cancel siblings.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		mu       sync.Mutex
+		firstErr error
+		once     sync.Once
+		wg       sync.WaitGroup
+	)
+
+	run := func(id int) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := task(ctx, id); err != nil {
+				once.Do(func() { // record only the FIRST error...
+					mu.Lock()
+					firstErr = err
+					mu.Unlock()
+					cancel() // ...and cancel everyone else
+				})
+			}
+		}()
+	}
+
+	for id := 1; id <= 4; id++ {
+		run(id)
+	}
+	wg.Wait()
+
+	fmt.Println("group error:", firstErr)
+	fmt.Println("context canceled:", ctx.Err() == context.Canceled)
+}`} />
+
+That handful of lines — once, mutex, cancel, WaitGroup — is enough boilerplate that you should reach for the real thing instead.
+
+## errgroup: the standard answer
+
+[`golang.org/x/sync/errgroup`](/patterns/errgroup/) packages the pattern above into four calls. It's a semi-official `golang.org/x` module (not in the `std` tree, but maintained by the Go team), so it's a `go get` away and the canonical choice for fan-out-with-errors. Because it isn't stdlib, the runnable Playgrounds above stay stdlib-only; here it is in a fenced block (it compiles and runs on go.dev):
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	"golang.org/x/sync/errgroup"
+)
+
+func fetch(ctx context.Context, url string) error {
+	if url == "bad" {
+		return fmt.Errorf("fetch %s: connection refused", url)
+	}
+	return nil
+}
+
+func main() {
+	// WithContext: the first failing g.Go cancels ctx for the siblings.
+	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(4) // cap concurrency at 4 in-flight goroutines (Go 1.x: errgroup ≥ v0.2)
+
+	for _, u := range []string{"a", "bad", "c"} {
+		u := u // capture per iteration (harmless on Go 1.22+, required before)
+		g.Go(func() error {
+			return fetch(ctx, u) // ctx is cancelled once ANY task fails
+		})
+	}
+
+	// Wait blocks for every g.Go, then returns the FIRST non-nil error.
+	if err := g.Wait(); err != nil {
+		fmt.Println("group failed:", err) // group failed: fetch bad: connection refused
+	}
+}
+```
+
+| Call | Does |
+|---|---|
+| `errgroup.WithContext(ctx)` | returns `(*Group, ctx)`; the ctx is cancelled on the first error |
+| `g.Go(func() error)` | runs a task; the first non-nil error it returns is remembered |
+| `g.Wait()` | blocks until all `Go` funcs return; returns the first error (or nil) |
+| `g.SetLimit(n)` | caps how many `Go` funcs run concurrently (acts as a [semaphore](/patterns/semaphore/)) |
+| `g.TryGo(func() error)` | starts a task only if under the limit; returns false if full |
+
+The one subtlety: errgroup keeps only the **first** error. If you genuinely need every failure, collect them yourself with `errors.Join` as shown above, or have each task swallow-and-record into a slice instead of returning the error.
+
+## Panics don't return either — recover per goroutine
+
+An error is a value you choose to send; a **panic** is a stack unwind you didn't. And crucially, a panic is *goroutine-local*: it walks up only the panicking goroutine's stack, and if no `recover` is found there, it crashes the **entire process**. A `recover` in the parent goroutine — or in `main` — cannot catch a child's panic, because they're on different stacks.
 
 <Mermaid code={String.raw`graph TD
-  G["errgroup.WithContext"] --> A["g.Go: task A"]
-  G --> B["g.Go: task B (fails)"]
-  G --> C["g.Go: task C"]
-  B -. "first error → cancel ctx" .-> A
-  B -. cancel ctx .-> C
-  G --> W["g.Wait() → returns B's error"]`} />
+  P["panic in goroutine"] --> U["unwind THIS goroutine's stack"]
+  U -->|recover present| H["turn into an error, send home"]
+  U -->|no recover| CRASH["whole process exits"]`} />
+
+So any goroutine running risky or untrusted work must defer its **own** `recover` and convert the panic into an ordinary error it sends on the channel — exactly bridging panics back into the Result pattern. **Run** it; note that `main survived`:
+
+<Playground client:visible title="recover-per-goroutine.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+type Result struct {
+	Job int
+	Err error
+}
+
+// safeProcess wraps risky work: a deferred recover turns a panic
+// into an ordinary error, so one bad job can't crash the process.
+// The named return 'err' is set from inside the deferred func.
+func safeProcess(job int) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("job %d panicked: %v", job, r)
+		}
+	}()
+	if job == 2 {
+		panic("nil map write") // simulate a bug
+	}
+	return nil
+}
+
+func main() {
+	jobs := []int{1, 2, 3}
+	results := make(chan Result)
+
+	var wg sync.WaitGroup
+	for _, j := range jobs {
+		wg.Add(1)
+		go func(job int) {
+			defer wg.Done()
+			results <- Result{Job: job, Err: safeProcess(job)}
+		}(j)
+	}
+	go func() { wg.Wait(); close(results) }()
+
+	var all []Result
+	for r := range results {
+		all = append(all, r)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Job < all[j].Job })
+
+	for _, r := range all {
+		if r.Err != nil {
+			fmt.Printf("job %d: ERROR: %v\n", r.Job, r.Err)
+		} else {
+			fmt.Printf("job %d: ok\n", r.Job)
+		}
+	}
+	fmt.Println("main survived")
+}`} />
+
+The trick is the **named return value** `err`: a deferred closure can assign to it after `recover`, and that assignment becomes the function's actual return. See [panic & recover](/fundamentals/panic-recover/) for the full mechanics. (errgroup, conveniently, already recovers panics in its `Go` funcs and turns them into errors — another reason to prefer it.)
 
 ## What a good error carries
 
+Getting the error *home* is half the job; the other half is making it *useful*. Wrap as it travels up so each layer adds where-it-happened context without destroying the cause:
+
 <Callout type="go" title="🐹 Wrap, don't stringify">
-Use `fmt.Errorf(\"fetch %s: %w\", url, err)` to **wrap** — the `%w` keeps the cause inspectable via `errors.Is` (sentinel match) and `errors.As` (type match). Need *all* the failures, not just the first? `errors.Join(err1, err2)` (Go 1.20) combines them. A good error tells you **what** happened, **where**, whether it's **retriable**, and a message safe to show a user — separate from the internal detail.
+Use the `%w` verb — `fmt.Errorf("fetch %s: %w", url, err)` — to **wrap**. That keeps the cause inspectable via `errors.Is` (sentinel match, e.g. `errors.Is(err, io.EOF)`) and `errors.As` (extract a typed error). Stringifying — `errors.New(err.Error())` — flattens the chain and the cause is gone forever. Need *all* the failures, not just the first? `errors.Join(err1, err2)` (Go 1.20) combines them and still matches each via `errors.Is`. A good error tells you **what** happened, **where**, whether it's **retriable**, and carries a message safe to show a user separate from the internal detail. Full mechanics: [errors](/fundamentals/errors/).
 </Callout>
 
-<Callout type="gotcha" title="⚠️ A panic in a goroutine kills the whole program">
-`recover` only works in the **same** goroutine that panicked — a parent can't recover a child's panic. If a goroutine runs untrusted or risky code, defer a `recover` *inside* it and turn the panic into an error you send home. Otherwise one goroutine's panic takes down the entire process.
+## Choosing a strategy
+
+| You want… | Use | Why |
+|---|---|---|
+| Each job's output paired with its error | **Result pattern** (`chan struct{Value; Err}`) | keeps value and failure together; consumer sets policy |
+| Stop at the first failure, cancel the rest | **errgroup.WithContext** | first error wins; siblings cancel via ctx; least boilerplate |
+| Every failure from a batch | collect + **errors.Join** | one inspectable error listing all causes |
+| Cap how many run at once | **errgroup.SetLimit** or a [semaphore](/patterns/semaphore/) | bounds concurrency (a different axis — see [rate limiting](/concurrency/rate-limiting/)) |
+| Survive a worker's panic | **defer recover** in that goroutine | panics are goroutine-local; recover bridges them to an error |
+
+<Callout type="gotcha" title="⚠️ The send that blocks forever">
+The most common deadlock here: a worker is mid-`results <- r` when the consumer stops reading (it found its first error and `break`ed out of the loop). On an unbuffered channel that send blocks *forever*, and the worker — and its WaitGroup count — never finishes, so a closer goroutine doing `wg.Wait()` hangs too. Two fixes, often combined: give workers a [context](/concurrency/context/) and `select` between the send and `<-ctx.Done()`, or size the results channel so every worker can send without a reader. If you `break` out of a results loop, you **must** also unblock the still-running workers.
 </Callout>
+
+See also: [channels](/concurrency/channels/) for send/receive and closing rules, [select](/concurrency/select/) for racing a send against cancellation, [context](/concurrency/context/) for propagating the cancel signal, and the [fan-in/fan-out](/patterns/fan-in-fan-out/) and [errgroup](/patterns/errgroup/) patterns for the full assembled shapes.
+
+Next: control how fast that work runs — [rate limiting](/concurrency/rate-limiting/).

@@ -5,11 +5,12 @@ kind: topic
 order: 7
 difficulty: "Intermediate"
 status: ready
-intent: "Mutex, RWMutex, WaitGroup, Once, Cond and Pool — the lower-level primitives for when channels aren't the right tool."
+intent: "Mutex, RWMutex, WaitGroup, Once, Cond and Pool — the lower-level primitives for guarding shared state, plus the copylocks rule and mutex-vs-channel guidance."
 related:
   - channels
   - race-conditions
-  - goroutines
+  - atomic
+  - memory-model
 when_use:
   - "You're guarding a struct's own internal state (a counter, a cache, a map)."
   - "You need a simple join (WaitGroup) or one-time init (Once)."
@@ -28,43 +29,80 @@ quiz:
         correct: false
       - text: "Always — channels are obsolete"
         correct: false
-    explain: "Mutexes shine for protecting state local to a type. Channels shine for moving data and coordinating goroutines. 'Internal state → mutex; communication → channel.'"
+    explain: "Mutexes shine for protecting state local to a type. Channels shine for moving data and coordinating goroutines. The slogan: a mutex guards state, a channel transfers ownership."
   - q: "What does sync.Once guarantee?"
     options:
-      - text: "The function passed to Do runs exactly once, even under concurrent calls"
+      - text: "The function passed to Do runs exactly once, even under concurrent calls, and Do blocks until it has finished"
         correct: true
       - text: "The function runs once per goroutine"
         correct: false
-      - text: "The function never runs"
+      - text: "The function never runs more than once per second"
         correct: false
-      - text: "The function runs once per second"
+      - text: "The function runs once but Do returns immediately without waiting"
         correct: false
-    explain: "sync.Once.Do runs its function a single time across the whole program, safely — the idiomatic lazy [Singleton](/patterns/singleton/)."
-  - q: "What's a key rule about sync types like Mutex and WaitGroup?"
+    explain: "Once.Do runs its function a single time across the whole program, and every concurrent caller blocks until that run completes — so they all observe the fully initialized result. It's the idiomatic lazy Singleton."
+  - q: "Why does `go vet` flag copying a sync.Mutex (the copylocks check)?"
     options:
-      - text: "Don't copy them after first use — pass by pointer"
+      - text: "A copy duplicates the lock's internal state, so the two copies no longer exclude each other — the protection silently breaks"
         correct: true
-      - text: "They must be global variables"
+      - text: "Copying a Mutex is a compile error"
         correct: false
-      - text: "They only work with buffered channels"
+      - text: "It wastes a few bytes of memory"
         correct: false
-      - text: "They must be created with make()"
+      - text: "Mutexes can only live on the heap"
         correct: false
-    explain: "Copying a Mutex/WaitGroup duplicates its internal state and breaks it. `go vet` flags lock copies. Always share them by pointer (e.g. pass `*sync.WaitGroup`)."
+    explain: "A Mutex's guarantee comes from every goroutine contending on the SAME lock word. Copy it — by passing a struct by value, ranging over a slice of structs, or returning one — and you get two independent locks that guard nothing. vet's copylocks pass catches this; the fix is to share by pointer."
+  - q: "A goroutine holds an RWMutex.RLock and many readers are active. A writer calls Lock. What happens to a NEW reader that arrives?"
+    options:
+      - text: "It blocks — once a writer is waiting, new readers queue behind it so the writer isn't starved"
+        correct: true
+      - text: "It proceeds immediately because readers never block each other"
+        correct: false
+      - text: "It panics because a writer is pending"
+        correct: false
+      - text: "It upgrades the pending writer's Lock into an RLock"
+        correct: false
+    explain: "Go's RWMutex blocks new RLock calls once a writer is waiting. Without that rule a steady stream of readers could starve the writer forever. It's why RWMutex only pays off when reads vastly outnumber writes — otherwise the bookkeeping costs more than a plain Mutex."
+  - q: "An object you Put back into a sync.Pool may be..."
+    options:
+      - text: "Garbage-collected at any time — a Pool is a cache of maybe-available objects, not a guaranteed store"
+        correct: true
+      - text: "Kept forever until you explicitly drain the pool"
+        correct: false
+      - text: "Returned to the exact same goroutine that put it"
+        correct: false
+      - text: "Automatically reset to its zero value before the next Get"
+        correct: false
+    explain: "Pool makes no promises: the runtime can drop pooled objects during GC, and Get may return a brand-new object via New. You must reset borrowed objects yourself before reuse. Pool is purely an allocation-reduction optimization, never a place to stash state you need back."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🔑 Analogy">
-If channels are conveyor belts moving parts between workers, the `sync` package is the set of **locks on the shared tool cabinet**. When several workers reach into the *same* drawer (a struct's fields), a lock makes sure only one hand is inside at a time. Different job, different tool.
+If channels are conveyor belts moving parts between workers, the `sync` package is the set of **locks on the shared tool cabinet**. When several workers reach into the *same* drawer (a struct's fields), a lock makes sure only one hand is inside at a time. Different job, different tool — and most programs use both.
 </Callout>
 
-## Mutex & RWMutex — guard internal state
+## Mental model: protect the data, not the code
 
-A `sync.Mutex` makes a critical section exclusive. Wrap shared state in a type and lock around access — the same counter that raced [earlier](/concurrency/race-conditions/) is now correct. **Run** it:
+The `sync` package exists for one reason: when two goroutines touch the same memory and at least one writes, you have a [data race](/concurrency/race-conditions/) — undefined behavior, not just a wrong number. The primitives here give a goroutine **exclusive (or coordinated) access** to a region of memory for a stretch of time.
 
-<Playground client:visible title="sync.go" code={String.raw`package main
+The crucial mental shift: a mutex doesn't protect *code*, it protects *data*. The lock is just a convention — "I will only touch field `n` while holding `mu`." Nothing physically stops another goroutine from reading `n` without the lock; the guarantee only holds if **every** access agrees to take the lock first. So the right design is to make the protected fields unexported and force all access through methods that lock. The lock and the data it guards should live right next to each other:
+
+```go
+type Counter struct {
+	mu sync.Mutex // guards everything below it
+	n  int
+}
+```
+
+Under the hood these are cheap. An uncontended `sync.Mutex` is essentially a single atomic compare-and-swap on a word of memory — no system call, no goroutine parking. Only when a lock is *contended* does the runtime get involved: the loser spins briefly, then parks the goroutine on a wait queue and hands the CPU to the scheduler. That's why "lock for the shortest time possible" is the golden rule — a held lock under contention turns parallel work back into serial work.
+
+## Mutex — exclusive access
+
+A `sync.Mutex` makes a critical section exclusive: between `Lock()` and `Unlock()`, exactly one goroutine runs that code. The same counter that [raced earlier](/concurrency/race-conditions/) is now correct. **Run** it:
+
+<Playground client:visible title="mutex-counter.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -79,8 +117,14 @@ type Counter struct {
 
 func (c *Counter) Inc() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer c.mu.Unlock() // released even if the body panics
 	c.n++
+}
+
+func (c *Counter) Value() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
 
 func main() {
@@ -88,37 +132,231 @@ func main() {
 	var wg sync.WaitGroup
 	for i := 0; i < 1000; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); c.Inc() }()
+		go func() {
+			defer wg.Done()
+			c.Inc()
+		}()
 	}
 	wg.Wait()
-	fmt.Println("counter =", c.n) // always 1000
+	fmt.Println("counter =", c.Value()) // always 1000
 }`} />
 
-**`sync.RWMutex`** allows many concurrent readers *or* one writer — a win for read-heavy data (`RLock`/`RUnlock` for reads, `Lock`/`Unlock` for writes). It only pays off when reads vastly outnumber writes.
+Three details that matter:
 
-## The rest of the toolkit
+- **`defer c.mu.Unlock()`** is idiomatic because it releases the lock on *every* exit path — including a `panic` or an early `return` deep in the function. Forgetting an `Unlock` deadlocks the next goroutine forever.
+- **The zero value is ready to use.** `var mu sync.Mutex` is a usable, unlocked mutex — never `new` or `make` one specially. Do not `Unlock` a mutex you didn't `Lock`; it panics.
+- **Methods take a pointer receiver** (`func (c *Counter)`). A value receiver would copy the `Counter`, *and its mutex*, on every call — see the copylocks gotcha below.
 
-| Type | What it's for |
-|---|---|
-| **`WaitGroup`** | The join point of fork-join — `Add`, `Done`, `Wait`. |
-| **`Once`** | Run something exactly once (lazy init) — the basis of [Singleton](/patterns/singleton/). |
-| **`Cond`** | Wait for / signal a condition: `Wait`, `Signal`, `Broadcast`. |
-| **`Pool`** | Reuse expensive objects to cut allocations and GC pressure. |
-| **`atomic`** | Lock-free reads/writes of a single value (`AddInt64`, `CompareAndSwap`, `atomic.Pointer`). |
+## RWMutex — many readers or one writer
+
+When reads vastly outnumber writes, a plain mutex serializes readers that never conflict with each other. `sync.RWMutex` fixes that: any number of goroutines may hold the **read** lock (`RLock`/`RUnlock`) simultaneously, but the **write** lock (`Lock`/`Unlock`) is exclusive and excludes all readers. Classic use: a read-heavy cache.
+
+<Playground client:visible title="rwmutex-cache.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Cache is read-heavy: many goroutines Get, a few Set.
+// RWMutex lets all the readers run at once.
+type Cache struct {
+	mu sync.RWMutex
+	m  map[string]int
+}
+
+func NewCache() *Cache { return &Cache{m: make(map[string]int)} }
+
+func (c *Cache) Get(k string) (int, bool) {
+	c.mu.RLock() // many readers may hold RLock simultaneously
+	defer c.mu.RUnlock()
+	v, ok := c.m[k]
+	return v, ok
+}
+
+func (c *Cache) Set(k string, v int) {
+	c.mu.Lock() // a writer excludes every reader and every other writer
+	defer c.mu.Unlock()
+	c.m[k] = v
+}
+
+func main() {
+	c := NewCache()
+	c.Set("answer", 42)
+
+	var wg sync.WaitGroup
+	var total int64
+	var mu sync.Mutex
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if v, ok := c.Get("answer"); ok {
+				mu.Lock()
+				total += int64(v)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	fmt.Println("sum of 1000 reads =", total) // always 42000
+}`} />
+
+`RWMutex` is not free: it tracks a reader count and a writer-waiting flag, so each `RLock`/`RUnlock` does more work than a `Mutex`. It only wins when reads dominate and the critical section is non-trivial. For a tiny critical section (a single field read), a plain `Mutex` — or an [atomic](/concurrency/atomic/) — is usually faster. Measure before assuming `RWMutex` is the upgrade.
+
+<Callout type="gotcha" title="⚠️ RWMutex is not re-entrant — and you can't upgrade">
+Go locks are **not re-entrant**: if a goroutine holds the lock and calls a method that tries to take it again, it deadlocks against itself. And there is no "upgrade an RLock to a Lock" — releasing the read lock and acquiring the write lock is two separate steps, with a gap where another writer can sneak in. Re-check your assumptions after re-acquiring. If you find yourself wanting re-entrancy, restructure so the locking and the work live in separate methods.
+</Callout>
+
+## WaitGroup — the join point of fork-join
+
+A `WaitGroup` waits for a collection of goroutines to finish. `Add(n)` registers `n` pending tasks, each goroutine calls `Done()` (which subtracts one) when it finishes, and `Wait()` blocks until the counter hits zero. You saw it in every example above. The one rule that bites people:
 
 ```go
-// Once — runs the init exactly once, concurrency-safe
-var once sync.Once
-once.Do(func() { /* expensive setup */ })
-
-// Cond — wake waiters when a condition becomes true
-c := sync.NewCond(&sync.Mutex{})
-c.L.Lock()
-for !ready { c.Wait() } // releases the lock, sleeps, re-acquires on wake
-c.L.Unlock()
+var wg sync.WaitGroup
+for _, item := range items {
+	wg.Add(1)           // ✅ Add BEFORE the go statement
+	go func() {
+		defer wg.Done() // ✅ Done via defer, so a panic still counts
+		process(item)
+	}()
+}
+wg.Wait()
 ```
 
+Call `Add` *before* launching the goroutine, never inside it. If you `Add` from within the goroutine, `Wait` might run before that goroutine is scheduled — see the counter as already zero, and return early. (In Go 1.25 you can also write `wg.Go(func(){ ... })`, which fuses the `Add(1)`/`go`/`defer Done()` boilerplate into one call.)
+
+## Once — exactly-once initialization
+
+`sync.Once` runs a function a single time, ever, no matter how many goroutines race to call it — the idiomatic lazy [Singleton](/patterns/singleton/). Crucially, `Do` **blocks** every concurrent caller until the first invocation finishes, so they all see fully initialized state.
+
+<Playground client:visible title="once-init.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+type Config struct{ Greeting string }
+
+var (
+	once   sync.Once
+	cfg    *Config
+	builds atomic.Int64 // counts how many times the init body actually ran
+)
+
+// loadConfig is called from many goroutines, but the body runs exactly once.
+func loadConfig() *Config {
+	once.Do(func() {
+		builds.Add(1)
+		cfg = &Config{Greeting: "hello"}
+	})
+	return cfg
+}
+
+func main() {
+	var wg sync.WaitGroup
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = loadConfig() // all 1000 see the same instance
+		}()
+	}
+	wg.Wait()
+	fmt.Println("init ran", builds.Load(), "time(s)") // always 1
+	fmt.Println("greeting =", loadConfig().Greeting)  // hello
+}`} />
+
+`Once` is the right answer for lazy package-level setup (a compiled regexp, a database handle, a parsed template). It beats a `Mutex`-guarded `if initialized` because it captures the intent precisely and avoids the subtle "check, race, double-init" bug. Go 1.21 added `sync.OnceFunc`, `sync.OnceValue`, and `sync.OnceValues` — convenience wrappers that return a memoizing function, often cleaner than a bare `Once` plus a package variable.
+
+## Cond — wait for a condition (rare)
+
+`sync.Cond` lets goroutines wait until some condition becomes true, woken by `Signal` (one waiter) or `Broadcast` (all). It's the lowest-level primitive here and the one you'll reach for least — a channel usually expresses "wait until X" more clearly. The non-obvious requirement: you hold the associated lock around `Wait`, and you must re-check the condition in a `for` loop because `Wait` can return spuriously and the condition may have changed by the time you re-acquire the lock:
+
+```go
+c := sync.NewCond(&sync.Mutex{})
+
+// waiter
+c.L.Lock()
+for !ready {       // ALWAYS a loop, never a bare if
+	c.Wait()       // atomically unlocks, sleeps, re-locks on wake
+}
+// ... use the now-ready state ...
+c.L.Unlock()
+
+// signaler
+c.L.Lock()
+ready = true
+c.L.Unlock()
+c.Broadcast()      // wake everyone to re-check
+```
+
+If your problem is "wait for a single event," a `chan struct{}` you `close()` is simpler and composes with `select`. Reach for `Cond` only when many goroutines wait on a frequently-changing shared predicate and you've measured channels to be a poor fit.
+
+## Pool — reuse allocations to cut GC pressure
+
+`sync.Pool` is a free list of reusable objects. `Get` returns a pooled object (or calls `New` if the pool is empty); `Put` returns one for later reuse. Its whole purpose is to reduce allocation and garbage-collector pressure on hot paths that churn through short-lived buffers.
+
+<Playground client:visible title="pool-buffers.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"fmt"
+	"sync"
+)
+
+// pool hands out reusable *bytes.Buffer values to cut allocations.
+var pool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) }, // called only when the pool is empty
+}
+
+func render(id int) int {
+	b := pool.Get().(*bytes.Buffer) // borrow
+	defer func() {
+		b.Reset()   // wipe before returning — never hand back dirty state
+		pool.Put(b) // return for reuse
+	}()
+	fmt.Fprintf(b, "item-%d", id)
+	return b.Len()
+}
+
+func main() {
+	var wg sync.WaitGroup
+	var total int64
+	var mu sync.Mutex
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			n := render(id % 10) // ids 0..9 -> "item-0".."item-9", all length 6
+			mu.Lock()
+			total += int64(n)
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println("total bytes written =", total) // always 6000
+}`} />
+
+Two non-negotiables with `Pool`: **reset borrowed objects** before reuse (a buffer still holds the previous caller's bytes), and **never assume an object survives** — the GC may evict pooled objects at any time, so a `Pool` is a performance hint, not storage. The standard library uses it heavily (`fmt`, `encoding/json`, `net/http` all pool buffers). Reach for it only when a profile shows allocation as a real cost; an empty pool that constantly calls `New` is pure overhead.
+
+## Reference: the sync toolkit
+
+| Type | Key methods | Use it for | Notes |
+|---|---|---|---|
+| `Mutex` | `Lock` / `Unlock` / `TryLock` | exclusive access to shared state | zero value ready; not re-entrant |
+| `RWMutex` | `RLock`/`RUnlock`, `Lock`/`Unlock` | read-heavy shared state | writer-preferring; heavier than `Mutex` |
+| `WaitGroup` | `Add` / `Done` / `Wait` / `Go` | fork-join: wait for N goroutines | `Add` before `go`; don't copy |
+| `Once` | `Do` | exactly-once lazy init | see also `OnceFunc`/`OnceValue` (1.21+) |
+| `Cond` | `Wait` / `Signal` / `Broadcast` | wait on a changing predicate | rare; always loop on `Wait`; hold `L` |
+| `Pool` | `Get` / `Put` / `New` | reuse allocations, cut GC | objects may vanish; reset on reuse |
+| [`atomic`](/concurrency/atomic/) | `Load`/`Store`/`Add`/`CompareAndSwap` | one lock-free word | a counter or flag, not an invariant |
+
 ## Mutex or channel?
+
+The defining slogan of Go concurrency: **a mutex guards state; a channel transfers ownership.** If a goroutine needs to safely touch fields it shares with others, a mutex is the cleanest tool. If you're handing a piece of work *from* one goroutine *to* another — so that only one owns it at a time — a channel encodes that handoff directly and the "lock" disappears.
 
 <Mermaid code={String.raw`graph TD
   Q{"What are you doing?"}
@@ -128,9 +366,11 @@ c.L.Unlock()
   Q -->|"Building a pipeline / fan-out"| C`} />
 
 <Callout type="go" title="🐹 The rules that keep sync safe">
-**Don't copy** a `Mutex`, `WaitGroup`, `Once`, or `Cond` after use — share by pointer (`go vet` catches copies). **Lock for the shortest time** and never do I/O or sleep while holding a lock (that's how starvation starts). And **don't `Add` to a `WaitGroup` from inside the goroutines it's counting** — call `Add` before the `go` statement.
+**Don't copy** a `Mutex`, `WaitGroup`, `Once`, `Cond`, or `Pool` after first use — share by pointer (`go vet`'s **copylocks** check flags copies, which is why these types embed a `noCopy` marker). The trap is silent: passing a struct-with-a-mutex by value, ranging `for _, x := range slice` over structs, or returning one by value each makes a fresh, independent lock that guards nothing. **Lock for the shortest time**, and never do I/O, sleep, or call into unknown code while holding a lock — that's how contention and deadlock start. And **`Add` to a `WaitGroup` before** the `go` statement, never inside the goroutine.
 </Callout>
 
-<Callout type="tip" title="✅ Go's guidance">
-Go's own guidance is to prefer channels when they fit the problem, and reach for the `sync` primitives when they're clearly simpler. Mutexes aren't a code smell — for protecting a type's own fields they're often the cleanest, fastest choice. Match the tool to the job, not to dogma.
+<Callout type="tip" title="✅ Go's guidance: match the tool to the job">
+Go's own advice is to prefer channels when they fit the problem, and reach for `sync` when it's clearly simpler. Mutexes aren't a code smell — for protecting a type's own fields they're often the cleanest, fastest choice. Build correctness with the [memory model](/concurrency/memory-model/) in mind (a `Mutex.Unlock` happens-before the next `Lock`, which is what publishes your writes to the next goroutine), and verify with `go test -race`.
 </Callout>
+
+Next: lock-free reads and writes of a single value — [sync/atomic](/concurrency/atomic/).

@@ -5,7 +5,7 @@ kind: topic
 order: 11
 difficulty: "Intermediate"
 status: ready
-intent: "Control how fast work happens — the token-bucket algorithm, golang.org/x/time/rate, and a channel-based limiter."
+intent: "Control how fast work happens — the token-bucket algorithm, a ticker limiter, channel semaphores for concurrency, golang.org/x/time/rate, and backpressure."
 related:
   - context
   - select
@@ -13,10 +13,10 @@ related:
 when_use:
   - "Respecting a downstream API's request limit so you don't get throttled or banned."
   - "Protecting your own service or database from overload."
-  - "Smoothing bursty traffic into a steady rate."
+  - "Smoothing bursty traffic into a steady, predictable rate."
 when_avoid:
-  - "The work is already naturally bounded (e.g. a fixed worker pool may be enough)."
-  - "You need backpressure, not rate — a bounded channel or semaphore may fit better."
+  - "The work is already naturally bounded — a fixed worker pool may be all you need."
+  - "You need to cap *how many* run at once, not *how fast* — reach for a semaphore instead."
 quiz:
   - q: "What does the token-bucket algorithm allow that a fixed interval doesn't?"
     options:
@@ -24,23 +24,23 @@ quiz:
         correct: true
       - text: "Unlimited throughput"
         correct: false
-      - text: "Slower processing"
+      - text: "Strictly slower processing"
         correct: false
-      - text: "Ordered delivery"
+      - text: "Ordered delivery of requests"
         correct: false
-    explain: "Tokens refill at rate r; each event spends one. A burst can drain up to `burst` tokens at once, but the sustained rate still averages r."
-  - q: "What's the idiomatic Go package for rate limiting?"
+    explain: "Tokens refill at rate r; each event spends one. Because saved tokens accumulate up to the bucket size, a burst can drain up to `burst` tokens back-to-back, yet the sustained rate still averages r. A fixed interval (one event per tick, no saving) can never burst — it's the special case of burst = 1."
+  - q: "What is the difference between rate limiting and concurrency limiting?"
     options:
-      - text: "golang.org/x/time/rate (rate.Limiter)"
+      - text: "Rate caps how FAST work starts (events per second); concurrency caps how MANY run at once"
         correct: true
-      - text: "sync/ratelimit"
+      - text: "They are two names for the same thing"
         correct: false
-      - text: "net/http/rate"
+      - text: "Rate limiting only works on HTTP; concurrency works on anything"
         correct: false
-      - text: "time.RateLimiter"
+      - text: "Concurrency limiting is always stricter than rate limiting"
         correct: false
-    explain: "golang.org/x/time/rate provides a token-bucket Limiter with Wait(ctx), Allow() and Reserve()."
-  - q: "Which Limiter method blocks until a token is available?"
+    explain: "They're different axes. A rate limiter (token bucket / ticker) controls the pace at which operations begin, regardless of how long each takes. A concurrency limiter (a buffered-channel semaphore of size K) controls how many are in flight simultaneously, regardless of pace. You often want both: start no faster than r/sec AND never run more than K at once."
+  - q: "Which golang.org/x/time/rate Limiter method blocks until a token is available?"
     options:
       - text: "Wait(ctx)"
         correct: true
@@ -50,67 +50,283 @@ quiz:
         correct: false
       - text: "Limit()"
         correct: false
-    explain: "Wait(ctx) blocks (respecting cancellation) until a token frees up. Allow() returns immediately true/false; Reserve() tells you how long to wait."
+    explain: "Wait(ctx) blocks until a token frees up, returning early if the context is cancelled. Allow() never blocks — it returns true (token taken) or false (drop the request) right now. Reserve() also doesn't block; it hands back a Reservation telling you Delay() — how long until your token is ready — which you can honor or Cancel()."
+  - q: "Why must a token-bucket limiter put a CAP on accumulated tokens?"
+    options:
+      - text: "Without a cap, an idle period would bank unlimited tokens and then permit one giant burst that overwhelms the downstream"
+        correct: true
+      - text: "Because channels can't hold more than 64 tokens"
+        correct: false
+      - text: "To make the average rate higher"
+        correct: false
+      - text: "It doesn't matter; the cap is cosmetic"
+        correct: false
+    explain: "The bucket size (burst) is the whole point of the bound. If tokens accumulated without limit, ten idle minutes would bank thousands of tokens and the next instant could fire them all — defeating the protection. Capping at `burst` means at most `burst` operations can ever fire back-to-back, no matter how long you were idle."
+  - q: "You wrap blocking work behind a rate limiter and requests pile up faster than r/sec. What do you need to think about?"
+    options:
+      - text: "Backpressure — bound the queue and shed or reject load, or callers will accumulate unbounded blocked goroutines and memory"
+        correct: true
+      - text: "Nothing; the limiter handles everything automatically"
+        correct: false
+      - text: "Increasing the burst to infinity"
+        correct: false
+      - text: "Removing the context so requests can't be cancelled"
+        correct: false
+    explain: "A limiter slows the exit, but if arrivals outpace r forever, whatever waits in front of it (blocked goroutines on Wait, items in a channel) grows without bound — memory and latency blow up. The fix is backpressure: a bounded queue plus a policy (reject/Allow()=false, drop oldest, or block the producer) so the system pushes back instead of silently buffering."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🪙 Analogy">
-A token bucket is an arcade with a coin machine that drips a new token every so often, up to a small stack. Each game costs a token. If you've saved a few (the bucket), you can play a quick burst back-to-back; once they're gone, you play only as fast as new tokens drip. Average pace is capped; small bursts are allowed.
+A token bucket is an arcade coin machine that drips a new token every so often, up to a small stack you can save. Each game costs a token. If you've banked a few (the bucket), you can play a quick burst back-to-back; once they're gone, you play only as fast as new tokens drip. The cap on the stack matters: it's why an hour of not playing doesn't let you bank a thousand coins and then break the machine with one marathon. **Average pace is capped; small bursts are allowed; runaway bursts are not.**
 </Callout>
+
+## Rate vs. concurrency — two different knobs
+
+Before any algorithm, get the mental model right, because conflating these two is the most common mistake:
+
+- **Rate limiting** controls *how fast* operations **start** — events per second. It says nothing about how many are running.
+- **Concurrency limiting** controls *how many* run **at once** — in-flight count. It says nothing about pace.
+
+A downstream API that allows "100 requests/second" wants a rate limit. A database that falls over past "20 simultaneous connections" wants a concurrency limit. They're orthogonal: you might start work at 50/sec yet, because each call takes two seconds, have 100 in flight. Real systems often apply **both**. This page covers rate first, then the channel-semaphore that caps concurrency.
 
 ## The token bucket
 
-The standard algorithm: a bucket holds up to **burst** tokens and refills at **rate** `r` per second. Each unit of work removes one token; if the bucket is empty, work waits (or is rejected).
+The standard rate-limiting algorithm. A bucket holds up to **burst** tokens and refills at **rate** `r` per second. Each unit of work removes one token; if the bucket is empty, work waits (or is rejected). The bucket cap is the burst allowance; the drip rate is the sustained ceiling.
 
 <Mermaid code={String.raw`graph LR
-  FILL["refill: r tokens/sec"] --> B(("bucket<br/>≤ burst"))
+  FILL["refill: r tokens/sec"] --> B(("bucket ≤ burst"))
   B -->|spend 1| W["do work"]
-  B -->|empty| WAIT["wait / reject"]`} />
+  B -->|empty| WAIT["wait or reject"]`} />
 
-## Using golang.org/x/time/rate
+Internally that's all a limiter is: a token count, a refill rate, and a cap. The clever production implementations don't even run a background timer — they store the *last refill time* and, on each request, compute how many tokens *would* have accrued since then (elapsed × rate, capped at burst). That lazy, timer-free accounting is exactly what `golang.org/x/time/rate` does.
 
-The idiomatic limiter. `Wait` blocks (honoring `context`) until a token is ready. With `burst = 2`, the first two go immediately, then it settles to 5/sec. **Run** it:
+## A ticker-driven limiter (stdlib)
 
-<Playground client:visible title="rate.go" code={String.raw`package main
+The simplest real limiter needs no dependency at all: a [`time.Ticker`](/concurrency/select/) delivers one value per interval, and receiving from it paces your loop to one operation per tick. This is the **burst = 1** special case — steady, no saving. Here a short interval keeps the demo fast; we print the *order* of releases, never wall-clock times, so output is deterministic. **Run** it:
+
+<Playground client:visible title="ticker-limiter.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func main() {
+	// One token per tick. A short interval keeps the demo fast;
+	// we print the ORDER of releases, never wall-clock times,
+	// so the output is fully deterministic.
+	const interval = 5 * time.Millisecond
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop() // a NewTicker leaks until stopped
+
+	requests := []string{"a", "b", "c", "d", "e"}
+	for i, req := range requests {
+		<-ticker.C // wait for the next token — this paces the loop
+		fmt.Printf("release %d: %s\n", i+1, req)
+	}
+	fmt.Println("done: 5 requests released one per tick")
+}`} />
+
+Two notes: always `Stop()` a `time.NewTicker` (the older `time.Tick` returns a channel you can't stop — fine for a program that runs forever, a leak otherwise), and receiving from `ticker.C` *drops* ticks you didn't keep up with rather than queueing them, so a slow consumer naturally can't bank a burst.
+
+## Adding burst: a channel token bucket
+
+To allow bursts, pre-fill a **buffered channel** with `burst` tokens and have a background ticker top it up — dropping the refill when the channel is full, which is what caps the burst. Taking a token is just a receive; an empty channel blocks the caller, throttling them. The first `burst` operations fire immediately, then the rest pace to the refill rate. **Run** it:
+
+<Playground client:visible title="token-bucket.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"time"
+)
+
+// bucket is a buffered channel: its capacity is the burst size,
+// and a background ticker drips one token in per interval.
+type bucket struct {
+	tokens chan struct{}
+	ticker *time.Ticker
+}
+
+func newBucket(burst int, refill time.Duration) *bucket {
+	b := &bucket{
+		tokens: make(chan struct{}, burst),
+		ticker: time.NewTicker(refill),
+	}
+	for i := 0; i < burst; i++ { // start FULL: a burst is available immediately
+		b.tokens <- struct{}{}
+	}
+	go func() {
+		for range b.ticker.C {
+			select {
+			case b.tokens <- struct{}{}: // add a token if there's room
+			default: // bucket full — drop it, which CAPS the burst
+			}
+		}
+	}()
+	return b
+}
+
+func (b *bucket) take() { <-b.tokens } // blocks until a token is free
+
+func main() {
+	// Burst of 3, then refill one token every 5ms.
+	b := newBucket(3, 5*time.Millisecond)
+
+	// The first 3 take()s drain the initial burst with no wait;
+	// the rest pace to the refill rate. We print order, not times.
+	for i := 1; i <= 5; i++ {
+		b.take()
+		kind := "burst"
+		if i > 3 {
+			kind = "paced"
+		}
+		fmt.Printf("op %d (%s)\n", i, kind)
+	}
+	b.ticker.Stop()
+}`} />
+
+The `select { case ...: default: }` on refill is the heart of the burst cap: a full channel makes the send fall through to `default`, discarding the token. That's the bucket overflowing — exactly the cap that stops an idle period from banking unlimited tokens.
+
+## golang.org/x/time/rate — the idiomatic choice
+
+For production, don't hand-roll: [`golang.org/x/time/rate`](/patterns/worker-pool/) gives you a lock-free, timer-free token bucket with three usage styles. It's a `golang.org/x` module (Go-team maintained, outside the `std` tree), so the runnable Playgrounds above stay stdlib-only and this goes in a fenced block — it compiles and runs on go.dev:
+
+```go
+package main
 
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"golang.org/x/time/rate"
 )
 
 func main() {
-	// 5 events per second, with a burst of 2
-	lim := rate.NewLimiter(5, 2)
+	// 5 events/second, with a burst of 2.
+	lim := rate.NewLimiter(rate.Limit(5), 2)
 	ctx := context.Background()
-	start := time.Now()
 
+	// 1) Wait — BLOCKS until a token is free (honors ctx cancellation).
 	for i := 1; i <= 6; i++ {
-		_ = lim.Wait(ctx) // blocks until a token is available
-		fmt.Printf("request %d at %v\n", i, time.Since(start).Round(10*time.Millisecond))
+		if err := lim.Wait(ctx); err != nil {
+			break // ctx cancelled or deadline exceeded
+		}
+		fmt.Println("processed request", i)
 	}
-}`} />
 
-`Allow()` (non-blocking: process or drop) and `Reserve()` (tells you the delay) cover the other two strategies.
+	// 2) Allow — NON-blocking: true = take a token, false = shed this request.
+	if lim.Allow() {
+		fmt.Println("served immediately")
+	} else {
+		fmt.Println("rate limited — drop or 429")
+	}
 
-## A channel-based limiter
-
-When you don't want the dependency, a `time.Ticker` feeding a token channel is the bones of the same idea:
-
-```go
-limiter := time.Tick(200 * time.Millisecond) // 5/sec
-for req := range requests {
-	<-limiter        // wait for the next tick
-	go handle(req)
+	// 3) Reserve — NON-blocking: returns how long until a token is ready.
+	r := lim.Reserve()
+	if r.OK() {
+		fmt.Println("token reserved; wait", r.Delay())
+		// r.Cancel() // give the token back if you decide not to proceed
+	}
 }
 ```
 
-Add a buffered channel pre-filled with tokens and you get burst support too.
+| Method | Blocks? | Use when |
+|---|---|---|
+| `Wait(ctx)` | yes (until a token or ctx done) | you can afford to wait, e.g. a background job pacing to an API |
+| `Allow()` | no | you'd rather drop/reject than wait — return HTTP 429, skip the event |
+| `Reserve()` | no | you want the token but need to know the delay, or might `Cancel()` it |
+| `SetLimit(r)` / `SetBurst(n)` | no | adjust rate/burst at runtime (e.g. from config) |
 
-<Callout type="go" title="🐹 Limit per *client*, and combine with context">
-A single global limiter throttles everyone together; for fairness, keep a `map[clientID]*rate.Limiter` (evict idle ones). Always pass a `context` to `Wait` so a cancelled request doesn't sit blocked on a token. And distinguish **rate limiting** (how fast) from **concurrency limiting** — capping how many run at once is a [Worker Pool](/patterns/worker-pool/) or [Semaphore](/patterns/semaphore/).
+`rate.Limit` is tokens-per-second as a float; `rate.Every(d)` converts a *period* to a rate (`rate.Every(200*time.Millisecond)` == 5/sec). Use `rate.Inf` to disable limiting.
+
+## Capping concurrency: a channel semaphore
+
+A different axis entirely. To bound *how many* goroutines run at once — say, to protect a database — use a **buffered channel as a counting semaphore**: capacity K. Acquiring a slot is a send; releasing is a receive. When K slots are taken, the next acquire blocks until one frees. This is **concurrency**, not rate: it says nothing about pace, only about simultaneity. Each worker below records the high-water mark of concurrency; it never exceeds K. **Run** it:
+
+<Playground client:visible title="concurrency-semaphore.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+func main() {
+	const K = 2 // at most 2 jobs may run AT ONCE (concurrency, not rate)
+	sem := make(chan struct{}, K)
+
+	var (
+		running int32 // current in-flight count
+		maxSeen int32 // high-water mark of concurrency
+		mu      sync.Mutex
+		done    []int
+		wg      sync.WaitGroup
+	)
+
+	for job := 1; job <= 6; job++ {
+		wg.Add(1)
+		go func(job int) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire a slot (blocks if K are busy)
+			defer func() { <-sem }() // release on exit
+
+			n := atomic.AddInt32(&running, 1)
+			for { // track the high-water mark without a data race
+				m := atomic.LoadInt32(&maxSeen)
+				if n <= m || atomic.CompareAndSwapInt32(&maxSeen, m, n) {
+					break
+				}
+			}
+			time.Sleep(2 * time.Millisecond) // simulate work
+			atomic.AddInt32(&running, -1)
+
+			mu.Lock()
+			done = append(done, job)
+			mu.Unlock()
+		}(job)
+	}
+	wg.Wait()
+
+	sort.Ints(done)
+	fmt.Println("completed jobs:", done)
+	fmt.Printf("max concurrency observed: %d (limit was %d)\n", maxSeen, K)
+}`} />
+
+A buffered channel makes a fine ad-hoc semaphore; for a richer one (weighted acquire, context-aware) reach for `golang.org/x/sync/semaphore`, and see the [Semaphore](/patterns/semaphore/) and [Worker Pool](/patterns/worker-pool/) patterns for the assembled shapes. A worker pool — N fixed goroutines pulling from a jobs channel — is just another way to express "at most N at once."
+
+## Backpressure: the part people forget
+
+A limiter slows the *exit*, but arrivals are out of its control. If callers arrive faster than `r` forever, whatever sits in front of the limiter grows without bound — blocked goroutines on `Wait`, items in a queue, memory, latency. **Backpressure** is the system pushing back instead of silently swallowing that load:
+
+- **Reject** — use `Allow()` / `Reserve()` and return a 429 or drop the event when no token is free. The caller learns it's overloaded *now*.
+- **Bound the queue** — a buffered channel of fixed size; when full, producers block (natural backpressure) or you drop.
+- **Time out** — pass a [context](/concurrency/context/) with a deadline to `Wait`, so a request can't sit blocked forever waiting for a token.
+
+The anti-pattern is an *unbounded* queue feeding a limiter: it converts an overload into a slow-motion out-of-memory crash. Always pair "slow it down" with "and what happens when there's more than we can handle?"
+
+<Callout type="go" title="🐹 Limit per client, and always pass a context">
+A single global limiter throttles everyone together — one heavy client starves the rest. For fairness, keep a `map[clientID]*rate.Limiter` and evict idle entries (an LRU or a periodic sweep) so the map doesn't grow forever. Always hand a `context` to `Wait` so a cancelled or timed-out request stops blocking on a token instead of leaking a goroutine. And keep the two axes straight: rate limiting (how fast) is the token bucket; capping how many run at once is a [Semaphore](/patterns/semaphore/) or [Worker Pool](/patterns/worker-pool/).
 </Callout>
+
+<Callout type="gotcha" title="⚠️ time.Tick leaks; bursts come from accumulation">
+Two traps. First, `time.Tick(d)` has no way to be stopped — its underlying ticker and goroutine live for the whole program. That's fine for a process-lifetime limiter but a slow leak if you create them per request; use `time.NewTicker` + `defer t.Stop()` instead. Second, people are surprised that `rate.NewLimiter(10, 100)` lets 100 requests through *instantly*: that's the burst doing its job — 100 banked tokens fire at once, then it settles to 10/sec. If you want a strict, no-burst pace, set burst to 1 (or use the ticker limiter). Match `burst` to how big a spike your downstream can actually absorb.
+</Callout>
+
+## Choosing an approach
+
+| Need | Use |
+|---|---|
+| Strict steady pace, no deps | ticker limiter (`time.NewTicker`, burst = 1) |
+| Pace + small bursts, no deps | channel token bucket (buffered chan + ticker refill) |
+| Production rate limiting | `golang.org/x/time/rate` (`Wait` / `Allow` / `Reserve`) |
+| Cap simultaneous in-flight work | channel semaphore (buffered chan, size K) or [worker pool](/patterns/worker-pool/) |
+| Per-client fairness | `map[clientID]*rate.Limiter` with idle eviction |
+| Overload handling | backpressure: `Allow()` + reject, bounded queue, or context deadline |
+
+See also: [select](/concurrency/select/) for racing a token against cancellation, [context](/concurrency/context/) for deadlines on `Wait`, [error handling across goroutines](/concurrency/error-handling/) for surfacing "rate limited" as an error, and the [Semaphore](/patterns/semaphore/) and [Worker Pool](/patterns/worker-pool/) patterns for concurrency caps.
+
+Next: surfacing failures from concurrent work — [errors across goroutines](/concurrency/error-handling/).

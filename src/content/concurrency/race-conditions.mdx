@@ -5,7 +5,7 @@ kind: topic
 order: 2
 difficulty: "Intermediate"
 status: ready
-intent: "What a data race is, why operations like i++ aren't atomic, why time.Sleep never fixes it, and how the race detector finds them."
+intent: "What a data race is, why i++ isn't atomic, why time.Sleep never fixes it, the race detector, and the three real fixes: mutex, channel, atomic."
 related:
   - concurrency-vs-parallelism
   - sync-package
@@ -13,79 +13,122 @@ related:
 when_use: []
 when_avoid: []
 quiz:
+  - q: "Which combination defines a data race?"
+    options:
+      - text: "Concurrent access to the same memory, at least one access is a write, and nothing enforces an order between them"
+        correct: true
+      - text: "Any two goroutines reading the same variable at the same time"
+        correct: false
+      - text: "Two goroutines writing two different variables"
+        correct: false
+      - text: "A goroutine that runs longer than expected"
+        correct: false
+    explain: "All three parts are required: concurrent access, at least one writer, and no happens-before ordering. Two concurrent reads are fine (no writer); two writes to different memory are fine (not the same location); a synchronized write is fine (an order is enforced). Remove any one of the three and it is not a data race."
   - q: "Why is `counter++` not safe from multiple goroutines?"
     options:
-      - text: "It's a read-modify-write — three steps that can interleave, so updates get lost"
+      - text: "It compiles to load, add, store — three steps that can interleave, so updates get lost"
         correct: true
       - text: "Because ++ is deprecated in Go"
         correct: false
-      - text: "Because int is too small"
+      - text: "Because int is too small to hold concurrent values"
         correct: false
-      - text: "It is safe; Go makes ++ atomic"
+      - text: "It is safe; the Go compiler makes ++ atomic"
         correct: false
-    explain: "`counter++` reads the value, adds one, and writes it back. Two goroutines can read the same value and both write back the same result — one increment is lost."
-  - q: "Does adding time.Sleep fix a data race?"
+    explain: "`counter++` is a read-modify-write: it loads the value, adds one, and stores it back. Two goroutines can both load the same value and both store the same result, so one increment vanishes. Go does not make `++` atomic — use a mutex or sync/atomic for that."
+  - q: "Does adding `time.Sleep` fix a data race?"
     options:
-      - text: "No — it only changes timing; the race is still there and may strike under load"
+      - text: "No — it only changes timing; the race is still there and will strike under load or on a faster machine"
         correct: true
-      - text: "Yes, if the sleep is long enough"
+      - text: "Yes, if the sleep is long enough to let the other goroutine finish"
         correct: false
-      - text: "Yes, sleep synchronizes goroutines"
+      - text: "Yes, because sleep synchronizes goroutines"
         correct: false
-      - text: "Only on a single core"
+      - text: "Only on a single-core machine"
         correct: false
-    explain: "Sleep changes the odds, not the correctness. A race is the *absence* of enforced ordering; real fixes are a mutex, a channel, or sync/atomic."
-  - q: "How do you actually catch data races?"
+    explain: "Sleep changes the odds, not the correctness. A race is the absence of an enforced happens-before relationship; a sleep enforces nothing. The bug just becomes rarer and harder to reproduce. Real fixes are a mutex, a channel, or sync/atomic."
+  - q: "What does the race detector actually do?"
     options:
-      - text: "Run with the race detector: go run -race / go test -race"
+      - text: "Instruments memory accesses and reports races it observes at runtime, with both stack traces"
         correct: true
-      - text: "Read the code very carefully"
+      - text: "Statically proves at compile time that the program has no races"
         correct: false
-      - text: "Add more logging"
+      - text: "Slows the program down so races can't happen"
         correct: false
-      - text: "Increase GOMAXPROCS"
+      - text: "Rewrites your code to add locks automatically"
         correct: false
-    explain: "The `-race` flag instruments memory access and reports the exact conflicting accesses with stack traces. Run your tests with `-race` in CI."
+    explain: "`-race` builds an instrumented binary that watches every memory access and reports a race the moment it sees two conflicting unsynchronized accesses, printing both goroutines' stacks. It is a dynamic tool: it only finds races on code paths that actually execute, so you must exercise concurrent paths under `-race` (ideally in CI). It does not prove absence of races."
+  - q: "Code does `if _, ok := m[k]; !ok { m[k] = v }` on a shared map under a mutex held only around each line separately. What is the bug?"
+    options:
+      - text: "A check-then-act race: the gap between the check and the write lets another goroutine slip in, so the invariant breaks even though each access is synchronized"
+        correct: true
+      - text: "Nothing — the mutex makes it correct"
+        correct: false
+      - text: "Maps can never be used with mutexes"
+        correct: false
+      - text: "The map needs to be a pointer"
+        correct: false
+    explain: "Synchronizing each access individually still leaves a window between the check and the act. Another goroutine can write the key in that gap, so two goroutines both decide the key is absent. The whole check-then-act must be inside one critical section (hold the lock across both lines). Locks fix concurrent access, not logic."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🏦 Analogy">
-Two tellers update the same account balance from a sticky note. Both read "100", both add 50, both write "150". Two deposits happened, but the balance only went up once — $50 vanished. Nobody enforced "read, then write, before anyone else reads." That's a data race.
+Two tellers update the same account balance from a sticky note. Both read "100", both add 50, both write "150". Two deposits happened, but the balance only went up once — $50 vanished. Nobody enforced "read, then write, before anyone else reads." That gap is a **data race**: the result depends on who happened to write last, and no rule decides who that is.
 </Callout>
 
 ## What a data race is
 
-A **data race** happens when two or more goroutines access the same memory concurrently, at least one access is a write, and there's **nothing enforcing an order** between them. The result is undefined — and Go's memory model explicitly says so.
+A **data race** has exactly three ingredients, and you need *all three*:
+
+1. **Two or more goroutines access the same memory location** — the same variable, slice element, map, or struct field.
+2. **At least one access is a write.** Two concurrent reads can never race.
+3. **Nothing enforces an order** between them — no mutex, channel, atomic, or other [happens-before](/concurrency/memory-model/) edge separates the accesses.
+
+Miss any one and there is no race. Two goroutines reading the same config? Fine — no writer. One goroutine writing a value another reads *after* a channel send delivers it? Fine — the channel imposes an order. It is the **combination** that is undefined behavior.
+
+And "undefined" is literal. Go's [memory model](/concurrency/memory-model/) says a program with a data race has **no defined behavior at all** for the racing accesses: you might read a stale value, a half-written value (on a wide type), or — on some architectures — a value that was never written by anyone. A race is not "usually fine, occasionally wrong." It is a hole in the meaning of your program.
+
+<Callout type="problem" title="🧠 Mental model: a race is a missing edge, not a slow goroutine">
+Don't picture a race as "two goroutines running at the same time." Picture a **directed graph of memory accesses**, where an edge means "this provably happens before that." A data race is two accesses to the same location (one a write) with **no path between them** in that graph. Fixing a race always means the same thing: *add an edge*. A mutex adds one (unlock happens-before the next lock). A channel adds one (send happens-before the matching receive). An atomic adds one. A `time.Sleep` adds **none** — which is exactly why it never works.
+</Callout>
 
 ## Atomicity: `i++` is a lie
 
-Statements that *look* indivisible usually aren't. `counter++` is really three operations:
+Statements that *look* indivisible usually aren't. `counter++` is really three machine operations:
 
 ```text
-1. read counter        (load)
-2. add 1               (modify)
-3. write counter back  (store)
+1. load  counter  → register   (read)
+2. add   1                      (modify)
+3. store register → counter     (write)
 ```
 
-Two goroutines can both perform step 1 before either reaches step 3 — and one increment is lost.
+Between step 1 and step 3, another goroutine can run the *whole* sequence. Both read the same starting value, both add one, both write the same result — and one increment is silently lost. Disassemble it and you can see there is no single atomic instruction:
+
+```text
+$ go tool compile -S race.go   # abridged
+    MOVQ    counter(SB), AX    ; load
+    INCQ    AX                 ; add 1
+    MOVQ    AX, counter(SB)    ; store   ← three separate steps
+```
+
+The same trap applies to `counter += n`, `slice[i]++`, `m[k]++`, `x = x + 1`, and reads/writes of any value wider than a machine word (a 16-byte interface or slice header can **tear** — you read half of an old value and half of a new one).
 
 <Mermaid code={String.raw`sequenceDiagram
   participant A as Goroutine A
   participant M as counter (=100)
   participant B as Goroutine B
-  A->>M: read 100
-  B->>M: read 100
-  A->>M: write 101
-  B->>M: write 101
-  Note over M: two increments, but counter = 101 (one lost)`} />
+  A->>M: load 100
+  B->>M: load 100
+  A->>M: store 101
+  B->>M: store 101
+  Note over M: two increments ran, but counter = 101 (one lost)`} />
 
 ## Watch it lose updates
 
-A thousand goroutines each increment an **unguarded** counter. It almost never reaches 1000. Edit and **Run** it a few times:
+A thousand goroutines each increment an **unguarded** counter. It almost never reaches 1000 — and the exact number changes between runs because the interleaving is nondeterministic. Edit and **Run** it a few times; you'll see different values, all below 1000:
 
-<Playground client:visible title="race.go" code={String.raw`package main
+<Playground client:visible title="race-counter.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -93,10 +136,11 @@ import (
 )
 
 func main() {
-	var counter int
+	const N = 1000
+	var counter int // shared, UNSYNCHRONIZED
 	var wg sync.WaitGroup
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < N; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -105,34 +149,192 @@ func main() {
 	}
 
 	wg.Wait()
-	fmt.Printf("counter = %d (wanted 1000 — the race lost some)\n", counter)
+	// Output VARIES per run and is almost always < 1000 — that is the bug.
+	// (It is not a panic and not a deadlock; the race just loses updates.)
+	fmt.Printf("counter = %d (wanted %d — the race lost some)\n", counter, N)
 }`} />
 
-## The fixes
+The `sync.WaitGroup` here is *correct* — it gives you a happens-before edge between each `wg.Done()` and the `wg.Wait()`, so reading `counter` after `Wait` is safe. The race is purely the unguarded `counter++` inside the goroutines.
 
-Pick one — all three enforce an order:
+## Why `time.Sleep` never fixes it
+
+A tempting "fix" is to space the goroutines out so they "don't collide":
 
 ```go
-// 1. Mutex — guard the critical section
-var mu sync.Mutex
-mu.Lock(); counter++; mu.Unlock()
-
-// 2. sync/atomic — lock-free for a single value
-var counter int64
-atomic.AddInt64(&counter, 1)
-
-// 3. A channel — let one goroutine own the counter
-counts <- 1 // a single owner goroutine does the ++
+go func() {
+	defer wg.Done()
+	counter++
+	time.Sleep(time.Millisecond) // does NOTHING for correctness
+}()
 ```
 
-<Callout type="gotcha" title="⚠️ time.Sleep is NOT synchronization">
-Sprinkling `time.Sleep` to "let the other goroutine finish" only reshuffles timing — the race is still there and will surface under real load, on a faster machine, or at the worst possible moment. Synchronization means a **mutex, a channel, or `sync/atomic`** — never a sleep.
-</Callout>
+This is a **mirage**. A sleep changes *timing*, and a race is not a timing bug — it is a *missing-ordering* bug. The instant the machine is busier, the scheduler shifts, the CPU is faster, or you run under `-race` (which changes timing too), the collision returns. Worse, sleeps that "work" on your laptop fail in production at 3am under load, which is the most expensive possible place to discover a race. **Synchronization is a mutex, a channel, or `sync/atomic` — never a sleep.**
 
-<Callout type="go" title="🐹 Run everything with -race">
-Go ships a world-class **race detector**. Run `go run -race ./...`, and especially `go test -race` in CI. It instruments memory accesses and prints the exact two goroutines, the conflicting addresses, and full stack traces. It only reports races it actually observes at runtime — so exercise your concurrent paths under test.
+## Fix 1 — a Mutex (deterministic, == N)
+
+Wrap the read-modify-write in a critical section. Now exactly one goroutine touches `counter` at a time, the unlock→lock edge orders every increment, and the result is **always** N:
+
+<Playground client:visible title="fix-mutex.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	const N = 1000
+	var counter int
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mu.Lock()
+			counter++ // now the only goroutine inside the critical section
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	fmt.Printf("counter = %d (always %d — the mutex enforces order)\n", counter, N)
+}`} />
+
+Keep the critical section tiny — only the shared access belongs inside `Lock`/`Unlock`. See [the sync package](/concurrency/sync-package/) for `Mutex`, `RWMutex`, and the rest.
+
+## Fix 2 — sync/atomic (lock-free for one value)
+
+For a single counter, a full mutex is overkill. `atomic.Int64` performs the read-modify-write as **one indivisible hardware instruction** (a `LOCK XADD` on x86), so no lock and no critical section is needed — and the result is again always N:
+
+<Playground client:visible title="fix-atomic.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+func main() {
+	const N = 1000
+	var counter atomic.Int64 // the type carries its own atomicity
+	var wg sync.WaitGroup
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			counter.Add(1) // one atomic load-add-store, no lock
+		}()
+	}
+
+	wg.Wait()
+	fmt.Printf("counter = %d (always %d — atomic Add is indivisible)\n", counter.Load(), N)
+}`} />
+
+Atomics are the right tool for *one* word-sized value (a counter, a flag, a generation number). The moment you need to keep *two* fields consistent with each other, you need a mutex — an atomic only protects a single location. See [atomic operations](/concurrency/atomic/).
+
+## Fix 3 — a channel (one owner)
+
+The most idiomatic Go answer is often to **not share at all**: give the counter to a single owner goroutine and have everyone else send it messages. "Don't communicate by sharing memory; share memory by communicating."
+
+```go
+counts := make(chan int)
+go func() {              // the ONLY goroutine that touches total
+	total := 0
+	for c := range counts {
+		total += c       // no lock needed: one owner
+	}
+}()
+counts <- 1              // each worker just sends
+```
+
+The channel send/receive provides the ordering for free. This shines when the counter is part of a larger pipeline; for a hot, standalone counter the atomic is cheaper. See [channels](/concurrency/channels/).
+
+## The check-then-act race
+
+Not every race is a raw `i++`. A subtler family is **check-then-act**: you test a condition, then act on it, and another goroutine changes the world in the gap. A classic is "create the key if absent":
+
+```go
+// BROKEN even though each line is "synchronized":
+if _, ok := cache[key]; !ok { // check (lock here)
+	cache[key] = expensive()  // act  (lock here)
+}
+```
+
+If you take the lock around the check and *separately* around the write, two goroutines can both observe `!ok`, both call `expensive()`, and both write — duplicating work or clobbering each other. Concurrent map writes are *also* a flat-out crash in Go (`fatal error: concurrent map writes`), even without `-race`. The fix is to make the whole check-and-act **one** critical section:
+
+```go
+mu.Lock()
+if _, ok := cache[key]; !ok {
+	cache[key] = expensive() // check and act are now indivisible
+}
+mu.Unlock()
+```
+
+Or use `sync.Map.LoadOrStore`, or `sync.Once` for one-time init. The lesson: locks fix concurrent *access*, but you must still wrap the right *span* — an invariant that spans two operations needs both inside one lock.
+
+## The race detector
+
+Races hide. They depend on timing, so they pass code review, pass most test runs, and surface in production. The only reliable way to catch them is the **race detector**, which Go ships in the toolchain:
+
+```bash
+go run -race .          # instrument and run a program
+go test -race ./...     # instrument and run the whole test suite
+go build -race -o app   # ship-nothing; just for testing/staging
+```
+
+It works by **instrumenting every memory access** at compile time and maintaining, at runtime, a happens-before graph (a vector-clock-style "shadow memory"). The instant it observes two accesses to the same address with no ordering edge and at least one write, it prints a report naming **both** goroutines, the conflicting addresses, and full stack traces for each.
+
+```text
+==================
+WARNING: DATA RACE
+Write at 0x00c0000b4010 by goroutine 8:
+  main.main.func1()
+      race-counter.go:18 +0x...
+Previous read at 0x00c0000b4010 by goroutine 7:
+  ...
+==================
+```
+
+Two things to internalize about it:
+
+- **It is dynamic, not static.** It finds only races on code paths that *actually run* during that execution. A race in an untested branch is invisible. So run your concurrent tests under `-race` in CI, and exercise the real concurrent paths.
+- **It costs real performance.** Instrumented binaries run roughly **2–20x slower** and use 5–10x more memory, so you use `-race` in tests/CI and staging, not in your production build.
+
+It has **no false positives**: if `-race` reports a race, it is a real race in your code. Treat every report as a bug. See [the race detector](/stdlib/race-detector/) for reading reports in depth.
+
+## Reference: the fixes at a glance
+
+| Tool | Best for | Cost | Ordering it gives you |
+|---|---|---|---|
+| `sync.Mutex` | guarding a struct's internal state; multi-field invariants | a lock/unlock per access | unlock happens-before next lock |
+| `sync.RWMutex` | many readers, rare writers | reader-cheaper, writer-exclusive | same, with shared read locks |
+| `sync/atomic` (`atomic.Int64`, …) | one word-sized value: counter, flag, pointer | cheapest; lock-free | the atomic op itself is the edge |
+| channel | transferring ownership; one-owner state; pipelines | a send/receive per message | send happens-before receive |
+| `time.Sleep` | **nothing** — never a fix | hides the bug | **none** |
+
+## When to use which
+
+- **Guarding a struct's own fields, or any invariant spanning two values → `sync.Mutex`.** It is the default, it is obvious, and it scales to "keep these three fields consistent."
+- **A single counter, flag, or pointer → `sync/atomic`.** Lock-free and fast, but it only protects *one* location — don't reach for it when two values must agree.
+- **Moving data between goroutines, or letting one goroutine own state → a channel.** The most idiomatic answer when the data has a clear owner or flows through stages.
+- **Read-heavy, write-rare shared state → `sync.RWMutex`.** Measure first; for short critical sections a plain `Mutex` is often faster than the bookkeeping `RWMutex` adds.
+
+<Callout type="gotcha" title="⚠️ time.Sleep is NOT synchronization">
+Sprinkling `time.Sleep` to "let the other goroutine finish" only reshuffles timing — the race is still there and will surface under real load, on a faster machine, or the moment you run under `-race` (which itself changes timing). A `time.Sleep(time.Second)` that "fixes" your test is a race waiting to ship. Synchronization means a **mutex, a channel, or `sync/atomic`** — something that adds a happens-before edge. A sleep adds none.
 </Callout>
 
 <Callout type="tip" title="✅ A guarded lock still isn't 'correct'">
-Locks fix concurrent *access*, not *logic*. You can have perfectly synchronized code that's still wrong (check-then-act bugs, wrong invariants). Synchronization is necessary, not sufficient — design the logic too.
+Locks fix concurrent *access*, not *logic*. You can have perfectly synchronized code that is still wrong: check-then-act gaps, broken invariants, deadlocks from bad lock order. Synchronization is **necessary, not sufficient** — design the logic too, and read [deadlock, livelock & starvation](/concurrency/deadlock-livelock-starvation/) before you start nesting locks.
 </Callout>
+
+## See also
+
+- [The sync package](/concurrency/sync-package/) — `Mutex`, `RWMutex`, `WaitGroup`, `Once`, `Pool`.
+- [Atomic operations](/concurrency/atomic/) — lock-free primitives and when they're safe.
+- [The Go memory model](/concurrency/memory-model/) — what "happens-before" formally means.
+- [The race detector](/stdlib/race-detector/) — reading reports and wiring it into CI.
+- [Deadlock, livelock & starvation](/concurrency/deadlock-livelock-starvation/) — the failures that come *after* you add locks.
+
+Next: when locks themselves stop progress — [deadlock, livelock & starvation](/concurrency/deadlock-livelock-starvation/).
