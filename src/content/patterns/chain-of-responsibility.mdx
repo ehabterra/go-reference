@@ -53,6 +53,28 @@ quiz:
       - text: "Producers from consumers"
         correct: false
     explain: "The sender just hands the request to the front of the chain; it never needs to know which handler (if any) will process it."
+  - q: "Chain of Responsibility and Decorator both wrap/link objects. What's the key behavioral difference?"
+    options:
+      - text: "A CoR handler may stop the chain (handle it / short-circuit); a Decorator always delegates and just adds behavior around the call"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Decorator changes the interface"
+        correct: false
+      - text: "CoR can't use interfaces"
+        correct: false
+    explain: "Both compose objects of the same interface. Intent differs: a decorator enriches and always passes through; a CoR handler decides whether to handle (and stop) or forward — auth middleware rejecting a request is CoR short-circuiting, which a pure decorator wouldn't do."
+  - q: "What's the difference between a 'pure' and 'impure' chain?"
+    options:
+      - text: "Pure: exactly one handler handles the request, then stops. Impure: multiple handlers may act (each does its bit and passes on)"
+        correct: true
+      - text: "Pure chains use generics"
+        correct: false
+      - text: "Impure chains are always buggy"
+        correct: false
+      - text: "There's no such distinction"
+        correct: false
+    explain: "In a pure chain (approval levels) the first capable handler resolves it and the chain ends. In an impure chain (HTTP middleware) every handler runs in sequence, each contributing — logging, then auth, then the route. Both are CoR; know which you're building."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -154,6 +176,26 @@ func Logging(next http.Handler) http.Handler {
 }
 ```
 </Callout>
+
+## Building the chain from a slice
+
+The linked-list-with-`SetNext` form is the GoF shape, but idiomatic Go usually composes the chain from a **slice of middleware**, applied in order. This is what every router's `Use(...)` does:
+
+```go
+type Middleware func(http.Handler) http.Handler
+
+// Chain applies middleware so the first listed runs outermost.
+func Chain(h http.Handler, mw ...Middleware) http.Handler {
+	for i := len(mw) - 1; i >= 0; i-- {
+		h = mw[i](h)
+	}
+	return h
+}
+
+// handler := Chain(routes, Logging, Auth, Gzip) // Logging runs first
+```
+
+Same pattern, no explicit `next` pointers — the closure nesting *is* the chain. The wrapping order is the pipeline order, so a mistake there (auth after body-logging, say) is a real bug — see [Decorator](/patterns/decorator/) for the same ordering caution.
 
 ## Pitfalls
 

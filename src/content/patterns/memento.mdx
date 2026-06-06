@@ -52,6 +52,28 @@ quiz:
       - text: "Flyweight"
         correct: false
     explain: "Command + Memento is the classic undo combo: the command captures a snapshot (or enough state) before acting, so Undo can restore it."
+  - q: "Your editor state holds a []string. What must Save() do for a correct memento?"
+    options:
+      - text: "Deep-copy the slice into the memento — a shallow copy would let later edits mutate the snapshot"
+        correct: true
+      - text: "Nothing — assigning the slice is enough"
+        correct: false
+      - text: "Store a pointer to the live slice"
+        correct: false
+      - text: "Convert it to a string"
+        correct: false
+    explain: "A slice field is a header sharing a backing array. If the memento just copies the header, editing the live document also corrupts the snapshot. Memento inherits Prototype's deep-copy caveat: duplicate slices/maps (slices.Clone, etc.) when snapshotting."
+  - q: "When should you store diffs (or use Command's Undo) instead of full mementos?"
+    options:
+      - text: "When state is large or history is long — full snapshots per step cost too much memory"
+        correct: true
+      - text: "Never — full snapshots are always best"
+        correct: false
+      - text: "Only for two-state objects"
+        correct: false
+      - text: "When the state is a single int"
+        correct: false
+    explain: "Full snapshots are simple but O(state size) per checkpoint. For big documents or deep undo stacks, store just what changed (a diff) or reverse the action via Command.Undo, which often needs far less memory than a whole snapshot."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -141,6 +163,18 @@ func main() {
 <Callout type="go" title="🐹 Encapsulation by package, undo by Command">
 Go has no `private` keyword — encapsulation is per package. Unexported memento fields mean the caretaker can hold snapshots but not peek inside, which is exactly the pattern's intent. Memento pairs naturally with [Command](/patterns/command/) for undo (a command snapshots state before acting) and shares the [Prototype](/patterns/prototype/) deep-copy caveat: if your state has slices or maps, the snapshot must copy them, not alias them.
 </Callout>
+
+## Three ways to undo
+
+Memento is one of three strategies for "go back," and they trade memory for complexity:
+
+| Approach | Stores | Best when |
+|---|---|---|
+| **Memento (full snapshot)** | a complete state copy per checkpoint | state is small, or restore must be exact and simple |
+| **Diff / delta** | only what changed at each step | state is large but edits are local |
+| [Command](/patterns/command/) **`Undo`** | how to *reverse* each action | actions are cleanly invertible (toggle, add/remove) |
+
+In Go, a snapshot can be a small struct of unexported fields (as above), or — for arbitrary graphs — a `gob`/`json` round-trip (slow, drops unexported fields, but generic). The opacity that defines Memento comes for free from Go's package-level encapsulation.
 
 ## Pitfalls
 

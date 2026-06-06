@@ -51,6 +51,28 @@ quiz:
       - text: "You can't"
         correct: false
     explain: "An infinite generator must watch a cancellation signal (a done channel or ctx.Done()); otherwise it blocks forever on a send once the consumer stops reading."
+  - q: "When should you use a channel generator vs Go 1.23's range-over-func (iter.Seq)?"
+    options:
+      - text: "Channel generator when the producer is concurrent/blocking (I/O, its own goroutine); iter.Seq for synchronous, in-line lazy sequences with no goroutine"
+        correct: true
+      - text: "Always use channels — iter.Seq is slower"
+        correct: false
+      - text: "Always use iter.Seq — channels are deprecated"
+        correct: false
+      - text: "They're identical"
+        correct: false
+    explain: "A channel generator runs the producer in its own goroutine — right when production is concurrent or blocks on I/O, but it costs a goroutine and needs cancellation. iter.Seq (range-over-func) is a synchronous pull with no goroutine, no channel, no leak risk — better for pure in-process sequences."
+  - q: "With an unbuffered channel, how fast does the generator produce?"
+    options:
+      - text: "Exactly as fast as the consumer pulls — each send blocks until received (natural back-pressure)"
+        correct: true
+      - text: "As fast as the CPU allows, buffering everything"
+        correct: false
+      - text: "It precomputes all values first"
+        correct: false
+      - text: "One value per second"
+        correct: false
+    explain: "An unbuffered channel couples producer to consumer: the generator blocks on send until the consumer receives, so it produces lazily and memory stays bounded — the same back-pressure that makes [pipelines](/patterns/pipeline/) safe."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -107,6 +129,19 @@ func main() {
 <Callout type="go" title="🐹 The source of every pipeline">
 A generator is just the first stage of a [Pipeline](/patterns/pipeline/): it produces, downstream stages transform. Two rules carry over — the **producer closes the channel**, and an infinite generator must **select on a cancellation signal** (a `done` channel or `ctx.Done()`) so it can't block forever once the consumer walks away. For synchronous sequences with no concurrency, Go 1.23's range-over-func (`iter.Seq`) is the simpler tool — see [Iterator](/patterns/iterator/).
 </Callout>
+
+## Channel generator vs range-over-func
+
+Go 1.23 gave generators a synchronous sibling. Choose by whether production is *concurrent*:
+
+| | Channel generator | range-over-func (`iter.Seq`) |
+|---|---|---|
+| Runs in | its own goroutine | the caller's goroutine (synchronous) |
+| Cost | a goroutine + a channel | a function call per value |
+| Cancellation | needs done/ctx or it leaks | `break` just stops the loop |
+| Best for | concurrent/blocking producers, pipeline sources | pure lazy sequences, no concurrency |
+
+If there's no concurrency, prefer `iter.Seq` — it can't leak a goroutine. Reach for the channel form when the producer genuinely runs alongside the consumer (a network reader, a pipeline stage). See [Iterator](/patterns/iterator/) for the range-over-func form.
 
 ## In the standard library
 

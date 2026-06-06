@@ -54,6 +54,28 @@ quiz:
       - text: "append(s, x)"
         correct: false
     explain: "sql.Open looks up a registered driver by name and returns a handle — you depend on the name, not the concrete driver type. image.Decode and net.Listen are similar."
+  - q: "What does the 'registry' factory variation buy you over a hard-coded switch?"
+    options:
+      - text: "New implementations register themselves (often in init) without editing the factory — it's open for extension"
+        correct: true
+      - text: "It runs measurably faster than a switch"
+        correct: false
+      - text: "It removes the need for interfaces"
+        correct: false
+      - text: "It only works with generics"
+        correct: false
+    explain: "A registry maps a name to a constructor func. New kinds call Register from their own package's init(), so the factory never changes when you add one — exactly how image.RegisterFormat and sql.Register work."
+  - q: "Factory Method vs Abstract Factory — what's the key difference?"
+    options:
+      - text: "Factory Method creates one product through an overridable step; Abstract Factory creates whole families of related products"
+        correct: true
+      - text: "They are the same pattern"
+        correct: false
+      - text: "Abstract Factory can't return interfaces"
+        correct: false
+      - text: "Factory Method requires inheritance in Go"
+        correct: false
+    explain: "Factory Method varies the creation of a single product per context. Abstract Factory groups several related creation methods so you get matched sets (NY dough + NY sauce, or Chicago dough + Chicago sauce) from one factory."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -157,6 +179,72 @@ func (s *PizzaStoreBase) OrderPizza(kind PizzaType) (Pizza, error) {
 ```
 
 Each store implements `CreatePizza` to build its own regional pizzas — same order flow, different products.
+
+## The registry variation — Go's favorite factory
+
+Instead of a hard-coded `switch`, register constructors in a map keyed by name. New kinds plug themselves in from their own package's `init()` — the factory never changes when you add one. This is exactly how `image.RegisterFormat`, `sql.Register`, and most codec libraries work:
+
+<Playground client:visible title="registry.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+type Duck interface{ Quack() string }
+
+// registry maps a name to a constructor, populated at init time.
+var registry = map[string]func() Duck{}
+
+func Register(name string, ctor func() Duck) { registry[name] = ctor }
+
+func New(name string) (Duck, error) {
+	ctor, ok := registry[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown duck: %q", name)
+	}
+	return ctor(), nil
+}
+
+type Mallard struct{}
+
+func (Mallard) Quack() string { return "Quack" }
+
+type Rubber struct{}
+
+func (Rubber) Quack() string { return "Squeak" }
+
+// In real code each of these would live in its own file/package.
+func init() {
+	Register("mallard", func() Duck { return Mallard{} })
+	Register("rubber", func() Duck { return Rubber{} })
+}
+
+func main() {
+	names := make([]string, 0, len(registry))
+	for n := range registry {
+		names = append(names, n)
+	}
+	sort.Strings(names) // deterministic output
+	for _, n := range names {
+		d, _ := New(n)
+		fmt.Printf("%-8s -> %s\n", n, d.Quack())
+	}
+}`} />
+
+The win is **open/closed**: adding a `Decoy` duck means writing a new file with a `Register` call — no edit to `New` or any `switch`.
+
+## How the creational family compares
+
+All five creational patterns hide `new`, but they answer different questions:
+
+| Pattern | In one line | Reach for it when |
+|---|---|---|
+| Simple Factory | one function/switch returns a product | a small, fixed set of known kinds |
+| **Factory Method** | each context overrides the creation step | the *build* varies by context/subtype |
+| Abstract Factory | a factory of related products (families) | you need matched sets (NY dough + NY sauce) |
+| Builder | step-by-step assembly of one complex object | many optional fields / staged construction |
+| Prototype | clone a configured instance | new objects resemble an existing one |
 
 ## In the standard library
 

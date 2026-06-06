@@ -53,6 +53,28 @@ quiz:
       - text: "Adapter"
         correct: false
     explain: "Iterator gives clients a uniform way to traverse the composite without exposing its tree structure — exactly what a depth-first compositeIterator does."
+  - q: "GoF calls it the 'transparency vs safety' trade-off. What is it?"
+    options:
+      - text: "Putting Add/Remove on the shared interface gives uniformity (transparency) but lets leaves expose meaningless child methods; putting them only on the container is type-safe but forces clients to assert the type"
+        correct: true
+      - text: "Whether the tree is encrypted"
+        correct: false
+      - text: "Whether iteration is concurrent-safe"
+        correct: false
+      - text: "Whether you use pointers or values"
+        correct: false
+    explain: "Transparency = one interface for leaves and containers (uniform, but a File.Add is nonsense). Safety = child-management only on Folder (no nonsensical leaf methods, but clients sometimes need a type assertion to add). Go leans safety: keep the shared interface to what both truly support."
+  - q: "Composite and Decorator both hold a value of their own interface. How do they differ?"
+    options:
+      - text: "Composite builds a tree of many children to treat part-and-whole uniformly; Decorator wraps exactly one component to add behavior"
+        correct: true
+      - text: "They are the same pattern"
+        correct: false
+      - text: "Decorator can't be recursive"
+        correct: false
+      - text: "Composite changes the interface"
+        correct: false
+    explain: "Structurally similar (self-referential interface), different intent: Composite is about structure (a part-whole tree, often many children); Decorator is about behavior (one wrapped component, enriched). A decorator with a list of children is drifting toward composite."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -168,6 +190,15 @@ func main() {
 <Callout type="go" title="🐹 Composite + Iterator together">
 You can take it one step further: have every Component also expose `CreateIterator()`, and a stack-based `compositeIterator` does a **depth-first traversal** of the tree. Leaves return a Null-Object `emptyIterator`. It's a lovely demonstration of Composite and [Iterator](/patterns/iterator/) working together — the caller walks the whole tree with a plain `for it.HasNext()` loop and never sees the recursion.
 </Callout>
+
+## Transparency vs safety
+
+GoF frames Composite's one real design decision as **transparency vs safety** — where do child-management methods (`Add`, `Remove`) live?
+
+- **Transparency**: put them on the shared `Component` interface. Every node looks identical and clients never type-assert — but a `File.Add(...)` is meaningless and must panic or no-op.
+- **Safety**: put them only on `Folder`. No nonsensical leaf methods — but a client that holds a `Component` must type-assert to `*Folder` before adding a child.
+
+Go nudges firmly toward **safety**: keep the shared interface to what *both* leaf and container genuinely support (here `Name`/`Print`), and expose `Add` only on `Folder`. A small, honest interface beats a uniform-but-lying one — the same instinct behind Go's tiny single-method interfaces.
 
 ## In the standard library
 

@@ -8,6 +8,9 @@
   "<code>ctx</code> هو الوسيط الأول؛ والعمّال يستخدمون select على <code>ctx.Done()</code>. وانتهاء المهلة يلغي الشجرة كاملةً تلقائيًا. حرّر و<strong>شغّل</strong>:",
   " <span>🐹 Context هو channel الـ 'done' الحديث</span> ",
   "استعملت الأنماط السابقة channel من نوع <code>done</code> مصنوعًا يدويًا (<a href=\"/patterns/pipeline/\">Pipeline</a>، <a href=\"/patterns/generator/\">Generator</a>). وفي الشفرة الواقعية، يؤدي <code>ctx.Done()</code> ذلك الدور — لكنه يحمل أيضًا <strong>مواعيد نهائية</strong> و<strong>قيمًا</strong>، وهو قابل للتركيب: ألغِ أبًا فيُلغى كل context مشتق منه. والأعراف هي: مرّر <code>ctx</code> بوصفه <strong>الوسيط الأول</strong>، ولا تخزّنه في بنية struct أبدًا، واستخدم دائمًا <code>defer cancel()</code>، واستعمل <code>ctx.Value</code> بحذر للبيانات المرتبطة بالطلب حقًا.",
+  "الـ constructors الأربعة",
+  "كل context يشتقّ من أبٍ، مكوّنًا شجرةً حيث يُلغي إلغاءُ عقدةٍ شجرتَها الفرعية كلها:",
+  "مرّر <code>ctx</code> كـ <strong>المعامل الأول</strong> (<code>func F(ctx context.Context, …)</code>)، ولا تخزّنه في struct أبدًا، و<code>defer cancel()</code> لحظة إنشاء واحد قابل للإلغاء. وصفحة context في <a href=\"/concurrency/context/\">مسار التزامن</a> تغطّي قواعد النشر بتعمّق.",
   "في المكتبة القياسية",
   "<strong><code>http.Request.Context()</code></strong> — يُلغى عند انقطاع العميل.",
   "<strong><code>database/sql</code></strong> <code>QueryContext</code>، <code>ExecContext</code> — لإجهاض الاستعلامات البطيئة.",
@@ -43,5 +46,17 @@
   " <span>تجاهلها</span> ",
   " <span>تخزينها عالميًا</span> ",
   " <span>تمريرها إلى كل goroutine</span> ",
-  " <span>عدم استدعاء cancel يسرّب مؤقّت/goroutine الـ context حتى يُلغى الأب. والقاعدة هي `defer cancel()` فور الإنشاء مباشرةً.</span> "
+  " <span>عدم استدعاء cancel يسرّب مؤقّت/goroutine الـ context حتى يُلغى الأب. والقاعدة هي `defer cancel()` فور الإنشاء مباشرةً.</span> ",
+  " 4.\n<span>أي constructor يعطي context يُلغى تلقائيًّا بعد مدّة؟</span> ",
+  " <span>context.WithTimeout(parent, d) (أو WithDeadline لوقت مطلق)</span> ",
+  " <span>context.WithCancel(parent)</span> ",
+  " <span>context.Background()</span> ",
+  " <span>context.WithValue(parent, k, v)</span> ",
+  " <span>WithTimeout/WithDeadline يُعيدان context يُلغى عند انطلاق المؤقّت أو عند استدعائك cancel، أيّهما أوّلًا. وWithCancel يُلغي يدويًّا فقط؛ وBackground هو الجذر الفارغ؛ وWithValue يرفق بيانات.</span> ",
+  " 5.\n<span>ما القاعدة لمفاتيح context.WithValue؟</span> ",
+  " <span>استعمل نوع مفتاح مخصّصًا غير مُصدَّر (لا string) لتفادي التصادمات، واحجزه للبيانات المرتبطة بالطلب — لا لمعاملات الدوال الاختيارية</span> ",
+  " <span>استعمل دائمًا مفاتيح string عادية</span> ",
+  " <span>يجب أن تكون المفاتيح أعدادًا صحيحة</span> ",
+  " <span>أي string عامّ مُصدَّر مقبول</span> ",
+  " <span>مفتاح string قد يصطدم بمفتاح حزمة أخرى. عرّف type ctxKey struct{} (أو ثابتًا مُنمَّطًا غير مُصدَّر) كي يكون المفتاح فريدًا. وctx.Value للنطاق المرتبط بالطلب الشامل (معرّفات التتبّع، المصادقة) — وتمرير المعاملات العادية عبره يُخفي الاعتماديات وهو نمط مضادّ.</span> "
 ]

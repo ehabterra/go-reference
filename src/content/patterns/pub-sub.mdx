@@ -53,6 +53,28 @@ quiz:
       - text: "Nothing — it runs forever"
         correct: false
     explain: "Closing the subscriber's channel (on unsubscribe/shutdown) terminates its range loop, letting the goroutine exit without leaking."
+  - q: "With the non-blocking 'drop on full' publish, what delivery guarantee do you get?"
+    options:
+      - text: "At-most-once (lossy) — a slow/full subscriber may miss events; there's no retry or persistence"
+        correct: true
+      - text: "Exactly-once, always"
+        correct: false
+      - text: "At-least-once with retries"
+        correct: false
+      - text: "Guaranteed ordered delivery to all"
+        correct: false
+    explain: "Dropping to avoid blocking trades reliability for liveness: a subscriber that can't keep up loses messages. That's fine for cache invalidation or UI nudges; if you need durability or at-least-once, you need a real broker, not an in-process bus."
+  - q: "The broker's subscribers map is touched by Publish, Subscribe, and Unsubscribe from many goroutines. What's required?"
+    options:
+      - text: "Guard it with a sync.Mutex/RWMutex (or serialize access through one goroutine) — concurrent map access is a data race"
+        correct: true
+      - text: "Nothing — Go maps are concurrency-safe"
+        correct: false
+      - text: "Only buffered channels"
+        correct: false
+      - text: "A time.Sleep between operations"
+        correct: false
+    explain: "Go maps are not safe for concurrent read/write. The broker must protect its subscriber registry with a mutex (RWMutex if reads dominate) or own it in a single goroutine that all operations message — otherwise the race detector lights up and the map can corrupt."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -145,6 +167,19 @@ func main() {
 <Callout type="go" title="🐹 The concurrent cousin of Observer">
 [Observer](/patterns/observer/) notifies dependents in-process, often synchronously. Pub/Sub generalizes it: a **broker** decouples publishers from a *dynamic* set of subscribers, each running in its own goroutine with its own channel. The two key choices are **back-pressure** (drop, block, or buffer for slow subscribers) and **lifecycle** (closing channels on unsubscribe so goroutines exit). For cross-process or durable delivery, swap this in-process broker for NATS, Kafka, or Redis.
 </Callout>
+
+## In-process bus vs a real broker
+
+The channel-based broker here is perfect for *in-process* events — cache invalidation, UI updates, decoupling packages. Know its limits, and when to graduate:
+
+| | In-process (this page) | Real broker (NATS, Kafka, Redis) |
+|---|---|---|
+| Scope | one process | across processes/machines |
+| Delivery | at-most-once (lossy on drop) | at-least-once, persistence, replay |
+| Ordering | per-subscriber, best-effort | per-partition/topic guarantees |
+| Cost | a struct + channels | infra to run and operate |
+
+If you need durability, cross-service fan-out, or replay, reach for a message broker (see the [APIs & messaging](/web/) track) rather than scaling the in-process bus. And it's the concurrent cousin of [Observer](/patterns/observer/): same intent (broadcast change), with a broker decoupling the two ends.
 
 ## Pitfalls
 

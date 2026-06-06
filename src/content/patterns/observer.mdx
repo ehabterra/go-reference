@@ -54,6 +54,28 @@ quiz:
       - text: "Reflection on struct tags"
         correct: false
     explain: "Channels are Go's broadcast primitive: the subject holds a list of channels and sends each a Message; observers receive in their own goroutine. A select-with-timeout can drop messages to slow observers."
+  - q: "Observer vs Pub/Sub — what's the structural difference?"
+    options:
+      - text: "Observer: the subject holds and notifies its observers directly (in-process, 1-to-many). Pub/Sub: a broker sits between publishers and subscribers, who don't know each other and often communicate by topic"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Pub/Sub is synchronous, Observer is always async"
+        correct: false
+      - text: "Observer needs a message queue"
+        correct: false
+    explain: "Observer couples a subject to its dependents (it keeps the list and calls them). Pub/Sub adds a broker so publishers and subscribers are fully decoupled — neither holds a reference to the other — usually with topics and often across processes."
+  - q: "Which design principle is Observer built to serve?"
+    options:
+      - text: "Loose coupling — the subject knows only that observers satisfy an interface (or own a channel), never their concrete types"
+        correct: true
+      - text: "Single Responsibility, exclusively"
+        correct: false
+      - text: "The Hollywood Principle"
+        correct: false
+      - text: "Open/Closed, exclusively"
+        correct: false
+    explain: "The subject and observers interact through a thin contract, so either side can change or come and go independently — loose coupling. The cost of that freedom is the lapsed-listener leak: observers that never unregister keep the subject pinning them alive."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -198,6 +220,19 @@ func (w *WeatherData) Notify(m Message) {
 <Callout type="go" title="🐹 Two correctness details worth stealing">
 **1. Copy the observer slice under the lock, then release it before notifying.** Both forms above do this — it avoids holding the lock during callbacks (which could re-enter the subject and deadlock) and avoids mutating the slice while iterating. **2. Don't let one observer block the rest** — the channel form's `select`-with-timeout drops messages to a stalled consumer instead of freezing the whole system.
 </Callout>
+
+## Observer vs Pub/Sub
+
+They're often used interchangeably, but there's a real structural line:
+
+| | Observer | [Pub/Sub](/patterns/pub-sub/) |
+|---|---|---|
+| Who knows whom | subject holds its observers directly | a **broker** sits between; publishers and subscribers don't know each other |
+| Routing | one subject → its dependents | by **topic/channel**, many-to-many |
+| Scope | in-process, synchronous-ish | often async, sometimes cross-process |
+| Coupling | loose (shared interface) | looser (decoupled via the broker) |
+
+Observer is the right call for in-process, one-source-to-many-listeners updates. Reach for Pub/Sub when you have multiple producers, dynamic topics, or a process boundary.
 
 ## In the standard library & ecosystem
 

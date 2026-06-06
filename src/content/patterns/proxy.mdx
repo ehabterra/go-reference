@@ -52,6 +52,28 @@ quiz:
       - text: "sort.Slice"
         correct: false
     explain: "ReverseProxy stands in locally for a remote backend: it presents the http.Handler interface and forwards requests to the real server — a textbook remote proxy."
+  - q: "You need 'only one goroutine should ever trigger the expensive lazy load.' What guards a virtual proxy?"
+    options:
+      - text: "sync.Once (or a mutex) around the lazy initialization"
+        correct: true
+      - text: "A time.Sleep before the first call"
+        correct: false
+      - text: "Nothing — the nil check is already safe"
+        correct: false
+      - text: "A buffered channel of size 1 per call"
+        correct: false
+    explain: "A bare `if p.real == nil { p.real = load() }` races: two goroutines can both see nil and both load. Wrap the init in sync.Once.Do (or a mutex) so it runs exactly once — the same fix as the Singleton."
+  - q: "A proxy that authorizes the caller before forwarding is which flavor?"
+    options:
+      - text: "Protection proxy"
+        correct: true
+      - text: "Virtual proxy"
+        correct: false
+      - text: "Remote proxy"
+        correct: false
+      - text: "It's not a proxy"
+        correct: false
+    explain: "Proxies come in flavors by intent: virtual (lazy/expensive creation), remote (stand-in for a networked object), protection (access control/authorization), and caching/smart-reference (memoize results, count references). All share the subject's interface."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -131,6 +153,19 @@ func main() {
 <Callout type="go" title="🐹 Proxy vs Decorator — same shape, different intent">
 Both wrap an object behind its interface, so in Go they look almost the same. Ask *why* you're wrapping: adding features (compression, buffering)? That's a [Decorator](/patterns/decorator/). Controlling access (lazy, cache, auth, remote)? That's a Proxy. Common Go proxies include caching layers, lazy loaders, and `httputil.ReverseProxy`.
 </Callout>
+
+## The flavors of proxy
+
+All proxies share the subject's interface; they differ by *what access they control*:
+
+| Flavor | Controls | Go example |
+|---|---|---|
+| **Virtual** | expensive/lazy creation | load-on-first-use, `sync.Once`-guarded resource |
+| **Remote** | a networked object | `httputil.ReverseProxy`, an RPC client stub |
+| **Protection** | authorization | a wrapper that checks permissions before forwarding |
+| **Caching / smart** | repeated work or lifecycle | memoizing layer, reference counting, metrics |
+
+The shape is identical to [Decorator](/patterns/decorator/) and [Adapter](/patterns/adapter/) — only the *intent* (control access, not add behavior or change interface) makes it a Proxy.
 
 ## In the standard library
 

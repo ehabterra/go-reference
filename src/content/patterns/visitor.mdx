@@ -52,6 +52,28 @@ quiz:
       - text: "Embedding"
         correct: false
     explain: "`switch s := shape.(type) { case *Circle: … }` is simpler for a few cases, though you lose the compiler guarantee that every type is handled."
+  - q: "Visitor is a classic answer to the 'expression problem.' What trade-off does it make?"
+    options:
+      - text: "It makes adding operations easy but adding types hard — the mirror image of putting methods on each type"
+        correct: true
+      - text: "It makes both adding types and operations easy"
+        correct: false
+      - text: "It makes adding types easy but operations hard"
+        correct: false
+      - text: "It removes the trade-off entirely"
+        correct: false
+    explain: "The expression problem: you can optimize for new operations or new types, not both freely. Methods-on-types make new types easy (add one type with all its methods) but new operations hard (touch every type). Visitor flips it: new operations are one new visitor; new types force a new method in every visitor."
+  - q: "What does the full Visitor interface give you that a type switch doesn't?"
+    options:
+      - text: "Compile-time exhaustiveness — every visitor must implement a method for every element type, so adding a type won't silently skip an operation"
+        correct: true
+      - text: "Faster dispatch"
+        correct: false
+      - text: "Fewer allocations"
+        correct: false
+      - text: "Concurrency safety"
+        correct: false
+    explain: "A type switch with a missing case just falls through (or hits default) at runtime. The Visitor interface makes the compiler reject any visitor that doesn't handle a newly-added element type — the exhaustiveness guarantee, which is why go/ast uses it."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -146,6 +168,17 @@ case *Rectangle: area += s.w * s.h
 
 It's simpler, but you lose what full Visitor buys you: the compiler forcing every visitor to handle every type. Use the type switch for a few ad-hoc cases; use the Visitor interface when operations are many and you want that exhaustiveness — which is why `go/ast.Walk` takes an `ast.Visitor`.
 </Callout>
+
+## The expression problem
+
+Visitor is the textbook answer to the **expression problem** — the observation that you can make it cheap to add new *types* or new *operations*, but not both at once. Two layouts, opposite trade-offs:
+
+| Layout | Add a new operation | Add a new type |
+|---|---|---|
+| Methods on each type | hard — touch *every* type | easy — one new type, done |
+| **Visitor** | easy — one new visitor | hard — a new method in *every* visitor |
+
+So the decision is entirely about **which axis changes more**. A syntax tree has a *stable* set of node types but an ever-growing list of passes (print, type-check, optimize, format) — operations dominate, so `go/ast` uses Visitor. A drawing app that keeps adding shapes but has a fixed handful of operations should put methods on the types instead. Pick the pattern that makes your *frequent* change the easy one.
 
 ## In the standard library
 

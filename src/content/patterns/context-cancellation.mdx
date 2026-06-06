@@ -53,6 +53,28 @@ quiz:
       - text: "Pass it to every goroutine"
         correct: false
     explain: "Not calling cancel leaks the context's timer/goroutine until the parent is cancelled. `defer cancel()` right after creation is the rule."
+  - q: "Which constructor gives a context that auto-cancels after a duration?"
+    options:
+      - text: "context.WithTimeout(parent, d) (or WithDeadline for an absolute time)"
+        correct: true
+      - text: "context.WithCancel(parent)"
+        correct: false
+      - text: "context.Background()"
+        correct: false
+      - text: "context.WithValue(parent, k, v)"
+        correct: false
+    explain: "WithTimeout/WithDeadline return a context that's cancelled when the timer fires or you call cancel, whichever comes first. WithCancel cancels only manually; Background is the empty root; WithValue attaches data."
+  - q: "What's the rule for context.WithValue keys?"
+    options:
+      - text: "Use an unexported custom key type (not a string) to avoid collisions, and reserve it for request-scoped data — not optional function parameters"
+        correct: true
+      - text: "Always use plain string keys"
+        correct: false
+      - text: "Keys must be integers"
+        correct: false
+      - text: "Any exported global string is fine"
+        correct: false
+    explain: "A string key can collide with another package's. Define `type ctxKey struct{}` (or an unexported typed constant) so the key is unique. And ctx.Value is for cross-cutting request scope (trace IDs, auth) — passing ordinary parameters through it hides dependencies and is an anti-pattern."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -116,6 +138,19 @@ func main() {
 <Callout type="go" title="🐹 Context is the modern 'done' channel">
 Earlier patterns used a hand-rolled `done` channel ([Pipeline](/patterns/pipeline/), [Generator](/patterns/generator/)). In real code, `ctx.Done()` plays that role — but it also carries **deadlines** and **values**, and it composes: cancel a parent and every derived context cancels too. The conventions: pass `ctx` as the **first argument**, never store it in a struct, always `defer cancel()`, and use `ctx.Value` sparingly for genuinely request-scoped data.
 </Callout>
+
+## The four constructors
+
+Every context derives from a parent, forming a tree where cancelling a node cancels its whole subtree:
+
+| Constructor | Gives you | Use for |
+|---|---|---|
+| `Background()` / `TODO()` | the empty root context | top of `main`/request; TODO = "not wired yet" |
+| `WithCancel(parent)` | a ctx + manual `cancel()` | stop a goroutine tree on demand |
+| `WithTimeout` / `WithDeadline` | auto-cancel after a duration / at a time | bound requests, queries, RPCs |
+| `WithValue(parent, k, v)` | a ctx carrying one value | request-scoped data (trace ID, auth) |
+
+Pass `ctx` as the **first parameter** (`func F(ctx context.Context, …)`), never store it in a struct, and `defer cancel()` the moment you create a cancellable one. The [concurrency track's context page](/concurrency/context/) covers the propagation rules in depth.
 
 ## In the standard library
 

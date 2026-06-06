@@ -54,6 +54,17 @@ quiz:
       - text: "Command"
         correct: false
     explain: "One instance, one access point, initialized once — Singleton, and sync.Once makes the lazy version race-free."
+  - q: "State and Strategy have the same shape (delegate behind an interface). What tells them apart?"
+    options:
+      - text: "Agency — a State object drives its own transitions; a Strategy is chosen from outside and rarely changes itself"
+        correct: true
+      - text: "State is creational; Strategy is structural"
+        correct: false
+      - text: "Strategy can't use interfaces"
+        correct: false
+      - text: "They are the same pattern"
+        correct: false
+    explain: "Structurally identical, different intent. A state machine moves itself between states (states often know each other); a strategy is set by the client and just runs. This 'same shape, different intent' theme recurs: Proxy vs Decorator vs Adapter, Mediator vs Facade."
 ---
 import Callout from '../../components/Callout.astro';
 
@@ -133,6 +144,24 @@ The whole catalog at a glance. Each row links to the full page; skim to find the
 - **…cancel a tree of goroutines** → [Context](/patterns/context-cancellation/)
 - **…run concurrent tasks that can fail** → [errgroup](/patterns/errgroup/)
 </Callout>
+
+## Patterns that pair or contrast
+
+Half of knowing patterns is telling the look-alikes apart and spotting the natural pairings:
+
+**Same shape, different intent** (the ones interviews love):
+- **Proxy vs Decorator vs Adapter** — same/same/different interface; control access / add behavior / change interface.
+- **State vs Strategy** — drives its own transitions / chosen from outside.
+- **Mediator vs Facade vs Observer** — many-to-many hub / one-way subsystem door / one-to-many broadcast.
+- **Factory Method vs Abstract Factory** — one product / a matched family.
+- **Template Method vs Strategy** — fixed skeleton with holes / the whole algorithm swapped.
+- **Composite vs Decorator** — a tree of many children / one wrapped component.
+
+**Patterns that combine:**
+- **Command + Memento** → undo/redo.
+- **Composite + Iterator** (or **Visitor**) → walk and operate on a tree.
+- **Abstract Factory** is built from **Factory Methods**, often returning a **Singleton**.
+- **Pipeline + Fan-out/Fan-in + Worker Pool/Semaphore** → a bounded concurrent data flow.
 
 ## Patterns Go quietly reshapes
 

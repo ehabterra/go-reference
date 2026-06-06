@@ -52,6 +52,28 @@ quiz:
       - text: "Always, for every type"
         correct: false
     explain: "Cloning pays off when building from scratch is costly or when you want a copy of an already-set-up object to tweak independently."
+  - q: "What is a prototype registry?"
+    options:
+      - text: "A map of pre-configured prototype instances you Clone on demand by key — new objects without naming concrete types"
+        correct: true
+      - text: "A global singleton config"
+        correct: false
+      - text: "A list of all types in the program"
+        correct: false
+      - text: "A pool of goroutines"
+        correct: false
+    explain: "Keep a map[string]*T of fully-set-up prototypes; callers ask for one by name and get a fresh Clone. It's a factory whose 'products' are clones of stored exemplars — handy for spawning game entities, document templates, or default configs."
+  - q: "Does slices.Clone(s) give you a deep copy when s is a []*Node?"
+    options:
+      - text: "No — it copies the pointers, so the clone still shares the pointed-to Nodes"
+        correct: true
+      - text: "Yes, it recursively deep-copies everything"
+        correct: false
+      - text: "It panics on pointer slices"
+        correct: false
+      - text: "Only with a special flag"
+        correct: false
+    explain: "slices.Clone duplicates the backing array one level deep. For a slice of pointers (or structs containing references), the elements are still shared — true deep copy means recursively cloning what each pointer references, which is why deep cloning gets error-prone fast."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -131,6 +153,49 @@ cp.Tags[0] = "oops" // ...so this also mutates the original!
 
 A plain `*c` copy is only safe when every field is itself a value type (no slices, maps, pointers, channels).
 </Callout>
+
+## The prototype registry
+
+A classic companion to Prototype is a **registry** of ready-made exemplars you clone by key — a factory whose products are copies of configured instances. Each `Spawn` hands back an independent clone, so callers can tweak freely while the stored prototype stays pristine:
+
+<Playground client:visible title="registry.go" code={String.raw`package main
+
+import "fmt"
+
+type Shape struct {
+	Kind  string
+	Sides int
+	Tags  []string
+}
+
+func (s *Shape) Clone() *Shape {
+	cp := *s
+	cp.Tags = append([]string(nil), s.Tags...) // deep-copy the slice
+	return &cp
+}
+
+// A registry of pre-configured prototypes to clone on demand.
+var prototypes = map[string]*Shape{
+	"triangle": {Kind: "triangle", Sides: 3, Tags: []string{"polygon"}},
+	"square":   {Kind: "square", Sides: 4, Tags: []string{"polygon"}},
+}
+
+func Spawn(name string) (*Shape, bool) {
+	p, ok := prototypes[name]
+	if !ok {
+		return nil, false
+	}
+	return p.Clone(), true
+}
+
+func main() {
+	a, _ := Spawn("square")
+	a.Tags = append(a.Tags, "custom") // tweak the clone
+
+	b, _ := Spawn("square") // a fresh clone of the pristine prototype
+	fmt.Printf("a: %+v\n", *a)
+	fmt.Printf("b: %+v\n", *b)
+}`} />
 
 ## In the standard library
 

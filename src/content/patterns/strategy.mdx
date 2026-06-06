@@ -54,6 +54,28 @@ quiz:
       - text: "make(chan int)"
         correct: false
     explain: "sort.Slice takes the comparison strategy as a function, letting you sort the same data any way you like without changing the sort algorithm."
+  - q: "Strategy is the book's first pattern because it showcases three core principles. Which?"
+    options:
+      - text: "Encapsulate what varies, favor composition over inheritance, and program to interfaces"
+        correct: true
+      - text: "Singleton, global state, and inheritance"
+        correct: false
+      - text: "Goroutines, channels, and select"
+        correct: false
+      - text: "Encapsulation, polymorphism, and generics"
+        correct: false
+    explain: "The SimUDuck story pulls the varying behavior (fly/quack) out into interfaces, holds them by composition instead of subclassing, and has clients program to the behavior interface — the three principles Strategy is built to teach."
+  - q: "Strategy vs Template Method — what's the mechanism difference?"
+    options:
+      - text: "Strategy injects the whole algorithm by composition (swappable at runtime); Template Method fixes a skeleton and varies only some steps via overriding"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Template Method uses composition; Strategy uses inheritance"
+        correct: false
+      - text: "Strategy can't be changed at runtime"
+        correct: false
+    explain: "Template Method keeps the algorithm's outline in one place and lets subtypes fill in steps (inheritance/embedding, the Hollywood Principle). Strategy hands the entire algorithm in as an interchangeable object. Composition (Strategy) buys runtime swapping; the skeleton (Template Method) buys a guaranteed shape."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -170,6 +192,16 @@ mallard.fly = func() { fmt.Println("Can't fly") } // swap in one line
 <Callout type="go" title="🐹 Go reshapes this pattern">
 First-class functions collapse single-method Strategies into a `func` field or argument. Reach for the interface form when a strategy needs *multiple* methods or its own state; reach for the function form when it's one operation. Both are Strategy.
 </Callout>
+
+## The principles behind Strategy
+
+Strategy is the *Head First* Chapter 1 pattern because it distils three of the book's core principles into one idea:
+
+- **Encapsulate what varies** — the fly/quack behavior is the changing part, so it's pulled into its own interface, away from the stable `Duck`.
+- **Favor composition over inheritance** — the duck *has-a* behavior rather than *is-a* subclass, so you mix and match at runtime instead of fixing it in a class tree.
+- **Program to interfaces, not implementations** — `Duck` depends on `FlyBehavior`, never a concrete flier.
+
+Its two close cousins are easy to mix up: [State](/patterns/state/) has the same shape but the *object itself* changes its behavior object as it transitions (and states often know each other), whereas a Strategy is chosen from *outside* and rarely changes itself. [Template Method](/patterns/template-method/) solves a similar "vary the behavior" problem with a fixed skeleton instead of a swappable whole.
 
 ## In the standard library
 

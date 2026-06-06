@@ -52,6 +52,28 @@ quiz:
       - text: "Template Method is creational"
         correct: false
     explain: "Template Method keeps control of the overall flow and lets you fill in blanks; Strategy hands the entire algorithm over to an interchangeable object."
+  - q: "Template Method is the textbook case of which principle?"
+    options:
+      - text: "The Hollywood Principle — 'don't call us, we'll call you': the skeleton controls flow and calls down into your steps"
+        correct: true
+      - text: "The Single Responsibility Principle"
+        correct: false
+      - text: "The Interface Segregation Principle"
+        correct: false
+      - text: "Dependency Injection"
+        correct: false
+    explain: "Inversion of control: you don't drive the algorithm and call helpers; the high-level template drives and calls your steps at the right moments. sort.Sort and the testing runner work this way — you provide pieces, the framework calls them."
+  - q: "What is a 'hook' in Template Method?"
+    options:
+      - text: "An optional step with a default (often no-op) implementation that a variant may override to influence the algorithm"
+        correct: true
+      - text: "A goroutine that watches the flow"
+        correct: false
+      - text: "A required step that must be implemented"
+        correct: false
+      - text: "A way to cancel the algorithm"
+        correct: false
+    explain: "Beyond the mandatory steps, a hook is an optional one with a sensible default — e.g. customerWantsCondiments() returning true by default. Variants override it only when they need to, letting the skeleton offer extension points without forcing every subtype to fill them."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -139,6 +161,64 @@ func main() {
 <Callout type="go" title="🐹 Two Go flavors — interface or function hooks">
 One version embeds the base `OTP` in each channel; injecting the steps as an interface field (above) is the cleaner variant. For just one or two varying steps, you can skip the interface entirely and pass them as **function fields** on the struct — same pattern, less ceremony. Either way, the fixed flow stays in one place.
 </Callout>
+
+## The Hollywood Principle & hooks
+
+Template Method is inversion of control in its purest form — the **Hollywood Principle**: *"don't call us, we'll call you."* You don't write the algorithm and call helpers; the skeleton runs the show and calls *down* into your steps at the right moments. That's exactly how `sort.Sort` (it calls your `Less`/`Swap`) and `go test` (it calls your `TestXxx`) work.
+
+The book also distinguishes two kinds of step:
+
+- **Abstract steps** — mandatory; every variant must supply them (`brew`, `addCondiments`).
+- **Hooks** — *optional* steps with a default (often a no-op or a `true`), which a variant overrides only if it cares (`customerWantsCondiments() bool`).
+
+In Go you get hooks cheaply with **function fields**: required steps are funcs every beverage sets, while a hook is a func that defaults to `nil` and the skeleton treats `nil` as the default answer. Edit and **Run** — black coffee overrides the hook to skip condiments, tea leaves it unset and gets the default:
+
+<Playground client:visible title="hooks.go" code={String.raw`package main
+
+import "fmt"
+
+// Beverage is the template. Brew/AddCondiments are abstract steps (required);
+// WantsCondiments is a HOOK — nil means "use the default" (yes).
+type Beverage struct {
+	Name            string
+	Brew            func()      // abstract step (required)
+	AddCondiments   func()      // abstract step (required)
+	WantsCondiments func() bool // hook (optional)
+}
+
+// Prepare is the fixed skeleton — written exactly once.
+func (b Beverage) Prepare() {
+	fmt.Println("--", b.Name, "--")
+	boilWater()
+	b.Brew()
+	pourInCup()
+	if b.WantsCondiments == nil || b.WantsCondiments() { // default: true
+		b.AddCondiments()
+	}
+}
+
+func boilWater() { fmt.Println("boiling water") }
+func pourInCup() { fmt.Println("pouring into cup") }
+
+func main() {
+	tea := Beverage{
+		Name:          "Tea",
+		Brew:          func() { fmt.Println("steeping the tea") },
+		AddCondiments: func() { fmt.Println("adding lemon") },
+		// hook unset → condiments added by default
+	}
+	blackCoffee := Beverage{
+		Name:            "Black Coffee",
+		Brew:            func() { fmt.Println("dripping through filter") },
+		AddCondiments:   func() { fmt.Println("adding sugar & milk") },
+		WantsCondiments: func() bool { return false }, // override the hook
+	}
+
+	tea.Prepare()
+	blackCoffee.Prepare() // skips condiments via the hook
+}`} />
+
+The skeleton (`Prepare`) stays in one place and owns the order; abstract steps are mandatory function fields; the hook is an optional one the skeleton consults but variants may ignore.
 
 ## In the standard library
 

@@ -53,6 +53,28 @@ quiz:
       - text: "They don't have to be"
         correct: false
     explain: "A flyweight is referenced by many objects at once. If it were mutable, changing it for one would change it for all — so shared intrinsic state must be read-only."
+  - q: "How is Flyweight different from sync.Pool?"
+    options:
+      - text: "Flyweight shares one immutable instance among many live references; sync.Pool recycles short-lived objects to cut allocations (one user at a time)"
+        correct: true
+      - text: "They are the same"
+        correct: false
+      - text: "sync.Pool shares immutable state"
+        correct: false
+      - text: "Flyweight is about goroutines"
+        correct: false
+    explain: "Flyweight = many objects pointing at the *same* shared, read-only value, concurrently. sync.Pool = a free-list of reusable scratch objects you Get/Put, where each object has a single owner at a time. Sharing immutable state vs recycling mutable buffers — opposite use cases."
+  - q: "Your flyweight factory's cache is hit from many goroutines. What do you need?"
+    options:
+      - text: "Synchronize the cache — a sync.Mutex around the map, or sync.Map (or Go 1.23's unique package, which is concurrency-safe)"
+        correct: true
+      - text: "Nothing — map writes are goroutine-safe"
+        correct: false
+      - text: "A time.Sleep before each lookup"
+        correct: false
+      - text: "Make the TreeType mutable"
+        correct: false
+    explain: "Go maps are not safe for concurrent write, so a shared factory cache needs a mutex or sync.Map. The standard unique package (Go 1.23) does exactly this interning safely for you."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -138,6 +160,14 @@ func main() {
 <Callout type="go" title="🐹 It's interning + a state split">
 Flyweight in Go is a cache of shared immutable values plus the discipline of keeping per-instance data (here, `x, y`) out of the shared object. Go's strings are already flyweight-flavored — immutable, and substrings share backing memory. If the factory is used concurrently, guard the cache with a `sync.Mutex` or use `sync.Map`. (Don't confuse this with `sync.Pool`, which *reuses* objects to cut allocations rather than *sharing* immutable state.)
 </Callout>
+
+## In the standard library
+
+Go does flyweight-style sharing in a few places — and now offers it as a built-in:
+
+- **`unique` (Go 1.23+)** — `unique.Make(v)` *interns* a comparable value, returning a `Handle` that de-duplicates identical values across the whole program. That's Flyweight as a standard, concurrency-safe API — perfect for canonicalizing many repeated strings, keys, or small structs.
+- **Strings** are inherently flyweight-flavored: immutable, and a substring shares the original's backing array instead of copying.
+- **`net/netip.Addr`** was designed as a small, comparable, shareable value precisely to avoid the per-object overhead of the older `net.IP` (`[]byte`).
 
 ## Pitfalls
 

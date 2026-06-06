@@ -53,6 +53,28 @@ quiz:
       - text: "os.Getenv"
         correct: false
     explain: "bufio.Scanner walks tokens (lines, words) one at a time via Scan()/Text() without revealing the buffer underneath — a textbook iterator. sql.Rows is another."
+  - q: "Internal vs external iterator — which is range-over-func?"
+    options:
+      - text: "Internal — the iterator controls the loop and calls your yield for each element; external is when the caller drives it with Next()"
+        correct: true
+      - text: "External — you call yield yourself"
+        correct: false
+      - text: "They're the same"
+        correct: false
+      - text: "range-over-func is neither"
+        correct: false
+    explain: "An external iterator (HasNext/Next) puts the caller in charge of advancing. An internal iterator owns the iteration and pushes each element to a callback — exactly range-over-func, where the iter.Seq function runs the loop and invokes yield. Internal hides more; external gives finer control (pause, interleave)."
+  - q: "Which design principle says iteration belongs in its own object, not baked into the collection?"
+    options:
+      - text: "Single Responsibility — the collection stores; the iterator traverses; each has one reason to change"
+        correct: true
+      - text: "Open/Closed"
+        correct: false
+      - text: "Dependency Inversion"
+        correct: false
+      - text: "The Hollywood Principle"
+        correct: false
+    explain: "If the collection both stores elements and implements every way to traverse them, it has many reasons to change. Extracting traversal into an iterator gives each type a single responsibility — and lets multiple independent walks coexist."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -143,6 +165,15 @@ func main() {
 <Callout type="go" title="🐹 Go gives you three iterators">
 For a plain slice or map, just use `for range`. For custom sequences, prefer **range-over-func** (`iter.Seq`). Reach for the classic `HasNext`/`Next` interface only when you need an explicit cursor object you can pass around or pause. Channels are a fourth, concurrent option — see [Generator](/patterns/generator/).
 </Callout>
+
+## Internal vs external — and Single Responsibility
+
+GoF and *Head First* split iterators two ways:
+
+- **External (active)** — the caller drives: `for it.HasNext() { it.Next() }`. More control (pause, interleave two walks, hand the cursor around).
+- **Internal (passive)** — the iterator drives and pushes each element to a callback. That's exactly Go 1.23 **range-over-func**: the `iter.Seq` function runs the loop and calls `yield`. Less boilerplate, hides more.
+
+Either way, the deeper point is the **Single Responsibility Principle**: storing elements and traversing them are *two* responsibilities. Bake every traversal into the collection and it has many reasons to change; extract traversal into an iterator and each type does one job — which is also what lets several independent walks run over the same data at once.
 
 ## In the standard library
 

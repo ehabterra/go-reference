@@ -54,6 +54,28 @@ quiz:
       - text: "Nothing — matching is the caller's job"
         correct: false
     explain: "Because NYIngredientFactory's methods each return NY ingredients, anything built through it is internally consistent — the client can't accidentally mix families."
+  - q: "Adding a new *family* vs a new *product type* — which is easy and which is hard?"
+    options:
+      - text: "A new family is easy (one more concrete factory); a new product type is hard (every factory must grow a method)"
+        correct: true
+      - text: "Both are equally trivial"
+        correct: false
+      - text: "A new product type is easy; a new family is hard"
+        correct: false
+      - text: "Neither is possible without generics"
+        correct: false
+    explain: "The interface fixes the set of products. Adding a family just implements that interface once more — open for extension. Adding a product type changes the interface, forcing an edit to every existing factory — a closed-for-modification violation. If products churn more than families, reconsider."
+  - q: "Which design principle does Abstract Factory most embody?"
+    options:
+      - text: "Dependency Inversion — clients depend on the abstract factory and abstract products, never concrete types"
+        correct: true
+      - text: "Single Responsibility only"
+        correct: false
+      - text: "The Hollywood Principle"
+        correct: false
+      - text: "None — it's purely about performance"
+        correct: false
+    explain: "Both the high-level client and the low-level concrete families depend on abstractions (the factory interface + product interfaces), not on each other's concrete types. That inverted dependency is what lets you swap an entire family by passing a different factory."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -164,6 +186,12 @@ Abstract Factory is rarer in idiomatic Go than in Java. When you only need a cou
     </ul>
   </div>
 </div>
+
+## Design principle: Dependency Inversion
+
+Abstract Factory is the textbook expression of the **Dependency Inversion Principle** — *depend on abstractions, not concretions*. The client (`makePizza`) names only `IngredientFactory`, `Dough`, and `Cheese`; it never mentions `NYFactory` or `deepDish`. So the high-level policy and the low-level concrete families both point at the same abstractions, and neither depends on the other. That inversion is precisely what lets you swap a whole family by passing a different factory value.
+
+In practice an Abstract Factory is often *built from* [Factory Methods](/patterns/factory-method/) (each creation method is one) and frequently hands back a single shared instance via a [Singleton](/patterns/singleton/) — the three creational patterns compose naturally.
 
 ## In the standard library & ecosystem
 

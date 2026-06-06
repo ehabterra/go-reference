@@ -54,6 +54,28 @@ quiz:
       - text: "It leaks memory"
         correct: false
     explain: "Without synchronization, concurrent callers race on the check-and-set, possibly creating two instances and tripping the race detector."
+  - q: "When is a package-level `var instance = &Config{...}` (eager singleton) initialized?"
+    options:
+      - text: "Exactly once, before main runs, by Go's package-initialization order — inherently concurrency-safe"
+        correct: true
+      - text: "On the first call to Get(), lazily"
+        correct: false
+      - text: "Once per goroutine"
+        correct: false
+      - text: "Never — it's a compile error"
+        correct: false
+    explain: "Go initializes package-level variables once, in dependency order, before main starts and before any goroutine can run. So an eager singleton needs no sync.Once at all — reach for sync.Once only when initialization must be lazy (expensive, or depends on runtime state)."
+  - q: "Your code calls config.Get() everywhere. How do you make it testable?"
+    options:
+      - text: "Stop reaching for the global — accept the dependency (an interface or struct) as a parameter so tests can pass a fake"
+        correct: true
+      - text: "Add time.Sleep in tests to avoid races"
+        correct: false
+      - text: "Call runtime.GC() between tests"
+        correct: false
+      - text: "Nothing — singletons are inherently testable"
+        correct: false
+    explain: "The singleton's testability tax comes from hidden global coupling. The fix is dependency injection: have functions take what they need as an argument (often a small interface). The 'singleton' can still construct the default and pass it in at main — tests inject their own."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -174,6 +196,12 @@ func Get() *Config { return instance }
 ### A parameterized variation
 
 One variation passes the `*sync.Once` in as a parameter and even recovers from panics during construction — a nice way to see the mechanics laid bare. In production you'd usually keep the `sync.Once` as an unexported package-level variable instead.
+
+## Under the hood: why `sync.Once` beats double-checked locking
+
+In Java, the classic lazy singleton drove people to *double-checked locking* — check, lock, check again, with a `volatile` field — a notoriously easy thing to get subtly wrong. Go sidesteps the whole saga: `sync.Once` does the careful work for you. Internally it keeps a `done` flag read with an **atomic load** on the fast path, so after the first call `Do` is a single cheap atomic check with **no mutex** — and the slow path takes a lock only until initialization finishes. You get correct, race-free lazy init without ever writing the locking dance yourself (and `go test -race` will confirm it).
+
+The deeper lesson from the [foundations](/patterns/foundations/): the pattern's value is the *single access point* and the *one-instance guarantee*, not the locking. Go gives you the locking for free, which is exactly why a bare `nil` check is both unnecessary and unsafe.
 
 ## In the standard library
 

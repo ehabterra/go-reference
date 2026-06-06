@@ -55,6 +55,28 @@ quiz:
       - text: "os.Exit(1)"
         correct: false
     explain: "gzip.NewWriter wraps an io.Writer and returns an io.Writer that compresses — same interface, added behavior. bufio.NewReader and io.MultiWriter are the same idea."
+  - q: "Which design principle does Decorator most embody?"
+    options:
+      - text: "Open/Closed — you add behavior by wrapping, never by modifying the base type"
+        correct: true
+      - text: "Single Responsibility, exclusively"
+        correct: false
+      - text: "Dependency Inversion, exclusively"
+        correct: false
+      - text: "The Hollywood Principle"
+        correct: false
+    explain: "Decorator lets the base type stay closed for modification while remaining open for extension: new responsibilities arrive as new wrapper types, so you never reopen DarkRoast to add Mocha."
+  - q: "In `h = Logging(AddHeader(handler))`, which middleware's code runs first on a request?"
+    options:
+      - text: "Logging — the outermost wrapper runs first, then delegates inward to AddHeader, then the handler"
+        correct: true
+      - text: "AddHeader, because it's listed first inside"
+        correct: false
+      - text: "The handler, always first"
+        correct: false
+      - text: "They run concurrently"
+        correct: false
+    explain: "Each wrapper runs its 'before' code, calls next.ServeHTTP, then its 'after' code. Execution unwinds outermost-first on the way in and innermost-first on the way out — so wrapping order is the request pipeline, and getting it wrong (auth after logging body, say) is a real bug."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -140,6 +162,48 @@ func main() {
 <Callout type="go" title="🐹 Decorators are everywhere in Go">
 The `io` package is built on decorators: `gzip.NewWriter(f)` wraps an `io.Writer` to add compression, `bufio.NewWriter(gz)` wraps that to add buffering — each keeps the `io.Writer` interface. The same idea drives HTTP middleware: `func(next http.Handler) http.Handler` wraps a handler with logging, auth, or recovery while still being an `http.Handler`.
 </Callout>
+
+## Decorator as HTTP middleware
+
+The most common Decorator you'll write in Go is **middleware**: a `func(http.Handler) http.Handler` that wraps a handler with logging, auth, or recovery while *still being* an `http.Handler`. Stacking them is decorator nesting. This runs in-process (no real network needed):
+
+<Playground client:visible title="middleware.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+// A Decorator: take a Handler, return a Handler with extra behavior.
+func Logging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("->", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r) // delegate to the wrapped handler
+		fmt.Println("<- done")
+	})
+}
+
+func AddHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Demo", "yes")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "hello")
+	})
+	h = AddHeader(h) // inner
+	h = Logging(h)   // outer — runs first
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/hi", nil))
+	fmt.Println("status:", rec.Code, "X-Demo:", rec.Header().Get("X-Demo"))
+}`} />
+
+Each layer keeps the `http.Handler` contract and adds one concern — exactly the `io.Writer` decorator stack (`gzip` → `bufio`), applied to requests.
 
 ## In the standard library
 
