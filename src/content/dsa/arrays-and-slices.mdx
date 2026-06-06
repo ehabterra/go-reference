@@ -44,6 +44,28 @@ quiz:
       - text: "Because slices have unlimited capacity"
         correct: false
     explain: "Within spare capacity append is O(1). When cap is exceeded Go allocates a bigger array (≈2× for small slices) and copies the old elements; doubling spreads that O(n) cost so the average stays O(1)."
+  - q: "How do you hand out a sub-slice that CANNOT clobber the parent's array on a later append?"
+    options:
+      - text: "The three-index form s[low:high:max] — it caps capacity so the next append must allocate a fresh array"
+        correct: true
+      - text: "Just use s[low:high]"
+        correct: false
+      - text: "Mark the slice const"
+        correct: false
+      - text: "There's no way; always copy"
+        correct: false
+    explain: "s[low:high] keeps the parent's spare capacity, so an append can overwrite the parent. The full-slice expression s[low:high:max] sets cap to max-low; with cap==len the next append is forced to allocate a new backing array, isolating the parent. (copy() also isolates.)"
+  - q: "What's the cost of deleting an element from the middle of a slice?"
+    options:
+      - text: "O(n) — you must shift the following elements down to fill the gap"
+        correct: true
+      - text: "O(1) always"
+        correct: false
+      - text: "O(log n)"
+        correct: false
+      - text: "It's impossible"
+        correct: false
+    explain: "Removing index i (e.g. s = append(s[:i], s[i+1:]...)) copies every element after i one slot left — O(n). Slices are great for append/index but poor for middle insert/delete; a linked list gives O(1) there (once you hold the node)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -138,5 +160,12 @@ func main() {
 <Callout type="gotcha" title="⚠️ Cut capacity with a full-slice expression">
 To hand out a sub-slice that *cannot* clobber the parent via append, use the three-index form `s[low:high:max]`, which caps capacity at `max-low`. For example `base[1:3:3]` has len 2 **and** cap 2, so the next append is forced to allocate a fresh array instead of writing into `base`. Also: re-slicing keeps the whole backing array alive, so slicing one element out of a huge slice can leak memory — `copy` it out if you need only the small piece.
 </Callout>
+
+## See also
+
+- [Big-O & complexity](/dsa/big-o/) — why append is amortized O(1) and middle-delete is O(n).
+- [linked lists](/dsa/linked-lists/) — O(1) middle insert/delete, at the cost of O(n) access.
+- [hash tables](/dsa/hash-tables/) — O(1) lookup when index order doesn't matter.
+- [slices (fundamentals)](/fundamentals/slices/) — the language-level mechanics in more depth.
 
 Next: when the data isn't contiguous — [linked lists](/dsa/linked-lists/).

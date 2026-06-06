@@ -44,6 +44,28 @@ quiz:
       - text: "It uses recursion to halve the input"
         correct: false
     explain: "Both edges only move right across the string, so each index is entered and left at most once — a total of O(n) edge moves, with O(1) map work per step."
+  - q: "What's the difference between a fixed-size and a variable-size sliding window?"
+    options:
+      - text: "Fixed: a size-k window slides, adding the entering element and subtracting the leaving one. Variable: the right edge expands and the left edge advances only when a constraint breaks"
+        correct: true
+      - text: "Fixed windows are O(n²); variable are O(n)"
+        correct: false
+      - text: "Variable windows can't use a hash map"
+        correct: false
+      - text: "They're the same thing"
+        correct: false
+    explain: "A fixed window keeps width k constant — perfect for 'max sum of k consecutive elements,' updating in O(1) per slide. A variable window grows the right edge greedily and shrinks the left only when the window violates a rule (no repeats, sum ≤ target), still O(n) overall."
+  - q: "Besides pair-sum, which is a natural two-pointer problem?"
+    options:
+      - text: "In-place dedup of a sorted slice, merging two sorted slices, or partitioning (e.g. Dutch national flag)"
+        correct: true
+      - text: "Hashing a password"
+        correct: false
+      - text: "Balancing a binary tree"
+        correct: false
+      - text: "Computing a prefix tree"
+        correct: false
+    explain: "Two pointers excel whenever a read index and a write/other index sweep an array: removing duplicates from a sorted slice (slow write pointer), merging two sorted inputs (one pointer each), reversing in place (ends converging), and three-way partitioning. The shared idea is one pass, O(1) extra space."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -160,5 +182,12 @@ Converging two pointers *only* work on sorted input — that's what makes "move 
 <Callout type="gotcha" title="⚠️ The left edge must never move backward">
 The bug that quietly breaks a variable window is letting the left pointer jump back. In the substring example, `prev` might point to a byte that left the window long ago; without the `prev >= left` guard, `left` would lurch backward, recount characters, and inflate the answer. Always clamp the left edge so it only ever moves forward — that's also what guarantees the O(n) bound.
 </Callout>
+
+## See also
+
+- [arrays & slices](/dsa/arrays-and-slices/) — the contiguous data two pointers sweep.
+- [sorting](/dsa/sorting/) — the prerequisite for converging pointers.
+- [hash tables](/dsa/hash-tables/) — the O(n)-space alternative when input isn't sorted.
+- [binary search](/dsa/binary-search/) — the other "exploit sorted order" technique.
 
 Next: when one pass isn't enough — solving a problem in terms of itself with [recursion and backtracking](/dsa/recursion-and-backtracking/).

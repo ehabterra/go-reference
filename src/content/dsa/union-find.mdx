@@ -1,0 +1,197 @@
+---
+title: "Union-Find (Disjoint Set)"
+category: trees-graphs
+kind: topic
+order: 10.5
+difficulty: "Intermediate"
+status: ready
+intent: "Track which elements are connected — the disjoint-set forest, Find with path compression and Union by rank for near-O(1) operations, and its jobs: connected components, cycle detection, and Kruskal's MST."
+related:
+  - graphs
+  - hash-tables
+  - binary-search
+quiz:
+  - q: "What problem does union-find solve?"
+    options:
+      - text: "Maintaining a partition of elements into disjoint sets, answering 'are these two in the same set?' and merging sets — fast"
+        correct: true
+      - text: "Sorting elements"
+        correct: false
+      - text: "Finding the shortest path in a graph"
+        correct: false
+      - text: "Storing key/value pairs"
+        correct: false
+    explain: "Union-find (a disjoint-set structure) keeps elements grouped into non-overlapping sets. Union(a, b) merges two sets; Find(x) returns the representative of x's set, so two elements are connected iff they share a representative. It's the go-to for dynamic connectivity."
+  - q: "What does path compression do during Find?"
+    options:
+      - text: "It re-points each node on the path directly at the root, flattening the tree so future Finds are faster"
+        correct: true
+      - text: "It deletes nodes to save memory"
+        correct: false
+      - text: "It sorts the set"
+        correct: false
+      - text: "It balances a binary search tree"
+        correct: false
+    explain: "Find walks parent pointers up to the root. Path compression rewrites those pointers to point straight at the root on the way back, so the next Find on any of them is O(1)-ish. Combined with union by rank it gives near-constant amortized cost."
+  - q: "Why union by rank (or size) when merging two sets?"
+    options:
+      - text: "Attaching the shorter tree under the taller one keeps trees shallow, so Find stays fast"
+        correct: true
+      - text: "It makes the sets sorted"
+        correct: false
+      - text: "It frees the smaller set"
+        correct: false
+      - text: "It's required for correctness"
+        correct: false
+    explain: "If you always made one fixed tree the child you could build a tall chain (slow Find). Union by rank/size hangs the smaller/shorter tree under the larger, bounding height. With path compression too, m operations cost O(m·α(n)) — α is the inverse Ackermann function, effectively constant."
+  - q: "Roughly what is the amortized cost of a union-find operation with both optimizations?"
+    options:
+      - text: "O(α(n)) — the inverse Ackermann function, which is ≤ 4 for any practical n, i.e. effectively constant"
+        correct: true
+      - text: "O(log n)"
+        correct: false
+      - text: "O(n)"
+        correct: false
+      - text: "O(1) exactly, always"
+        correct: false
+    explain: "Path compression + union by rank give an amortized bound of O(α(n)) per operation. α(n) grows so slowly it's at most 4 for any n you'll ever see, so in practice each operation is effectively O(1) — but it's not literally constant."
+  - q: "Which task is union-find the natural fit for?"
+    options:
+      - text: "Detecting a cycle in an undirected graph, finding connected components, or building Kruskal's minimum spanning tree"
+        correct: true
+      - text: "Shortest path with weights"
+        correct: false
+      - text: "Autocomplete"
+        correct: false
+      - text: "Sorting a stream"
+        correct: false
+    explain: "Whenever you incrementally connect things and ask 'are these joined yet?', union-find shines: undirected cycle detection (an edge whose endpoints already share a root closes a cycle), connected components (count distinct roots), and Kruskal's MST (add an edge only if it joins two different sets)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🤝 Analogy">
+Union-find is friend-group bookkeeping. Everyone starts in their own group of one. When two people become friends, you merge their whole groups; to check whether two people are (transitively) connected, you ask each "who's your group leader?" and compare. You never list the whole group — you just follow the chain to the leader, and you shorten that chain as you go so it gets faster every time.
+</Callout>
+
+## Disjoint sets as a forest
+
+Union-find maintains a partition of `0..n-1` into **disjoint sets**, stored as a forest: every element points at a **parent**, and each set's **root** (a node that is its own parent) is the set's representative. Two elements are in the same set exactly when `Find` walks them to the **same root**.
+
+<Mermaid code={String.raw`graph TD
+  R1["2 (root)"] --> A["0"]
+  R1 --> B["1"]
+  R2["5 (root)"] --> C["3"]
+  R2 --> D["4"]`} />
+
+The two trees above are two sets: `{0,1,2}` with representative 2, and `{3,4,5}` with representative 5. `Connected(0,1)` is true; `Connected(0,3)` is false.
+
+## Find, Union, and the two optimizations
+
+A naive forest can grow into a tall chain, making `Find` O(n). Two cheap tricks fix that:
+
+- **Path compression** — when `Find` walks to the root, re-point every node on the path straight at the root. The tree flattens, so later queries are fast.
+- **Union by rank** — when merging, hang the shorter tree under the taller (track an approximate height, the "rank"). This keeps trees shallow.
+
+Together they make `m` operations cost `O(m·α(n))`, where `α` is the inverse Ackermann function — at most 4 for any realistic `n`, so each op is effectively constant:
+
+<Playground client:visible title="union_find.go" code={String.raw`package main
+
+import "fmt"
+
+// DSU is a disjoint-set (union-find) over 0..n-1.
+type DSU struct {
+	parent []int
+	rank   []int
+	count  int // number of disjoint sets
+}
+
+func NewDSU(n int) *DSU {
+	d := &DSU{parent: make([]int, n), rank: make([]int, n), count: n}
+	for i := range d.parent {
+		d.parent[i] = i // each element starts in its own set
+	}
+	return d
+}
+
+// Find returns x's representative, compressing the path on the way up.
+func (d *DSU) Find(x int) int {
+	for d.parent[x] != x {
+		d.parent[x] = d.parent[d.parent[x]] // path compression (halving)
+		x = d.parent[x]
+	}
+	return x
+}
+
+// Union merges the sets of a and b; returns false if already joined.
+func (d *DSU) Union(a, b int) bool {
+	ra, rb := d.Find(a), d.Find(b)
+	if ra == rb {
+		return false // already in the same set
+	}
+	// union by rank: attach the shorter tree under the taller
+	if d.rank[ra] < d.rank[rb] {
+		ra, rb = rb, ra
+	}
+	d.parent[rb] = ra
+	if d.rank[ra] == d.rank[rb] {
+		d.rank[ra]++
+	}
+	d.count--
+	return true
+}
+
+func (d *DSU) Connected(a, b int) bool { return d.Find(a) == d.Find(b) }
+
+func main() {
+	d := NewDSU(6)
+	d.Union(0, 1)
+	d.Union(1, 2)
+	d.Union(3, 4)
+
+	fmt.Println("0~2 connected:", d.Connected(0, 2)) // true
+	fmt.Println("0~3 connected:", d.Connected(0, 3)) // false
+	fmt.Println("disjoint sets:", d.count)           // 3: {0,1,2} {3,4} {5}
+
+	d.Union(2, 4) // merge the two big groups
+	fmt.Println("0~3 now:", d.Connected(0, 3), " sets:", d.count) // true, 2
+}`} />
+
+## What it's for
+
+Union-find is the right tool whenever you **incrementally connect** things and ask whether two are joined:
+
+- **Connected components** — union every edge, then the number of distinct roots is the component count.
+- **Cycle detection in an undirected graph** — process edges; if an edge's two endpoints already share a root, adding it would close a **cycle**.
+- **Kruskal's minimum spanning tree** — sort edges by weight and add each one only if it joins two *different* sets (union returns true), skipping any that would form a cycle.
+- **Dynamic connectivity** — "are these two nodes connected *right now*?" as edges arrive over time, which a one-shot BFS/DFS can't answer cheaply.
+
+<Mermaid code={String.raw`graph LR
+  E["edges arrive"] --> U{"Union(u,v)
+returns false?"}
+  U -->|"already same set"| C["edge forms a cycle"]
+  U -->|"merged"| K["keep edge (e.g. Kruskal MST)"]`} />
+
+## Reference
+
+| Operation | What it does | Amortized cost |
+|---|---|---|
+| `NewDSU(n)` | n singleton sets | O(n) |
+| `Find(x)` | representative of x's set (compresses) | O(α(n)) |
+| `Union(a, b)` | merge two sets; false if already joined | O(α(n)) |
+| `Connected(a, b)` | same set? | O(α(n)) |
+| `count` | number of disjoint sets | O(1) |
+
+<Callout type="gotcha" title="⚠️ Use both optimizations; it's not for un-joining">
+**Use path compression *and* union by rank/size** — with only one, worst-case Find drifts toward O(log n); with neither it's O(n). Two limits to know: union-find handles *merging* sets, **not splitting** them — there's no efficient "un-union" (deletion needs other structures). And it answers connectivity, **not paths** — it tells you *whether* two nodes connect, never the route between them (that's [BFS/DFS](/dsa/graphs/) or Dijkstra). For weighted shortest paths it's the wrong tool entirely.
+</Callout>
+
+## See also
+
+- [graphs](/dsa/graphs/) — BFS/DFS connectivity and the MST/cycle problems union-find accelerates.
+- [hash tables](/dsa/hash-tables/) — map arbitrary keys to dense 0..n-1 indices for the DSU arrays.
+- [Big-O](/dsa/big-o/) — where the α(n) amortized bound sits.
+- [greedy](/dsa/greedy/) — Kruskal's MST is a greedy algorithm built on union-find.
+
+Next: divide and conquer on sorted data — [binary search](/dsa/binary-search/).

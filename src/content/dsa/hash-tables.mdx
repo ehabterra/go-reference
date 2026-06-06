@@ -44,6 +44,28 @@ quiz:
       - text: "Nothing; the write is ignored"
         correct: false
     explain: "Reading a nil map is fine (you get zero values), but writing panics. Initialize with make(map[K]V) or a map literal before inserting."
+  - q: "What is the load factor, and what does Go do when it gets high?"
+    options:
+      - text: "Entries per bucket; when it rises, Go grows the table and rehashes so chains stay short and lookups stay near O(1)"
+        correct: true
+      - text: "The number of CPU cores; Go ignores it"
+        correct: false
+      - text: "The byte size of a key; it caps map size"
+        correct: false
+      - text: "A compile-time constant you must set"
+        correct: false
+    explain: "Load factor ≈ entries ÷ buckets. As it grows, collision chains lengthen and lookups drift toward O(n). Go's runtime watches it and, past a threshold, allocates a bigger bucket array and incrementally rehashes — keeping average lookups O(1)."
+  - q: "Which of these can be a Go map key?"
+    options:
+      - text: "Any comparable type — strings, numbers, bools, pointers, and structs/arrays of comparable types — but NOT slices, maps, or functions"
+        correct: true
+      - text: "Anything, including slices"
+        correct: false
+      - text: "Only strings and ints"
+        correct: false
+      - text: "Only pointers"
+        correct: false
+    explain: "Map keys must support ==. That includes structs and arrays whose fields are all comparable, but excludes slices, maps, and funcs (which aren't comparable) — using one as a key is a compile error. A common workaround is a string or array key derived from the data."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -168,4 +190,13 @@ func main() {
 **Order:** iteration order is deliberately randomized — never rely on it; collect and sort keys when you need determinism. **Nil writes:** reading a nil map is fine, but writing to one panics — `make` it first. **Concurrency:** a plain map is not safe for concurrent writes (Go will throw a fatal "concurrent map writes"); guard it with a [`sync.Mutex`](/concurrency/sync-package/) or use [`sync.Map`](https://pkg.go.dev/sync#Map) for the right workload.
 </Callout>
 
-With keys mastered, the next leap is ordered and hierarchical data — trees, heaps and graphs (coming next in this track).
+## See also
+
+- [arrays & slices](/dsa/arrays-and-slices/) — the buckets a hash table is built on.
+- [Big-O](/dsa/big-o/) — O(1) average and the worst-case caveat.
+- [binary search trees](/dsa/binary-search-trees/) — O(log n) but *ordered*, when you need sorted keys or range queries.
+- [maps (fundamentals)](/fundamentals/maps/) — the language-level map in depth.
+
+With keys mastered, the next leap is ordered and hierarchical data — trees, heaps and graphs.
+
+Next: hierarchical data — [binary trees](/dsa/binary-trees/).

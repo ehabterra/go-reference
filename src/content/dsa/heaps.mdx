@@ -44,6 +44,28 @@ quiz:
       - text: "h[i] == h[j]"
         correct: false
     explain: "container/heap puts the element that Less reports as 'least' at the root. For a min-heap you define Less as <; flip it to > and the very same code becomes a max-heap."
+  - q: "Building a heap from n existing elements — heap.Init vs pushing them one by one?"
+    options:
+      - text: "heap.Init is O(n) — cheaper than n individual O(log n) pushes (O(n log n) total)"
+        correct: true
+      - text: "They cost the same"
+        correct: false
+      - text: "Pushing one by one is O(n); Init is O(n log n)"
+        correct: false
+      - text: "Init is O(n²)"
+        correct: false
+    explain: "Bottom-up heapify (heap.Init) sifts down from the lowest internal nodes; the math works out to O(n), not O(n log n). So when you already have all the data, Init the slice once instead of calling heap.Push n times."
+  - q: "To find the k largest values in a large stream cheaply, what do you use?"
+    options:
+      - text: "A min-heap of size k — keep k items, and when a new value beats the root (smallest kept), evict the root and push it. O(n log k)"
+        correct: true
+      - text: "Sort the whole stream — O(n log n)"
+        correct: false
+      - text: "A max-heap of all n elements"
+        correct: false
+      - text: "A hash set"
+        correct: false
+    explain: "A size-k min-heap keeps the k largest seen so far; its root is the smallest of those k, so any newcomer larger than the root replaces it. You never hold more than k elements or sort the whole input — O(n log k), great for top-k over a stream. The same heap shape powers Dijkstra and merging k sorted lists."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -188,5 +210,12 @@ func main() {
 <Callout type="gotcha" title="⚠️ A heap is not a sorted slice">
 The biggest trap is assuming the backing slice is in order. It is **not** — only the root is guaranteed extreme. Iterating the slice does not visit elements in sorted order; to get sorted output you must `heap.Pop` repeatedly. Two more snags: `Push`/`Pop` must use a **pointer receiver** (they resize the slice), and you must call the package functions `heap.Push(h, x)` / `heap.Pop(h)` — calling `h.Push(x)` directly appends *without* sifting and corrupts the heap property.
 </Callout>
+
+## See also
+
+- [binary trees](/dsa/binary-trees/) — the complete-tree shape a heap packs into a slice.
+- [binary search trees](/dsa/binary-search-trees/) — full ordering vs the heap's min/max-only.
+- [graphs](/dsa/graphs/) — Dijkstra is BFS with a priority-queue heap.
+- [sorting](/dsa/sorting/) — heapsort is repeated heap.Pop, O(n log n) in O(1) space.
 
 Next: a different shape for keys, where the path *is* the data — [tries](/dsa/tries/).

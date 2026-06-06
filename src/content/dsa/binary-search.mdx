@@ -44,6 +44,28 @@ quiz:
       - text: "A panic"
         correct: false
     explain: "`sort.Search` finds the smallest index where a predicate becomes true — the insertion point. You then check that index yourself to confirm whether the value actually matched."
+  - q: "What is 'binary search on the answer'?"
+    options:
+      - text: "Halving a numeric parameter range (a speed, capacity, time) guided by a monotonic false→true predicate — not just slice indices"
+        correct: true
+      - text: "Searching two slices at once"
+        correct: false
+      - text: "Sorting before searching"
+        correct: false
+      - text: "Searching from both ends"
+        correct: false
+    explain: "Whenever a yes/no test flips from false to true exactly once as a parameter grows (e.g. 'can we finish in ≤ t time?'), you can binary-search the smallest value that passes — probing the predicate at each midpoint. It's the same halving logic applied to an answer space, not an array."
+  - q: "To find the FIRST element ≥ x (lower bound) among possible duplicates, what do you use?"
+    options:
+      - text: "sort.Search(n, func(i int) bool { return a[i] >= x }) — it returns the leftmost index where the predicate holds"
+        correct: true
+      - text: "Plain binarySearch, which may land on any matching index"
+        correct: false
+      - text: "Linear scan from the end"
+        correct: false
+      - text: "It's impossible with binary search"
+        correct: false
+    explain: "A textbook binary search returns *some* matching index, not necessarily the first. A predicate-based search (a[i] >= x) returns the leftmost position the condition becomes true — the lower bound — which is what you want for counting duplicates or finding ranges. Use > x for the upper bound."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -139,5 +161,12 @@ func main() {
 <Callout type="gotcha" title="⚠️ Sorted, and the right order">
 Binary search silently returns wrong answers on unsorted data — there's no error, just a miss. And the order must match the comparison: `slices.BinarySearch` and `sort.Search` with `>=` assume ascending order. If your slice is sorted descending, or by a custom key, you must use `slices.BinarySearchFunc` / `sort.Search` with a predicate that matches that order. Sorting once is O(n log n); if you search many times, that cost pays for itself.
 </Callout>
+
+## See also
+
+- [sorting](/dsa/sorting/) — the prerequisite; binary search needs ordered data.
+- [Big-O](/dsa/big-o/) — O(log n), the canonical logarithmic algorithm.
+- [two pointers](/dsa/two-pointers/) — the other sorted-data sweep.
+- [binary search trees](/dsa/binary-search-trees/) — the same halving logic as a structure.
 
 Next: how the slice gets sorted in the first place — [sorting](/dsa/sorting/).

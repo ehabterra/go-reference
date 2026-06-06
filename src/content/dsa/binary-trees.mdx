@@ -44,6 +44,28 @@ quiz:
       - text: "A second binary tree"
         correct: false
     explain: "BFS uses a FIFO queue so that nodes are processed in the order they were discovered, which sweeps the tree one level at a time. A stack (LIFO) would instead give you a depth-first walk."
+  - q: "A balanced binary tree of n nodes has height about…?"
+    options:
+      - text: "log₂ n — and a degenerate one-sided tree has height ≈ n − 1 (a linked list)"
+        correct: true
+      - text: "n — always"
+        correct: false
+      - text: "√n"
+        correct: false
+      - text: "2ⁿ"
+        correct: false
+    explain: "Each level of a balanced tree roughly doubles the node count, so n nodes fit in ~log₂ n levels — which is why balanced-tree operations are O(log n). If inserts make the tree chain to one side, height grows to n − 1 and it degrades to linear."
+  - q: "Which traversal is the natural order to free or delete a whole tree?"
+    options:
+      - text: "Postorder — it visits both children before the node, so a parent is freed only after its subtrees"
+        correct: true
+      - text: "Preorder"
+        correct: false
+      - text: "Inorder"
+        correct: false
+      - text: "Level-order"
+        correct: false
+    explain: "Postorder (left, right, node) guarantees children are processed before their parent — exactly what you want when destroying a tree or computing a bottom-up aggregate like height or subtree size. Preorder (node first) suits copying/serializing top-down."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -202,5 +224,12 @@ func main() {
 <Callout type="tip" title="💡 Pick the traversal to fit the job">
 The order is not arbitrary — each one is the right tool for a task. **Postorder** visits children before the node, so it is how you free, delete, or compute a size/height bottom-up. **Preorder** is how you serialize or clone a tree top-down. **Inorder** has no special meaning for a plain binary tree — but on a *binary search tree* it emits values in sorted order, which is the whole next page.
 </Callout>
+
+## See also
+
+- [binary search trees](/dsa/binary-search-trees/) — add an ordering rule and the tree becomes searchable.
+- [heaps](/dsa/heaps/) — a different invariant (parent ≤ children) for fast min/max.
+- [graphs](/dsa/graphs/) — trees are a special case; BFS/DFS generalize there.
+- [stacks & queues](/dsa/stacks-and-queues/) — the queue behind level-order, the stack behind DFS.
 
 Next: add an ordering rule and the tree becomes searchable — [binary search trees](/dsa/binary-search-trees/).

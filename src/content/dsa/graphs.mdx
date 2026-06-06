@@ -44,6 +44,28 @@ quiz:
       - text: "It is only needed for directed graphs"
         correct: false
     explain: "Without marking vertices visited, a cycle would send the traversal round forever, and shared neighbors would be expanded repeatedly. Marking each vertex once bounds the work at V + E."
+  - q: "Which problems does DFS naturally solve that BFS doesn't?"
+    options:
+      - text: "Cycle detection and topological sort (ordering tasks so every dependency comes first)"
+        correct: true
+      - text: "Shortest path in hops"
+        correct: false
+      - text: "Minimum spanning tree"
+        correct: false
+      - text: "Nothing — they solve the same problems"
+        correct: false
+    explain: "DFS's deep-then-backtrack order exposes back-edges (a vertex already on the current path → a cycle) and yields a topological order on a DAG (emit a node after its descendants, then reverse). BFS is the tool for fewest-hops shortest paths; DFS for reachability, cycles, and ordering."
+  - q: "Edges now carry weights (distances/costs). What replaces plain BFS for shortest paths?"
+    options:
+      - text: "Dijkstra's algorithm — BFS with a priority-queue (min-heap) instead of a FIFO, for non-negative weights"
+        correct: true
+      - text: "DFS"
+        correct: false
+      - text: "BFS still works unchanged"
+        correct: false
+      - text: "A hash table"
+        correct: false
+    explain: "BFS assumes every edge costs 1, so with weights the fewest-hops path may not be cheapest. Dijkstra pops the closest-so-far vertex from a min-heap, giving correct shortest paths for non-negative weights. Negative edges need Bellman-Ford."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -214,4 +236,11 @@ BFS gives the shortest path *in number of edges*. The moment edges carry **weigh
 
 BFS and DFS are the foundation under a huge range of problems — connected components, flood fill, maze solving, dependency resolution, bipartite checking, and more — so getting these two traversals into your fingers pays off across the whole track.
 
-Next: divide and conquer on sorted data — [binary search](/dsa/binary-search/).
+## See also
+
+- [stacks & queues](/dsa/stacks-and-queues/) — the queue (BFS) and stack (DFS) that drive traversal.
+- [union-find](/dsa/union-find/) — near-O(1) connectivity without a traversal.
+- [heaps](/dsa/heaps/) — the priority queue that turns BFS into Dijkstra.
+- [hash tables](/dsa/hash-tables/) — the visited set and adjacency map.
+
+Next: connectivity without traversal — [union-find](/dsa/union-find/).

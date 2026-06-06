@@ -44,6 +44,28 @@ quiz:
       - text: "It calls the operating system's sort"
         correct: false
     explain: "Go's standard sort is a pattern-defeating introsort (quicksort that falls back to heapsort to dodge the O(n²) case). It is not stable; reach for the *Stable* variants when ties must preserve input order."
+  - q: "What does it mean for a sort to be stable?"
+    options:
+      - text: "Elements that compare equal keep their original relative order"
+        correct: true
+      - text: "It never crashes"
+        correct: false
+      - text: "It always runs in O(n log n)"
+        correct: false
+      - text: "It sorts in place"
+        correct: false
+    explain: "Stability matters when you sort by one key after another: sort by name, then stably by age, and people of the same age stay in name order. Merge sort is stable; quicksort/introsort generally isn't — use slices.SortStableFunc / sort.SliceStable when you need it."
+  - q: "How can counting sort or radix sort beat the O(n log n) comparison floor?"
+    options:
+      - text: "They don't compare elements — they exploit structure in the keys (small integer range, fixed digits), running in O(n) or O(n·k)"
+        correct: true
+      - text: "They use more CPU cores"
+        correct: false
+      - text: "They're actually O(n log n) too"
+        correct: false
+      - text: "They only work on sorted input"
+        correct: false
+    explain: "The n log n floor applies only to comparison sorts. Counting sort buckets by value (O(n + range)); radix sort processes keys digit by digit (O(n·digits)). When keys are bounded integers or fixed-width, these skip comparisons entirely — at the cost of assumptions about the data and extra space."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -183,5 +205,12 @@ func main() {
 <Callout type="gotcha" title="⚠️ The stdlib sort is not stable">
 `slices.Sort`, `slices.SortFunc`, and `sort.Slice` may reorder elements that compare equal — handy when you sort by Age, then expect ties still grouped by a previous Name order. They won't be. Reach for `slices.SortStableFunc` or `sort.SliceStable` when stability matters (at a small constant-factor cost). Also: `slices.SortFunc`'s callback returns an `int` (negative / zero / positive), while `sort.Slice`'s returns a `bool` (`less`) — mixing them up is a common compile error.
 </Callout>
+
+## See also
+
+- [binary search](/dsa/binary-search/) — what sorting unlocks: O(log n) lookups.
+- [heaps](/dsa/heaps/) — heapsort, the O(1)-space O(n log n) fallback introsort uses.
+- [Big-O](/dsa/big-o/) — the n log n comparison floor and where it comes from.
+- [two pointers](/dsa/two-pointers/) — the merge step is a two-pointer sweep.
 
 Next: a different way to walk a sorted slice — [two pointers](/dsa/two-pointers/).

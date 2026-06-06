@@ -44,6 +44,28 @@ quiz:
       - text: "They always give the same answer"
         correct: false
     explain: "Greedy only works when the coin system has the greedy-choice property. For {1,3,4} making 6, greedy gives 3 coins but DP gives the optimal 2 (3+3)."
+  - q: "Edges arrive over time and you repeatedly ask 'are these two nodes connected yet?' Which structure fits?"
+    options:
+      - text: "Union-find (disjoint set) — near-O(1) merge and connectivity queries"
+        correct: true
+      - text: "A min-heap"
+        correct: false
+      - text: "A trie"
+        correct: false
+      - text: "A sorted slice + binary search"
+        correct: false
+    explain: "Dynamic connectivity is union-find's specialty: Union to join, Find to compare roots, both effectively O(1). A one-shot BFS/DFS can't cheaply answer the query as edges keep arriving."
+  - q: "You need the k largest items from a huge stream without sorting it all. Which structure?"
+    options:
+      - text: "A min-heap of size k — evict the root when a bigger value arrives, O(n log k)"
+        correct: true
+      - text: "A hash table"
+        correct: false
+      - text: "A balanced BST of all n items"
+        correct: false
+      - text: "A queue"
+        correct: false
+    explain: "Keep only k elements in a min-heap; its root is the smallest kept, so any larger newcomer replaces it. You never hold more than k or sort the whole input — O(n log k), the canonical top-k pattern."
 ---
 import Callout from '../../components/Callout.astro';
 
@@ -75,8 +97,9 @@ Complexities are **average case** unless noted. **Big-O** drops constants and lo
 | [BST (balanced)](/dsa/binary-search-trees/) | — | O(log n) | O(log n) | O(log n) | ordered iteration, range queries |
 | [Heap](/dsa/heaps/) | O(1) peek | — | O(log n) | O(log n) | always pop the min/max next |
 | [Trie](/dsa/tries/) | — | O(L) | O(L) | O(L) | prefix search, autocomplete |
+| [Union-find](/dsa/union-find/) | — | O(α(n)) | O(α(n)) | — | dynamic connectivity, merge groups |
 
-\* amortized for `append`; † given a pointer to the node.
+\* amortized for `append`; † given a pointer to the node; α = inverse Ackermann (≈ constant).
 
 ## Algorithm patterns
 
@@ -117,6 +140,7 @@ Complexities are **average case** unless noted. **Big-O** drops constants and lo
 - **…all combinations or permutations** → [backtracking](/dsa/recursion-and-backtracking/)
 - **…optimize over overlapping subproblems** → [dynamic programming](/dsa/dynamic-programming/)
 - **…a provably-optimal local choice** → [greedy](/dsa/greedy/)
+- **…track connectivity / merge groups as edges arrive** → [union-find](/dsa/union-find/)
 </Callout>
 
 <Callout type="go" title="🐹 Interview reflex: brute force first, then trade space for time">
