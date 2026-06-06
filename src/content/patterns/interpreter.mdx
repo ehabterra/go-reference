@@ -52,6 +52,28 @@ quiz:
       - text: "When you control the language"
         correct: false
     explain: "Hand-built node-per-rule interpreters scale badly. For real languages, use proper parsing tooling; Interpreter suits only small, stable grammars."
+  - q: "How do you add variables (like x, y) to an Interpreter?"
+    options:
+      - text: "Pass an environment/context to Eval — Eval(env) — and add a Var node that looks its name up in env"
+        correct: true
+      - text: "Use a global variable for each name"
+        correct: false
+      - text: "You can't — interpreters only handle literals"
+        correct: false
+      - text: "Store values in the Num node"
+        correct: false
+    explain: "Thread a context map through evaluation: Eval(env Env). Terminals like Num ignore it; a new Var{name} node returns env[name]. The same channel carries function bindings, scopes, and built-ins as the language grows."
+  - q: "You need both Eval and Print (and later Optimize) over the same expression tree. What composes well with Interpreter?"
+    options:
+      - text: "Visitor — keep the node types stable and add each operation as a visitor instead of another method per node"
+        correct: true
+      - text: "Singleton"
+        correct: false
+      - text: "Flyweight"
+        correct: false
+      - text: "Adapter"
+        correct: false
+    explain: "Once you want several passes over the tree, putting Eval/Print/Optimize all on every node bloats them. A [Visitor](/patterns/visitor/) moves each operation into its own object — the same reason go/ast pairs its node tree with ast.Visitor."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -128,6 +150,45 @@ func main() {
 <Callout type="go" title="🐹 It's Composite with an Eval, plus a parser you bring">
 Interpreter is really [Composite](/patterns/composite/) — terminals and non-terminals sharing one `Eval` interface — walked recursively. The piece it leaves out is turning `"3 + 4 * 2"` into the tree; that's a lexer/parser. Go's standard library is full of interpreters: `text/template` and `html/template` interpret a template language, `regexp` compiles and runs patterns, and `go/parser` + `go/types` interpret Go itself. Use the pattern for *small, stable* grammars — and a real parser for anything bigger.
 </Callout>
+
+## Adding variables: an environment
+
+Real little languages have *variables*, not just literals. Thread an **environment** through `Eval` — a context map of name → value — and add a `Var` node that looks itself up. Terminals ignore the env; everything else passes it down. Edit and **Run**:
+
+<Playground client:visible title="env.go" code={String.raw`package main
+
+import "fmt"
+
+// Env carries variable bindings through evaluation.
+type Env map[string]int
+
+type Expr interface{ Eval(env Env) int }
+
+type Num struct{ v int }
+
+func (n Num) Eval(Env) int { return n.v }
+
+// Var looks its name up in the environment.
+type Var struct{ name string }
+
+func (x Var) Eval(env Env) int { return env[x.name] }
+
+type Add struct{ l, r Expr }
+
+func (a Add) Eval(env Env) int { return a.l.Eval(env) + a.r.Eval(env) }
+
+type Mul struct{ l, r Expr }
+
+func (m Mul) Eval(env Env) int { return m.l.Eval(env) * m.r.Eval(env) }
+
+func main() {
+	// x*2 + y
+	expr := Add{Mul{Var{"x"}, Num{2}}, Var{"y"}}
+	env := Env{"x": 5, "y": 3}
+	fmt.Println(expr.Eval(env)) // 13
+}`} />
+
+The same context channel later carries scopes, function bindings, and built-ins. When you also need *multiple passes* (print, optimize) over the tree, reach for a [Visitor](/patterns/visitor/) instead of piling more methods onto each node.
 
 ## In the standard library
 

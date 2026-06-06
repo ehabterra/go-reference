@@ -52,6 +52,28 @@ quiz:
       - text: "Nowhere; states never change"
         correct: false
     explain: "A concrete state handles an event and assigns the context's `state` field to the next state, keeping each transition local to where it makes sense."
+  - q: "What is the idiomatic 'function-based' state machine in Go (Rob Pike's lexer style)?"
+    options:
+      - text: "A state is a function that does work and returns the next state: type stateFn func(*M) stateFn"
+        correct: true
+      - text: "A goroutine per state"
+        correct: false
+      - text: "A global map of booleans"
+        correct: false
+      - text: "A single giant switch with no functions"
+        correct: false
+    explain: "Instead of a type per state, each state is a function returning the next state function; the driver loops `state = state(m)` until it returns nil. text/template and go/scanner use this exact shape — it's the most Go-native State machine."
+  - q: "When does a struct-per-state (or stateFn) beat a plain switch on a state field?"
+    options:
+      - text: "When states multiply, each carries its own behavior, and the transition logic would otherwise be scattered across many methods' switches"
+        correct: true
+      - text: "Always — switches are never acceptable"
+        correct: false
+      - text: "Only for exactly two states"
+        correct: false
+      - text: "Never — a switch is always better"
+        correct: false
+    explain: "For two states and one transition, a bool + if wins. The pattern pays off when behavior-per-state grows and the same switch(state) would otherwise be duplicated across every method — then localizing each state's behavior and transition into its own type/function removes the scatter."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -140,9 +162,71 @@ func main() {
 Structurally they're twins: a context delegating to an interface. The difference is *agency*. A **Strategy** is handed to the object from outside and just runs. A **State** drives the machine — it decides when to flip the context to the next state. In Go each state is usually a tiny (often empty) struct, so the whole machine is just a handful of methods and a `state` field, replacing a pile of conditionals.
 </Callout>
 
+## The function-based state machine
+
+Go's standard library rarely uses a struct-per-state. Its lexers (`text/template`, `go/scanner`) use Rob Pike's **`stateFn`** style instead: a state is a *function* that does some work and returns the **next state function**. The driver is a one-line loop, and there's no interface or context struct at all:
+
+<Playground client:visible title="statefn.go" code={String.raw`package main
+
+import "fmt"
+
+// A state is a function that returns the next state (or nil to stop).
+type stateFn func(*machine) stateFn
+
+type machine struct {
+	events []string
+	i      int
+	log    []string
+}
+
+func (m *machine) next() (string, bool) {
+	if m.i >= len(m.events) {
+		return "", false
+	}
+	e := m.events[m.i]
+	m.i++
+	return e, true
+}
+
+func locked(m *machine) stateFn {
+	e, ok := m.next()
+	if !ok {
+		return nil
+	}
+	if e == "coin" {
+		m.log = append(m.log, "unlock")
+		return unlocked
+	}
+	m.log = append(m.log, "blocked")
+	return locked
+}
+
+func unlocked(m *machine) stateFn {
+	e, ok := m.next()
+	if !ok {
+		return nil
+	}
+	if e == "push" {
+		m.log = append(m.log, "go+lock")
+		return locked
+	}
+	m.log = append(m.log, "coin returned")
+	return unlocked
+}
+
+func main() {
+	m := &machine{events: []string{"push", "coin", "push", "push"}}
+	for state := stateFn(locked); state != nil; {
+		state = state(m) // each state names its successor
+	}
+	fmt.Println(m.log)
+}`} />
+
+Same state machine as the turnstile above, no types — just functions returning functions. Reach for the struct form when states carry data; reach for `stateFn` for lexers/parsers and tight event loops.
+
 ## In practice
 
-State machines are everywhere: TCP connection states, HTTP/2 streams, order/payment lifecycles, parser/lexer states (`text/template`'s lexer is a classic function-based state machine), and game logic.
+State machines are everywhere: TCP connection states, HTTP/2 streams, order/payment lifecycles, parser/lexer states, and game logic.
 
 ## Pitfalls
 

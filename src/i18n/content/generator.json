@@ -8,6 +8,9 @@
   "ينتج <code>count</code> أعدادًا صحيحة إلى الأبد؛ ويأخذ المستهلك ما يحتاجه فقط ويلغي البقية عبر <code>done</code>. حرّر و<strong>شغّل</strong>:",
   " <span>🐹 مصدر كل pipeline</span> ",
   "الـ generator هو ببساطة المرحلة الأولى من <a href=\"/patterns/pipeline/\">Pipeline</a>: ينتج، والمراحل اللاحقة تحوّل. وتنتقل قاعدتان: <strong>المُنتِج يغلق الـ channel</strong>، ويجب على generator لانهائي أن <strong>يستخدم select على إشارة إلغاء</strong> (channel باسم <code>done</code> أو <code>ctx.Done()</code>) حتى لا يحظر إلى الأبد بمجرد أن ينصرف المستهلك. وللتسلسلات المتزامنة (synchronous) بلا تزامن، يكون range-over-func في Go 1.23 (<code>iter.Seq</code>) الأداة الأبسط — انظر <a href=\"/patterns/iterator/\">Iterator</a>.",
+  "مولّد channel مقابل range-over-func",
+  "أعطت Go 1.23 المولّدات شقيقًا متزامنًا. اختر بحسب ما إذا كان الإنتاج <em>متزامنًا</em>:",
+  "إن لم يكن هناك تزامن، فضّل <code>iter.Seq</code> — فهو لا يمكن أن يسرّب goroutine. والجأ إلى شكل الـ channel حين يعمل المنتِج فعلًا بمحاذاة المستهلك (قارئ شبكة، مرحلة pipeline). راجع <a href=\"/patterns/iterator/\">Iterator</a> لشكل range-over-func.",
   "في المكتبة القياسية",
   "<strong><code>time.Tick</code> / <code>time.NewTicker</code></strong> يولّدان تدفقًا من الطوابع الزمنية.",
   "<strong><code>context.Context.Done()</code></strong> هو generator أحادي اللقطة لإشارة إلغاء.",
@@ -42,5 +45,17 @@
   " <span>استدعِ runtime.GC()</span> ",
   " <span>اضبط الـ channel على nil</span> ",
   " <span>لا تستطيع</span> ",
-  " <span>يجب على generator لانهائي أن يراقب إشارة إلغاء (channel باسم done أو ctx.Done())؛ وإلا حظر إلى الأبد عند إرسالٍ بمجرد توقف المستهلك عن القراءة.</span> "
+  " <span>يجب على generator لانهائي أن يراقب إشارة إلغاء (channel باسم done أو ctx.Done())؛ وإلا حظر إلى الأبد عند إرسالٍ بمجرد توقف المستهلك عن القراءة.</span> ",
+  " 4.\n<span>متى تستعمل مولّد channel مقابل range-over-func (iter.Seq) في Go 1.23؟</span> ",
+  " <span>مولّد channel حين يكون المنتِج متزامنًا/حاجبًا (إدخال/إخراج، goroutine خاصّته)؛ وiter.Seq للتسلسلات الكسولة المتزامنة داخل السطر بلا goroutine</span> ",
+  " <span>استعمل channels دائمًا — iter.Seq أبطأ</span> ",
+  " <span>استعمل iter.Seq دائمًا — channels مهجورة</span> ",
+  " <span>إنهما متطابقان</span> ",
+  " <span>مولّد الـ channel يُشغّل المنتِج في goroutine خاصّته — مناسب حين يكون الإنتاج متزامنًا أو يحجب على إدخال/إخراج، لكنه يكلّف goroutine ويحتاج إلغاءً. وiter.Seq (range-over-func) سحبٌ متزامن بلا goroutine ولا channel ولا خطر تسريب — أفضل للتسلسلات داخل العملية الخالصة.</span> ",
+  " 5.\n<span>بقناة غير مخزَّنة، بأي سرعة يُنتج المولّد؟</span> ",
+  " <span>بسرعة سحب المستهلك بالضبط — كل إرسال يحجب حتى يُستقبَل (ضغط خلفيّ طبيعيّ)</span> ",
+  " <span>بأقصى سرعة المعالج، مخزّنًا كل شيء</span> ",
+  " <span>يحسب كل القيم مسبقًا</span> ",
+  " <span>قيمة واحدة في الثانية</span> ",
+  " <span>القناة غير المخزَّنة تقرن المنتِج بالمستهلك: يحجب المولّد على الإرسال حتى يستقبل المستهلك، فيُنتِج بكسل وتبقى الذاكرة محدودة — الضغط الخلفيّ نفسه الذي يجعل <a href=\"/patterns/pipeline/\">الـ pipelines</a> آمنة.</span> "
 ]

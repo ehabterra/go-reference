@@ -52,6 +52,28 @@ quiz:
       - text: "It requires inheritance"
         correct: false
     explain: "Centralizing coordination is the point, but unchecked it concentrates too much knowledge and logic in one place, becoming a maintenance bottleneck."
+  - q: "How does Mediator change the connection count among N interacting objects?"
+    options:
+      - text: "From up to N×N direct links (a mesh) to N links (each colleague ↔ the hub)"
+        correct: true
+      - text: "From N to N×N"
+        correct: false
+      - text: "It doesn't change the count"
+        correct: false
+      - text: "From N to 1"
+        correct: false
+    explain: "A full mesh where everyone references everyone is O(N²) connections — rigid and hard to change. Routing everything through one mediator makes it O(N): each colleague knows only the hub, and interaction rules live in one place."
+  - q: "What's a natural Go-native mediator for decoupled components?"
+    options:
+      - text: "An event hub built on channels — components send/receive events through the hub, never referencing each other"
+        correct: true
+      - text: "A global mutable variable each reads"
+        correct: false
+      - text: "Embedding every colleague in every other"
+        correct: false
+      - text: "Reflection over struct fields"
+        correct: false
+    explain: "A channel-based event hub is mediator-flavored: producers send events to the hub, the hub routes them to interested consumers, and no component holds a reference to another. It's the in-process cousin of [Pub/Sub](/patterns/pub-sub/)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -130,6 +152,18 @@ func main() {
 <Callout type="go" title="🐹 Mediator, Observer, and Facade">
 They're easy to confuse. [**Observer**](/patterns/observer/) is one-way broadcast (subject → observers). **Mediator** is many-to-many coordination among peers, with the routing *logic* centralized. [**Facade**](/patterns/facade/) is a one-way simplified door onto a subsystem. In Go, a mediator is just a struct holding references to its colleagues; the colleagues depend only on the mediator interface, which keeps them swappable and testable.
 </Callout>
+
+## Mediator vs Observer vs Facade
+
+The three coordination patterns blur — separate them by direction and intent:
+
+| Pattern | Direction | Knows whom |
+|---|---|---|
+| **Mediator** | many-to-many among peers | colleagues ↔ hub; coordination logic centralized |
+| [Observer](/patterns/observer/) | one-to-many broadcast | subject → its observers |
+| [Facade](/patterns/facade/) | one-way simplification | client → facade → subsystem (subsystem unaware) |
+
+Mediator is the only one that holds *interaction rules* between peers. If communication is just "notify many of a change," that's Observer; if it's "give me one easy door to a subsystem," that's Facade.
 
 ## Pitfalls
 

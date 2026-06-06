@@ -52,6 +52,28 @@ quiz:
       - text: "It closes the producer's channel"
         correct: false
     explain: "orDone stops the consumer from blocking, but an upstream generator with no done of its own will still leak. Cancellation must reach the producer as well."
+  - q: "How do you make orDone context-aware?"
+    options:
+      - text: "Take a context and select on ctx.Done() instead of (or alongside) a plain done channel"
+        correct: true
+      - text: "You can't — orDone only works with done channels"
+        correct: false
+      - text: "Pass the context as a buffered channel"
+        correct: false
+      - text: "Use ctx.Value to stop"
+        correct: false
+    explain: "orDone(ctx, in) selects on ctx.Done() the same way it would a done channel, so a deadline or cancel from anywhere up the call tree stops the loop — the idiomatic production form."
+  - q: "Or-done is one of a small family of channel utilities from Concurrency in Go. Which are its cousins?"
+    options:
+      - text: "tee (split one stream into two), bridge (flatten a channel of channels), and take/repeat"
+        correct: true
+      - text: "sort, map, filter"
+        correct: false
+      - text: "Mutex, RWMutex, Once"
+        correct: false
+      - text: "Marshal and Unmarshal"
+        correct: false
+    explain: "The book builds a toolkit of composable channel helpers: orDone, tee (duplicate a stream to two consumers), bridge (consume a sequence of channels as one), and take/repeat/repeatFn. Each wraps cancellation-safe plumbing so pipeline stages stay readable."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';

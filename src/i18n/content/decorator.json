@@ -11,6 +11,9 @@
   "تستعمل نسخة شائعة حقلًا صريحًا <code>component Beverage</code>. ويجعلها <strong>تضمين البنى structs</strong> في Go أكثر إحكامًا — ضمّن الواجهة وأعد تعريف <code>Description</code> و<code>Cost</code> فحسب. حرّر و<strong>شغّل</strong>:",
   " <span>🐹 الـ Decorators في كل مكان في Go</span> ",
   "حزمة <code>io</code> مبنية على decorators: <code>gzip.NewWriter(f)</code> يلفّ <code>io.Writer</code> ليضيف الضغط، و<code>bufio.NewWriter(gz)</code> يلفّ ذلك ليضيف التخزين المؤقت — وكلٌّ يحافظ على واجهة <code>io.Writer</code>. والفكرة ذاتها تقود middleware الخاص بـ HTTP: <code>func(next http.Handler) http.Handler</code> يلفّ معالِجًا بالتسجيل أو المصادقة أو الاستعادة بينما يظل <code>http.Handler</code>.",
+  "Decorator بوصفه middleware في HTTP",
+  "أكثر Decorator ستكتبه في Go هو <strong>middleware</strong>: دالة <code>func(http.Handler) http.Handler</code> تغلّف معالِجًا بالتسجيل أو المصادقة أو التعافي بينما <em>تبقى</em> <code>http.Handler</code>. وتكديسها هو تعشيش المُزيِّنات. يعمل هذا داخل العملية (بلا حاجة إلى شبكة حقيقية):",
+  "كل طبقة تُبقي عقد <code>http.Handler</code> وتضيف همًّا واحدًا — تمامًا كومة مُزيِّنات <code>io.Writer</code> (gzip ← bufio)، مُطبَّقة على الطلبات.",
   "في المكتبة القياسية",
   "<strong><code>compress/gzip.NewWriter</code>، <code>bufio.NewReader/Writer</code></strong> — تلفّ <code>io.Reader</code>/<code>io.Writer</code>.",
   "<strong><code>io.MultiWriter</code>، <code>io.LimitReader</code>، <code>io.TeeReader</code></strong> — قارئات/كاتبات تزخرف غيرها.",
@@ -46,5 +49,17 @@
   " <span>fmt.Sprintf</span> ",
   " <span>make([]int, 0)</span> ",
   " <span>os.Exit(1)</span> ",
-  " <span>يلفّ gzip.NewWriter كائن io.Writer ويُرجع io.Writer يضغط — الواجهة ذاتها، وسلوك مُضاف. وbufio.NewReader وio.MultiWriter من الفكرة ذاتها.</span> "
+  " <span>يلفّ gzip.NewWriter كائن io.Writer ويُرجع io.Writer يضغط — الواجهة ذاتها، وسلوك مُضاف. وbufio.NewReader وio.MultiWriter من الفكرة ذاتها.</span> ",
+  " 4.\n<span>أي مبدأ تصميم يجسّده Decorator أكثر؟</span> ",
+  " <span>المفتوح/المغلق — تضيف السلوك بالتغليف، لا بتعديل النوع الأساسيّ أبدًا</span> ",
+  " <span>المسؤولية الواحدة فقط</span> ",
+  " <span>عكس الاعتمادية فقط</span> ",
+  " <span>مبدأ هوليوود</span> ",
+  " <span>Decorator يدع النوع الأساسيّ مغلقًا للتعديل مع بقائه مفتوحًا للامتداد: المسؤوليات الجديدة تأتي كأنواع تغليف جديدة، فلا تعيد فتح DarkRoast لإضافة Mocha.</span> ",
+  " 5.\n<span>في `h = Logging(AddHeader(handler))`، أي كود middleware يعمل أولًا على طلبٍ ما؟</span> ",
+  " <span>Logging — الغلاف الأخارجيّ يعمل أولًا، ثم يفوّض للداخل إلى AddHeader، ثم المعالِج</span> ",
+  " <span>AddHeader، لأنه مذكور أولًا في الداخل</span> ",
+  " <span>المعالِج، دائمًا أولًا</span> ",
+  " <span>يعملان بالتزامن</span> ",
+  " <span>كل غلاف يُجري كوده 'قبل'، ثم يستدعي next.ServeHTTP، ثم كوده 'بعد'. ويتفكّك التنفيذ من الأخارج للداخل دخولًا ومن الداخل للأخارج خروجًا — فترتيب التغليف هو خطّ أنابيب الطلب، والخطأ فيه (مصادقة بعد تسجيل الجسم مثلًا) عطبٌ حقيقيّ.</span> "
 ]

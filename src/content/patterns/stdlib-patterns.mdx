@@ -11,8 +11,65 @@ related:
   - strategy
   - adapter
   - iterator
+quiz:
+  - q: "gzip.NewWriter(w) wraps an io.Writer and returns an io.Writer that compresses. Which pattern?"
+    options:
+      - text: "Decorator — same interface, added behavior"
+        correct: true
+      - text: "Adapter — different interface"
+        correct: false
+      - text: "Factory"
+        correct: false
+      - text: "Singleton"
+        correct: false
+    explain: "It keeps the io.Writer contract and adds compression — a Decorator. bufio.NewWriter and io.MultiWriter are the same idea; chain them to stack behaviors."
+  - q: "sort.Slice(s, less) takes the comparison as a function. Which pattern is that?"
+    options:
+      - text: "Strategy — the algorithm is passed in as a value"
+        correct: true
+      - text: "Template Method"
+        correct: false
+      - text: "Visitor"
+        correct: false
+      - text: "Command"
+        correct: false
+    explain: "The sort is fixed; the comparison strategy is supplied as a func. strings.Map and template.FuncMap inject strategies the same way."
+  - q: "io.Discard is a writer that throws everything away. Which pattern does it embody?"
+    options:
+      - text: "Null Object — a do-nothing implementation that removes nil checks"
+        correct: true
+      - text: "Singleton"
+        correct: false
+      - text: "Proxy"
+        correct: false
+      - text: "Flyweight"
+        correct: false
+    explain: "Instead of checking `if w != nil` everywhere, hand code a Null Object (io.Discard) that satisfies the interface and does nothing — simpler, branch-free call sites."
+  - q: "http.HandlerFunc turns a plain func(w, r) into an http.Handler. Which pattern?"
+    options:
+      - text: "Adapter — it makes a function satisfy a different expected interface"
+        correct: true
+      - text: "Decorator"
+        correct: false
+      - text: "Mediator"
+        correct: false
+      - text: "Builder"
+        correct: false
+    explain: "HandlerFunc gives a function a ServeHTTP method so it fits the http.Handler interface — a function adapter. sort.Reverse adapts a sort.Interface similarly."
+  - q: "Why do these patterns 'feel invisible' in Go?"
+    options:
+      - text: "Implicit interfaces and first-class functions make the pattern the natural shape of ordinary code — no ceremony to name"
+        correct: true
+      - text: "Go forbids design patterns"
+        correct: false
+      - text: "The compiler inserts them automatically"
+        correct: false
+      - text: "They're only in third-party libraries"
+        correct: false
+    explain: "Where Java needs classes and explicit wiring to express a Strategy or Adapter, Go expresses them as a func value or a type that just has the right methods — so the pattern dissolves into idiomatic code."
 ---
 import Callout from '../../components/Callout.astro';
+import Playground from '../../components/islands/Playground.tsx';
 
 The best way to internalize a pattern is to spot it in code you already use. Go's standard library is full of them — often in a form so natural you never noticed there was a "pattern" at all. Here's a map.
 
@@ -67,6 +124,45 @@ var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Reques
 	fmt.Fprintln(w, "hi")
 })
 ```
+
+## Spot five patterns in one program
+
+This short program quietly uses five patterns from the table — all standard library, no naming required. Edit and **Run**:
+
+<Playground client:visible title="stdlib_patterns.go" code={String.raw`package main
+
+import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+)
+
+func main() {
+	// Decorator + Null Object: MultiWriter fans one write to many sinks;
+	// io.Discard is a do-nothing writer (no nil checks needed).
+	var buf bytes.Buffer
+	w := io.MultiWriter(&buf, io.Discard)
+	fmt.Fprint(w, "banana apple cherry date")
+
+	// Adapter: strings.NewReader makes a string satisfy io.Reader.
+	// Iterator: bufio.Scanner walks tokens without exposing the buffer.
+	sc := bufio.NewScanner(strings.NewReader(buf.String()))
+	sc.Split(bufio.ScanWords)
+	var words []string
+	for sc.Scan() {
+		words = append(words, sc.Text())
+	}
+
+	// Strategy: the comparison algorithm is passed in as a function.
+	sort.Slice(words, func(i, j int) bool { return words[i] < words[j] })
+
+	fmt.Println("sorted words:", words)
+}`} />
+
+Five patterns — Decorator, Null Object, Adapter, Iterator, Strategy — and not one of them needed a class, an `implements`, or even a comment to exist.
 
 <Callout type="go" title="🐹 The takeaway">
 Go rarely names these patterns, because its interfaces and functions make them feel like ordinary code. That's the point: in Go, a "pattern" is usually just the natural shape the language nudges you toward.

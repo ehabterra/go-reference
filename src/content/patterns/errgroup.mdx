@@ -52,6 +52,28 @@ quiz:
       - text: "Pass n to Wait()"
         correct: false
     explain: "SetLimit(n) makes g.Go block until a slot is free, turning the group into a bounded worker pool with error handling."
+  - q: "errgroup.Wait returns only the FIRST error. How do you collect them all?"
+    options:
+      - text: "Don't return errors from g.Go — accumulate them yourself (a mutex-guarded slice, then errors.Join), since errgroup keeps only the first"
+        correct: true
+      - text: "Call Wait() multiple times"
+        correct: false
+      - text: "errgroup returns all errors by default"
+        correct: false
+      - text: "Use SetLimit to capture them"
+        correct: false
+    explain: "errgroup stores the first non-nil error and cancels the rest — great for fail-fast. When you need every error (e.g. validating many inputs), have each task append to a mutex-protected slice (or send on a channel) and combine with errors.Join, instead of returning them to the group."
+  - q: "What's the classic errgroup bug to watch for?"
+    options:
+      - text: "A g.Go closure that doesn't actually return its error (so failures are silently swallowed) — and, before Go 1.22, capturing the loop variable"
+        correct: true
+      - text: "errgroup can't be used with context"
+        correct: false
+      - text: "SetLimit deadlocks always"
+        correct: false
+      - text: "Wait() panics on success"
+        correct: false
+    explain: "If the func passed to g.Go ignores or logs an error instead of returning it, the group never sees it. And pre-1.22, `for _, x := range xs { g.Go(func() error { use(x) }) }` captured a shared x — pass it in or rebind. (Go 1.22+ fixed loop-var capture.)"
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';

@@ -8,6 +8,9 @@
   "يحمّل الـ proxy الافتراضي الكائن المكلف <code>RealImage</code> عند أول استخدام فقط، ثم يخزّنه مؤقتًا. يعتمد المستدعون على واجهة <code>Image</code> فحسب ولا يدرون شيئًا. عدّل ثم <strong>Run</strong>:",
   " <span>🐹 Proxy مقابل Decorator — الشكل نفسه، والقصد مختلف</span> ",
   "كلاهما يغلّف كائنًا خلف واجهته، لذا يبدوان في Go متطابقَين تقريبًا. اسأل <em>لماذا</em> تغلّف: إضافة ميزات (ضغط، تخزين مؤقت)؟ هذا <a href=\"/patterns/decorator/\">Decorator</a>. التحكم في الوصول (تحميل كسول، تخزين مؤقت، تفويض، عن بُعد)؟ هذا Proxy. من أشهر الـ proxies في Go طبقات التخزين المؤقت، والمحمّلات الكسولة، و<code>httputil.ReverseProxy</code>.",
+  "نكهات الـ proxy",
+  "كل الـ proxies تتشارك واجهة الموضوع؛ وتختلف بحسب <em>أي وصول تتحكّم به</em>:",
+  "الشكل مطابق لـ <a href=\"/patterns/decorator/\">Decorator</a> و<a href=\"/patterns/adapter/\">Adapter</a> — والمقصد وحده (التحكّم في الوصول، لا إضافة سلوك أو تغيير واجهة) يجعله Proxy.",
   "في المكتبة القياسية",
   "<strong><code>net/http/httputil.ReverseProxy</code></strong> — proxy عن بُعد يمرّر الطلبات إلى خادم خلفي.",
   "تجميع الاتصالات في <strong><code>database/sql</code></strong> يسلّمك proxy فوق اتصال حقيقي.",
@@ -42,5 +45,17 @@
   " <span>strings.Builder</span> ",
   " <span>sync.WaitGroup</span> ",
   " <span>sort.Slice</span> ",
-  " <span>ينوب ReverseProxy محليًّا عن خادم خلفي بعيد: يقدّم واجهة http.Handler ويمرّر الطلبات إلى الخادم الحقيقي — proxy عن بُعد نموذجيّ.</span> "
+  " <span>ينوب ReverseProxy محليًّا عن خادم خلفي بعيد: يقدّم واجهة http.Handler ويمرّر الطلبات إلى الخادم الحقيقي — proxy عن بُعد نموذجيّ.</span> ",
+  " 4.\n<span>تحتاج 'goroutine واحدة فقط ينبغي أن تُطلِق التحميل الكسول المكلف'. ما الذي يحرس proxy افتراضيًّا (virtual)؟</span> ",
+  " <span>sync.Once (أو mutex) حول التهيئة الكسولة</span> ",
+  " <span>time.Sleep قبل أول استدعاء</span> ",
+  " <span>لا شيء — فحص nil آمن أصلًا</span> ",
+  " <span>قناة مخزَّنة بسعة 1 لكل استدعاء</span> ",
+  " <span>فحص `if p.real == nil { p.real = load() }` المجرّد يتسابق: قد ترى goroutineان كلتاهما nil وتُحمّلان. غلّف التهيئة بـ sync.Once.Do (أو mutex) فتعمل مرّة واحدة بالضبط — الإصلاح نفسه في Singleton.</span> ",
+  " 5.\n<span>proxy يصادق المُستدعِي قبل التمرير هو أي نكهة؟</span> ",
+  " <span>proxy الحماية (protection)</span> ",
+  " <span>proxy افتراضيّ (virtual)</span> ",
+  " <span>proxy عن بُعد (remote)</span> ",
+  " <span>ليس proxy</span> ",
+  " <span>الـ proxies نكهات بحسب المقصد: افتراضيّ (إنشاء كسول/مكلف)، عن بُعد (بديل لكائن على الشبكة)، حماية (تحكّم في الوصول/مصادقة)، وتخبئة/مرجع ذكيّ (حفظ النتائج، عدّ المراجع). وكلها تتشارك واجهة الموضوع.</span> "
 ]

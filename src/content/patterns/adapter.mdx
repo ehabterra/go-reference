@@ -54,6 +54,28 @@ quiz:
       - text: "errors.New"
         correct: false
     explain: "http.HandlerFunc adapts a plain func(w, r) into the http.Handler interface by giving it a ServeHTTP method that just calls the function."
+  - q: "GoF describes 'object' and 'class' adapters. Which does Go use?"
+    options:
+      - text: "Object adapter — the adapter holds the adaptee as a field and delegates; Go has no class inheritance for a class adapter"
+        correct: true
+      - text: "Class adapter, via embedding"
+        correct: false
+      - text: "Neither works in Go"
+        correct: false
+      - text: "Both require generics"
+        correct: false
+    explain: "A class adapter multiply-inherits from target and adaptee — impossible in Go. The object adapter composes (holds the adaptee and forwards calls), which is the idiomatic Go form. Embedding can shortcut the forwarding when names already line up."
+  - q: "Adapter vs Facade — what's the distinction?"
+    options:
+      - text: "Adapter converts one interface to a different expected one (compatibility); Facade simplifies a whole subsystem behind one easy interface (convenience)"
+        correct: true
+      - text: "They're the same"
+        correct: false
+      - text: "Facade changes interfaces; Adapter hides classes"
+        correct: false
+      - text: "Adapter is creational"
+        correct: false
+    explain: "Adapter is about making a specific incompatible type fit an interface the client already expects. Facade is about giving a simpler front door to many types/calls. Adapter targets one interface; Facade wraps many."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -128,6 +150,18 @@ func main() {
 <Callout type="go" title="🐹 Adapter vs Decorator">
 They look alike — both wrap an object — but they answer different questions. **Decorator** keeps the *same* interface and *adds* behavior. **Adapter** *changes* the interface so an object fits where it otherwise couldn't. If you're translating names/shapes, it's an adapter; if you're enriching the same contract, it's a decorator.
 </Callout>
+
+## Three wrappers, three intents
+
+Adapter, [Decorator](/patterns/decorator/), and [Proxy](/patterns/proxy/) all wrap another object — the difference is *why*:
+
+| | Adapter | Decorator | Proxy |
+|---|---|---|---|
+| Interface | **different** from the wrapped type | **same** as wrapped | **same** as wrapped |
+| Purpose | change the interface | add behavior | control access |
+| Adds behavior? | no (just translates) | yes | usually no |
+
+If you're translating names/shapes so a type *fits*, it's an Adapter. If you're enriching the *same* contract, it's a Decorator. If you're gatekeeping (lazy-load, auth, remote), it's a Proxy.
 
 ## In the standard library
 

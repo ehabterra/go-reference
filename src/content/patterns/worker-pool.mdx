@@ -52,6 +52,28 @@ quiz:
       - text: "From inside a worker"
         correct: false
     explain: "Multiple workers send to results, so it must be closed exactly once, after all of them are done — a `wg.Wait()`-then-`close` goroutine does that."
+  - q: "Worker pool vs semaphore — what's the difference in approach?"
+    options:
+      - text: "A pool keeps N long-lived workers pulling from a queue; a semaphore spawns a goroutine per job but blocks until a token (one of N) is free"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "A semaphore can't bound concurrency"
+        correct: false
+      - text: "A pool has no concurrency limit"
+        correct: false
+    explain: "Both cap concurrency at N. A pool reuses a fixed set of workers (great for steady streams, amortizes goroutine setup). A [semaphore](/patterns/semaphore/) is per-job — acquire a token, go, release — simpler when jobs are occasional and you don't want a standing pool."
+  - q: "How should workers stop early when the caller cancels?"
+    options:
+      - text: "Pass a context.Context and select on ctx.Done() alongside the jobs channel"
+        correct: true
+      - text: "Call os.Exit from a worker"
+        correct: false
+      - text: "Close the results channel from a worker"
+        correct: false
+      - text: "Panic and recover"
+        correct: false
+    explain: "Thread a context through the workers; each does `select { case j := <-jobs: ...; case <-ctx.Done(): return }`. On cancellation workers drain and exit instead of finishing the whole queue — see [context cancellation](/patterns/context-cancellation/)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -128,6 +150,18 @@ func main() {
 <Callout type="go" title="🐹 The shape to memorize">
 **Close `jobs`** to tell workers the work is done. **WaitGroup-then-close `results`** so the consumer's range terminates. This same skeleton — bounded workers over a channel — is how you turn the unbounded [Fan-out](/patterns/fan-in-fan-out/) into something safe for production. For a one-liner bound, `errgroup.Group.SetLimit(n)` gives you a pool with built-in error propagation.
 </Callout>
+
+## Bounded concurrency: three tools
+
+Go gives you several ways to cap how many things run at once — pick by job shape and whether failures matter:
+
+| Tool | Shape | Reach for it when |
+|---|---|---|
+| **Worker pool** | N long-lived workers ranging a queue | a steady stream of jobs; reuse amortizes setup |
+| [Semaphore](/patterns/semaphore/) | goroutine per job, gated by N tokens | occasional jobs; no standing pool wanted |
+| [`errgroup` + `SetLimit(n)`](/patterns/errgroup/) | bounded group with error propagation | jobs can fail and you want first-error + cancel |
+
+All three bound concurrency at N; they differ in lifecycle and error handling. The [concurrency track](/concurrency/) covers the goroutine/channel machinery underneath them in depth.
 
 ## In practice
 

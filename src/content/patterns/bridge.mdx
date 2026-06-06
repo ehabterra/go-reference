@@ -52,6 +52,28 @@ quiz:
       - text: "Adapter is creational"
         correct: false
     explain: "Adapter is reactive — make X fit interface Y after the fact. Bridge is proactive design — keep the abstraction and implementation apart so both can evolve."
+  - q: "With M shapes and N renderers, how many types does Bridge need vs inheritance?"
+    options:
+      - text: "M + N (each side grows on its own) instead of M × N (a class per pairing)"
+        correct: true
+      - text: "M × N either way"
+        correct: false
+      - text: "Exactly 2, always"
+        correct: false
+      - text: "M + N + 1 for a factory"
+        correct: false
+    explain: "Inheritance forces a concrete type for every combination — CircleVector, CircleASCII, SquareVector… = M×N. Bridge keeps the two hierarchies separate and connects them with an interface field, so adding a renderer is +1, adding a shape is +1: M+N total."
+  - q: "Bridge vs Strategy — both inject an interface. What's the difference in scope?"
+    options:
+      - text: "Strategy swaps a single algorithm/behavior; Bridge separates a whole abstraction hierarchy from a whole implementation hierarchy"
+        correct: true
+      - text: "They are identical in Go"
+        correct: false
+      - text: "Strategy is structural, Bridge is behavioral"
+        correct: false
+      - text: "Bridge can't change at runtime"
+        correct: false
+    explain: "Mechanically both hold an interface field. Intent differs: Strategy is one pluggable operation (the 'how' of one method); Bridge decouples two evolving dimensions (a refined-abstraction hierarchy on one side, an implementor hierarchy on the other). Strategy is a point; Bridge is two axes."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -130,6 +152,18 @@ func main() {
 <Callout type="go" title="🐹 Bridge is almost invisible in Go">
 Because Go pushes you toward "composition over inheritance," Bridge often appears without anyone naming it — you just hold an interface field. The *skill* is recognizing the two independent dimensions early and refusing to let them multiply. It resembles [Strategy](/patterns/strategy/) (inject behavior) but Strategy swaps an algorithm, while Bridge separates a whole abstraction hierarchy from an implementation hierarchy.
 </Callout>
+
+## Bridge, Strategy, or Abstract Factory?
+
+All three lean on "program to an interface," so they blur — separate them by *what varies*:
+
+| Pattern | Separates | You reach for it when |
+|---|---|---|
+| **Bridge** | two whole hierarchies (abstraction × implementation) | both dimensions evolve independently (shape × renderer) |
+| [Strategy](/patterns/strategy/) | one algorithm from its host | a single behavior should be swappable |
+| [Abstract Factory](/patterns/abstract-factory/) | creation of a product family | you need matched *sets* of related objects |
+
+Bridge is the only one of the three whose job is to stop an **N×M type explosion** — the dead giveaway that you've got two axes, not one. It's the structural embodiment of *favor composition over inheritance*.
 
 ## In the standard library
 

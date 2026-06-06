@@ -52,6 +52,28 @@ quiz:
       - text: "Adapter must use generics"
         correct: false
     explain: "Facade is about reducing complexity across a subsystem; Adapter is about interface compatibility for a single object."
+  - q: "Which design principle does a Facade most directly serve?"
+    options:
+      - text: "Least Knowledge (Law of Demeter) — clients talk to one friend instead of reaching deep into many subsystems"
+        correct: true
+      - text: "Single Responsibility, exclusively"
+        correct: false
+      - text: "The Hollywood Principle"
+        correct: false
+      - text: "Open/Closed, exclusively"
+        correct: false
+    explain: "The Law of Demeter says 'talk only to your immediate friends.' A facade gives clients exactly one friend to talk to, so they don't chain calls into the guts of inventory, payment, and shipping — cutting coupling to the subsystem's internals."
+  - q: "Facade vs Mediator — how do they differ?"
+    options:
+      - text: "Facade is a one-way simplified front over a subsystem; Mediator coordinates two-way interaction between peer objects that would otherwise talk directly"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Mediator is creational"
+        correct: false
+      - text: "Facade requires goroutines"
+        correct: false
+    explain: "A facade points one way: client → facade → subsystem, and the subsystem doesn't know the facade exists. A mediator sits between colleagues that send messages back through it, decoupling a many-to-many mesh into a hub."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -148,6 +170,12 @@ func main() {
 <Callout type="go" title="🐹 The facade is just dependency injection">
 Notice there's nothing exotic here — a struct with interface fields and a high-level method. Because the subsystems are interfaces, your tests inject fakes and assert on the orchestration. "Facade" is mostly a name for good, coarse-grained API design over a subsystem.
 </Callout>
+
+## Design principle: Least Knowledge (Law of Demeter)
+
+The Facade is the clearest expression of the **Principle of Least Knowledge** — *talk only to your immediate friends*. Without it, a caller chains into the guts of every subsystem (`order.Inventory().Warehouse(3).Reserve(...)`), coupling itself to structures it shouldn't know. The facade gives the client **one friend** to call, so the subsystem's shape can change freely behind it.
+
+That's also the line between Facade and its neighbours: a [Mediator](/patterns/mediator/) coordinates peers that talk *back* through it (two-way), while a facade is a one-way simplification whose subsystems don't even know it exists; an [Adapter](/patterns/adapter/) changes *one* type's interface rather than simplifying *many*.
 
 ## In the standard library
 

@@ -52,6 +52,28 @@ quiz:
       - text: "io.EOF"
         correct: false
     explain: "strings.Builder builds a string piece by piece with Write/WriteString, then String() yields the result — Builder by name and by design."
+  - q: "How do you let a functional option report an invalid value?"
+    options:
+      - text: "Make the option return an error (Option = func(*T) error) and have the constructor stop at the first failing one"
+        correct: true
+      - text: "Panic inside the option"
+        correct: false
+      - text: "Options can never validate — check afterwards only"
+        correct: false
+      - text: "Return a bool from the constructor"
+        correct: false
+    explain: "Define Option as func(*T) error; NewX applies each and returns early on the first error. This keeps validation at construction time (e.g. WithPort rejecting a negative port) instead of deferring it to first use."
+  - q: "When is a plain config struct preferable to functional options?"
+    options:
+      - text: "When the config is internal and the field set is stable — a struct literal is simpler and needs no Option machinery"
+        correct: true
+      - text: "Never — options are always better"
+        correct: false
+      - text: "Only when there are more than 20 fields"
+        correct: false
+      - text: "Config structs can't have defaults, so never"
+        correct: false
+    explain: "A Config struct passed to NewX is great for internal code with a stable, mostly-required field set. Functional options earn their keep in libraries with many optional knobs and an evolving API, where adding WithFoo later must not break callers."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -134,6 +156,45 @@ func (b *ServerBuilder) Build() Server              { return b.s } // validate h
 <Callout type="go" title="🐹 Functional options win for libraries">
 Because Go has no default or named parameters, **functional options** are the idiomatic builder — and they're what gRPC, the AWS SDK, and countless libraries use. The killer feature: you can add `WithKeepAlive(...)` later and every existing caller still compiles. Reach for the chained builder when you genuinely need staged construction or a validating `Build()` step.
 </Callout>
+
+## Options that validate
+
+Real builders often need to *reject* bad input at construction time. Make the option return an `error` and stop at the first failure — validation lives with construction, not scattered at first use:
+
+```go
+type Option func(*Server) error
+
+func WithPort(p int) Option {
+	return func(s *Server) error {
+		if p < 1 || p > 65535 {
+			return fmt.Errorf("port out of range: %d", p)
+		}
+		s.port = p
+		return nil
+	}
+}
+
+func NewServer(host string, opts ...Option) (*Server, error) {
+	s := &Server{host: host, port: 8080}
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+```
+
+## Three ways to configure in Go
+
+Builder isn't one shape — pick by how the API will evolve:
+
+| Approach | Looks like | Best when |
+|---|---|---|
+| Struct literal | `Server{Host: "x", Port: 443}` | few fields, internal, stable |
+| Config struct | `New(Config{...})` | a stable bundle of mostly-required fields |
+| Functional options | `New("x", WithTLS())` | library API, many optional knobs, must stay back-compatible |
+| Fluent builder | `B("x").Port(443).Build()` | staged construction or a validating `Build()` step |
 
 ## In the standard library
 

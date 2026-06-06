@@ -53,6 +53,28 @@ quiz:
       - text: "The garbage collector"
         correct: false
     explain: "With unbuffered (or small-buffered) channels, a producer can't outrun its consumer — it blocks on send until the consumer receives, keeping memory bounded automatically."
+  - q: "What does replacing the done channel with context.Context add?"
+    options:
+      - text: "Deadlines/timeouts, request-scoped values, and cancellation that propagates across API boundaries — same select pattern, more power"
+        correct: true
+      - text: "Faster channels"
+        correct: false
+      - text: "Automatic ordering"
+        correct: false
+      - text: "Nothing — it's purely cosmetic"
+        correct: false
+    explain: "A done channel signals 'stop.' A context does that (ctx.Done()) plus timeouts (WithTimeout), deadlines, and value propagation, and it threads naturally through function signatures across packages — which is why production pipelines take a ctx."
+  - q: "After you fan a stage out to several workers, is the original item order preserved downstream?"
+    options:
+      - text: "No — parallel workers finish in nondeterministic order; you must re-sort (e.g. by an index tag) if order matters"
+        correct: true
+      - text: "Yes, always"
+        correct: false
+      - text: "Only with buffered channels"
+        correct: false
+      - text: "Order is preserved if there are fewer than 4 workers"
+        correct: false
+    explain: "Fan-out trades ordering for throughput: results arrive as workers finish, not in input order. If you need the original sequence, carry an index with each item and reassemble, or don't fan that stage out."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -149,6 +171,27 @@ Because every stage selects on `<-done`, closing `done` unwinds even the infinit
 <Callout type="go" title="🐹 The three rules that make pipelines safe">
 **1. The stage that writes a channel closes it** (`defer close(out)`), never the reader. **2. Every send and receive also selects on `<-done`** (or `ctx.Done()`), so cancellation can't deadlock. **3. Let channels carry the back-pressure** — unbuffered channels keep a fast stage from racing ahead of a slow one, so memory stays bounded without any manual throttling.
 </Callout>
+
+## From done channel to context
+
+In production you'll usually swap the `done` channel for a [`context.Context`](/patterns/context-cancellation/) — the select pattern is identical, but you also get timeouts, deadlines, and propagation across API boundaries:
+
+```go
+func square(ctx context.Context, in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		defer close(out)
+		for n := range in {
+			select {
+			case <-ctx.Done(): // timeout, deadline, or cancel — all in one
+				return
+			case out <- n * n:
+			}
+		}
+	}()
+	return out
+}
+```
 
 ## Where it leads
 

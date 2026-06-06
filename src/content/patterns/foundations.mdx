@@ -44,6 +44,28 @@ quiz:
       - text: "Avoid interfaces entirely"
         correct: false
     explain: "Go has no inheritance. It composes behavior with struct embedding and satisfies small, implicit interfaces — accept interfaces, return structs."
+  - q: "Which single principle underlies nearly every design pattern?"
+    options:
+      - text: "Encapsulate what varies — find the changing part and separate it from what stays stable"
+        correct: true
+      - text: "Make everything global"
+        correct: false
+      - text: "Always use inheritance"
+        correct: false
+      - text: "Avoid interfaces"
+        correct: false
+    explain: "Almost every pattern isolates the volatile part of a design behind a stable boundary: Strategy isolates an algorithm, Decorator isolated added behavior, Factory isolates construction. 'Encapsulate what varies' is the seed most patterns grow from."
+  - q: "A teammate wraps everything in patterns 'to be flexible.' What does the book warn?"
+    options:
+      - text: "Patterns add indirection and cost; apply them when a real, recurring problem calls for one — over-using them is itself an anti-pattern"
+        correct: true
+      - text: "You can never use too many patterns"
+        correct: false
+      - text: "Patterns make code faster, so always use them"
+        correct: false
+      - text: "Patterns are required in Go"
+        correct: false
+    explain: "Patterns earn their keep against actual change and complexity. Forcing them speculatively ('pattern fever') adds layers, names, and indirection with no payoff — the simplest thing that works, especially in Go, often beats a formal pattern."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -102,6 +124,24 @@ So in this guide, every pattern page asks two questions: *what's the classic sha
 - **Embedding, not inheritance.** Put a struct inside another and its methods are promoted. You get reuse without a class hierarchy.
 - **Functions are values.** You can pass behavior directly, so many "make an object to hold one method" patterns collapse.
 - **Concurrency is built in.** Goroutines and channels turn Observer, Pipeline and Pub/Sub into language-level idioms.
+
+## The design principles behind every pattern
+
+Patterns are *applications* of a smaller set of principles that run through the whole catalog. Learn these nine and most patterns become obvious — they're just principles assembled for a specific problem:
+
+| Principle | In a sentence |
+|---|---|
+| Encapsulate what varies | Separate the changing part from the stable part |
+| Favor composition over inheritance | HAS-A beats IS-A for flexibility |
+| Program to interfaces, not implementations | Depend on abstractions, not concrete types |
+| Strive for loose coupling | Minimize what interacting objects know of each other |
+| Open/Closed | Open for extension, closed for modification |
+| Dependency Inversion | High- and low-level code both depend on abstractions |
+| Least Knowledge (Demeter) | Talk only to your immediate friends |
+| Hollywood Principle | "Don't call us, we'll call you" — the framework drives |
+| Single Responsibility | One class/type, one reason to change |
+
+Go's design *pushes you toward* several of these by default — composition (embedding), program-to-interfaces (implicit interfaces), loose coupling (small interfaces) — which is exactly why so many patterns shrink in Go.
 
 ## How to read a pattern page
 

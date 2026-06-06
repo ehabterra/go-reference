@@ -51,6 +51,28 @@ quiz:
       - text: "Never — channels can't do semaphores"
         correct: false
     explain: "x/sync/semaphore.Weighted lets a task acquire N units at once and supports Acquire(ctx, n) that respects cancellation — beyond what a plain buffered channel offers."
+  - q: "What guarantees a token is always released, even if the work panics?"
+    options:
+      - text: "Release with defer right after a successful acquire: sem <- struct{}{}; defer func(){ <-sem }()"
+        correct: true
+      - text: "Release at the end of the function only"
+        correct: false
+      - text: "Tokens release themselves"
+        correct: false
+      - text: "Call runtime.GC()"
+        correct: false
+    explain: "If a goroutine acquires a slot and then panics or returns early without releasing, that slot is gone forever — concurrency silently shrinks until it deadlocks. Pair every acquire with a deferred release so it runs on every exit path."
+  - q: "To bound the number of goroutines (not just the work inside them), where do you acquire?"
+    options:
+      - text: "Acquire before `go` — block in the loop until a slot frees, so you don't spawn the next goroutine until one finishes"
+        correct: true
+      - text: "Acquire as the first line inside the goroutine"
+        correct: false
+      - text: "Acquire after the work"
+        correct: false
+      - text: "It doesn't matter"
+        correct: false
+    explain: "If you `go func(){ sem<-tok; ...; <-sem }()` you've already launched every goroutine — you bound work-in-flight but not goroutine count. Acquiring in the loop *before* the `go` blocks the launcher, capping how many goroutines exist at once (useful when each one is itself heavy)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';

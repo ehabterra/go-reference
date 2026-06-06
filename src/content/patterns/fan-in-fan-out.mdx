@@ -53,6 +53,28 @@ quiz:
       - text: "Memory safety"
         correct: false
     explain: "Parallel workers finish at different times, so output order is nondeterministic. If you need order, attach an index and sort, or don't fan out."
+  - q: "You need the results in input order after fanning out. What's the fix?"
+    options:
+      - text: "Carry an index with each item through the workers, then sort (or slot into a pre-sized slice) on the way out"
+        correct: true
+      - text: "Use buffered channels"
+        correct: false
+      - text: "Add more workers"
+        correct: false
+      - text: "It's impossible once you fan out"
+        correct: false
+    explain: "Tag each item with its original index, fan out, then either sort the collected results by index or write each into results[i]. The parallelism stays; ordering is reconstructed at the merge."
+  - q: "Why merge sources with a WaitGroup-of-goroutines rather than a single select over all channels?"
+    options:
+      - text: "A select needs a fixed, known set of cases; the goroutine-per-source merge handles any (even dynamic) number of channels and closes the output when all drain"
+        correct: true
+      - text: "select can't read channels"
+        correct: false
+      - text: "WaitGroups are faster than select"
+        correct: false
+      - text: "select leaks memory"
+        correct: false
+    explain: "select with N cases is fine for a small, fixed N, but doesn't scale to a variable number of sources. The standard fan-in spawns one forwarding goroutine per source and a wg.Wait()-then-close, which works for any N and terminates cleanly."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -148,6 +170,24 @@ func main() {
 <Callout type="go" title="🐹 Two things that make it correct">
 **Many readers, one channel:** several goroutines can receive from the same channel safely — Go hands each value to exactly one of them. **Close-after-all:** the merged channel must be closed only once *every* source goroutine has finished, which is exactly what the `wg.Wait()`-then-`close` goroutine guarantees. Closing too early would panic a still-sending worker.
 </Callout>
+
+## Restoring order
+
+Fan-out trades ordering for throughput. When you need the original sequence back, carry an index and reassemble — the work still runs in parallel:
+
+```go
+type item struct {
+	idx int
+	val int
+}
+
+// workers process item{idx, val}, preserving idx in the result.
+results := make([]int, n)
+for r := range fanIn(workers...) { // r is an item
+	results[r.idx] = r.val // slot each result into its original position
+}
+// results is now in input order, no sort needed
+```
 
 ## Fan-out vs Worker Pool
 
