@@ -106,7 +106,57 @@ func main() {
 	fmt.Print(rec.Body.String())
 }`} />
 
-On a real server you'd `select` on `ctx.Done()` (the client left) and a channel of updates, writing an event whenever data arrives — and set the timeouts carefully so the long-lived response isn't killed (see [graceful shutdown](/web/graceful-shutdown/)).
+## On a real server
+
+The playground above runs the handler in-process; in production it registers on a normal route and **loops** — pushing an event whenever new data arrives on a channel, and returning the moment the client disconnects (so a closed tab frees the goroutine).
+
+Where does that channel come from? You need something that fans one source of updates out to every connected client — a **pub/sub hub** (the broker from the [Pub/Sub pattern](/patterns/pub-sub/)). `broker.Subscribe()` returns a *new channel for this client*, and `broker.Unsubscribe` closes it when they leave:
+
+```go
+// Event is whatever you broadcast. The broker is a pub/sub hub whose
+// Subscribe() hands each client its own channel of events.
+type Event struct {
+	ID   int
+	Name string
+	Data string
+}
+
+func sseHandler(broker *Broker) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher := w.(http.Flusher)
+
+		updates := broker.Subscribe()       // this client's own channel
+		defer broker.Unsubscribe(updates)   // clean up when they disconnect
+
+		for {
+			select {
+			case ev := <-updates: // new data — send it as an event
+				fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Name, ev.Data)
+				flusher.Flush() // push it out immediately
+			case <-r.Context().Done(): // client disconnected — stop
+				return
+			}
+		}
+	}
+}
+
+// wire it up: mux.Handle("GET /events", sseHandler(broker))
+```
+
+`Broker` is just a mutex-guarded set of subscriber channels with `Subscribe`/`Unsubscribe`/`Publish` methods — see the [Pub/Sub pattern](/patterns/pub-sub/) for a full implementation.
+
+The browser consumes it with the built-in `EventSource`, which parses the frames and **reconnects on its own**:
+
+```js
+const es = new EventSource("/events");
+es.addEventListener("tick", (e) => console.log("tick:", e.data));
+es.onerror = () => console.log("reconnecting…"); // the browser retries for you
+```
+
+Set timeouts carefully so the long-lived response isn't cut off, and drain cleanly on shutdown (see [graceful shutdown](/web/graceful-shutdown/)).
 
 ## SSE vs WebSockets vs polling
 
