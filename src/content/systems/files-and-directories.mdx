@@ -1,0 +1,194 @@
+---
+title: "Files & Directories"
+category: files
+kind: topic
+order: 3
+difficulty: "Beginner"
+status: ready
+intent: "Working the filesystem in Go — permissions, reading and walking directories with WalkDir, computing directory sizes, finding duplicates by hash, and symlinks."
+related:
+  - temp-and-atomic-writes
+  - system-calls
+  - files-and-os
+quiz:
+  - q: "What's the difference between os.ReadDir and filepath.WalkDir?"
+    options:
+      - text: "ReadDir lists one directory's entries; WalkDir recurses the whole tree, calling your function for every file and subdirectory"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "WalkDir only lists files, never directories"
+        correct: false
+      - text: "ReadDir is recursive; WalkDir is not"
+        correct: false
+    explain: "os.ReadDir(dir) returns the immediate entries (as []os.DirEntry). filepath.WalkDir(root, fn) walks the entire tree depth-first, invoking fn for each path — it's the modern, DirEntry-based replacement for the slower filepath.Walk."
+  - q: "Why is filepath.WalkDir preferred over the older filepath.Walk?"
+    options:
+      - text: "WalkDir passes a fs.DirEntry (cheap), avoiding an os.Lstat syscall per file that Walk's os.FileInfo required"
+        correct: true
+      - text: "Walk doesn't recurse"
+        correct: false
+      - text: "WalkDir is the only one that exists now"
+        correct: false
+      - text: "Walk can't handle errors"
+        correct: false
+    explain: "Walk gives your callback a fully-populated os.FileInfo, forcing a stat on every entry. WalkDir (Go 1.16+) passes a lazy fs.DirEntry; you call Info() only when you actually need size/mtime, saving a syscall per file on large trees."
+  - q: "What does a file mode like 0o644 mean?"
+    options:
+      - text: "Octal permission bits: owner read+write (6), group read (4), others read (4)"
+        correct: true
+      - text: "A file size in bytes"
+        correct: false
+      - text: "A line count"
+        correct: false
+      - text: "An error code"
+        correct: false
+    explain: "Unix permissions are three octal digits (owner, group, other), each a sum of read(4)+write(2)+execute(1). 0o644 = rw-r--r--; 0o755 = rwxr-xr-x (typical for executables/dirs). The 0o prefix is Go's octal literal."
+  - q: "How do you reliably detect duplicate files?"
+    options:
+      - text: "Hash each file's contents (e.g. SHA-256) and group files with the same hash — same size alone isn't enough"
+        correct: true
+      - text: "Compare file names"
+        correct: false
+      - text: "Compare modification times"
+        correct: false
+      - text: "Compare the first byte only"
+        correct: false
+    explain: "Different files can share a name, size, or mtime. Hashing the bytes (streaming them through sha256 so you don't load huge files into memory) gives a content fingerprint; equal hashes mean equal content. A common optimization is to group by size first, then hash only within size-groups."
+  - q: "What does os.Lstat give you that os.Stat doesn't?"
+    options:
+      - text: "Info about the symlink itself, not its target — Stat follows the link, Lstat doesn't"
+        correct: true
+      - text: "Nothing; they're identical"
+        correct: false
+      - text: "The file's contents"
+        correct: false
+      - text: "Faster results always"
+        correct: false
+    explain: "os.Stat follows symlinks and reports the target. os.Lstat reports the link itself (so info.Mode()&os.ModeSymlink != 0 tells you it's a link). That distinction matters when walking trees so you don't follow links into cycles or outside the root."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗂️ Analogy">
+The filesystem is a giant filing cabinet, and Go hands you a clean set of tools for it: list a drawer (`ReadDir`), walk every drawer and folder top to bottom (`WalkDir`), check a label's access rules (permissions), weigh a whole drawer (directory size), and spot identical documents filed in different places (hashing). The OS does the heavy lifting through [system calls](/systems/system-calls/); the `os` and `io/fs` packages give you a portable handle on the drawers.
+</Callout>
+
+## The portable filesystem API
+
+Go's filesystem story spans a few packages: **`os`** (open, create, read, write, stat, remove), **`io/fs`** (the abstract `fs.FS` and `fs.DirEntry` types), and **`path/filepath`** (OS-aware path joining and tree walking). For everyday reading and writing of whole files see [files & the os package](/stdlib/files-and-os/); this page is about working with *directories* and *metadata*.
+
+Two calls do most of the work:
+
+- **`os.ReadDir(dir)`** — the immediate entries of one directory, as `[]fs.DirEntry`.
+- **`filepath.WalkDir(root, fn)`** — a depth-first walk of the whole tree, calling `fn(path, d, err)` for every entry.
+
+## Walk a tree: size and duplicate detection
+
+This runs on the playground (it builds a small tree in a temp dir first), and shows the two everyday jobs — **total size** and **finding duplicates by content hash**:
+
+<Playground client:visible title="walk.go" code={String.raw`package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+)
+
+func main() {
+	// Build a sample tree in a temp directory (works on the playground FS).
+	root, _ := os.MkdirTemp("", "tree")
+	defer os.RemoveAll(root)
+	os.MkdirAll(filepath.Join(root, "sub"), 0o755)
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644)
+	os.WriteFile(filepath.Join(root, "b.txt"), []byte("world!!"), 0o644)
+	os.WriteFile(filepath.Join(root, "sub", "c.txt"), []byte("hello"), 0o644) // dup of a.txt
+
+	// Walk the tree: sum sizes and group by content hash.
+	var total int64
+	byHash := map[string][]string{}
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, _ := d.Info() // lazy: only stat the files we keep
+		total += info.Size()
+		byHash[hashFile(path)] = append(byHash[hashFile(path)], filepath.Base(path))
+		return nil
+	})
+
+	fmt.Printf("total size: %d bytes\n", total)
+	for h, files := range byHash {
+		if len(files) > 1 {
+			sort.Strings(files)
+			fmt.Printf("duplicates (%s…): %v\n", h[:8], files)
+		}
+	}
+}
+
+func hashFile(path string) string {
+	f, _ := os.Open(path)
+	defer f.Close()
+	h := sha256.New()
+	io.Copy(h, f) // stream, so huge files don't blow up memory
+	return hex.EncodeToString(h.Sum(nil))
+}`} />
+
+`a.txt` and `sub/c.txt` hash identically, so they're reported as duplicates even though the names differ. Note `d.Info()` is called lazily — that's the `WalkDir` win over the older `Walk`.
+
+## Permissions and metadata
+
+Every entry carries a **mode**: type bits plus Unix permission bits.
+
+<Mermaid code={String.raw`graph LR
+  M["0o644"] --> O["owner: rw- (6)"]
+  M --> G["group: r-- (4)"]
+  M --> W["other: r-- (4)"]`} />
+
+```go
+info, _ := os.Stat("config.yaml")
+fmt.Println(info.Size(), info.Mode(), info.ModTime())
+// 128 -rw-r--r-- 2026-06-07 10:00:00
+
+os.Chmod("script.sh", 0o755)     // make executable
+info.Mode().IsDir()              // type check
+info.Mode()&os.ModeSymlink != 0  // is it a symlink?
+```
+
+## Symlinks
+
+A symlink is a file whose contents are a path to another file. The key distinction is **`Stat` follows it, `Lstat` doesn't**:
+
+```go
+os.Symlink("real.txt", "link.txt")      // create link.txt -> real.txt
+
+target, _ := os.Readlink("link.txt")    // "real.txt"
+st, _ := os.Stat("link.txt")            // info about real.txt (followed)
+ls, _ := os.Lstat("link.txt")           // info about the link itself
+fmt.Println(ls.Mode()&os.ModeSymlink != 0) // true
+```
+
+When walking trees, use `Lstat` semantics (which `WalkDir` gives you via `DirEntry`) so you don't follow a symlink into a cycle or outside your root.
+
+<Callout type="go" title="🐹 fs.FS makes filesystem code testable">
+Code written against the **`io/fs`** interfaces (`fs.FS`, `fs.WalkDir`, `fs.ReadDir`) works over *any* filesystem — the real OS (`os.DirFS("/some/root")`), an embedded one (<a href="/internals/compile-and-link/"><code>//go:embed</code></a>), a zip, or an in-memory `fstest.MapFS` in your tests. So instead of hard-coding `os.*` calls, accept an `fs.FS` and your directory-walking logic becomes trivially unit-testable with a fake tree — no temp directories required.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Paths, errors, and the WalkDir callback">
+Three traps. **Use `path/filepath`, not string concatenation** — `filepath.Join` handles separators (`/` vs `\`) and cleans `..`; building paths with `+ "/" +` breaks on Windows. **Handle the `err` argument in the WalkDir callback** — a permission error on one subdirectory shouldn't abort the whole walk unless you want it to (return `nil` to skip, `filepath.SkipDir` to prune). And **don't ignore close errors** when writing — but for reads, always `defer f.Close()` so a long walk doesn't leak descriptors.
+</Callout>
+
+## See also
+
+- [temp files & atomic writes](/systems/temp-and-atomic-writes/) — writing files safely (the other half of this).
+- [files & the os package (stdlib)](/stdlib/files-and-os/) — reading/writing whole files, the io interfaces.
+- [system calls](/systems/system-calls/) — the `open`/`read`/`stat` calls underneath.
+- [compile & link (internals)](/internals/compile-and-link/) — `//go:embed` for bundling files into the binary.
+
+Next: writing files without corrupting them — [temp files & atomic writes](/systems/temp-and-atomic-writes/).

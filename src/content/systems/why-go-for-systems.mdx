@@ -1,0 +1,161 @@
+---
+title: "Why Go for Systems Programming"
+category: syscalls
+kind: guide
+order: 1
+difficulty: "Start here"
+status: ready
+intent: "Why Go excels at systems programming — static binaries, a tiny runtime, cross-compilation, and a toolchain that made it the language of infrastructure."
+related:
+  - system-calls
+  - files-and-directories
+  - signals
+quiz:
+  - q: "What makes deploying a Go program so simple compared to Python or Java?"
+    options:
+      - text: "It compiles to a single static binary with no external runtime or dependencies to install"
+        correct: true
+      - text: "It ships its source code and compiles on the target"
+        correct: false
+      - text: "It requires a JVM on the target"
+        correct: false
+      - text: "It bundles a Python interpreter"
+        correct: false
+    explain: "A Go build (with CGO_ENABLED=0) produces one self-contained executable — copy it to a scratch/distroless container and it runs. No interpreter, no shared libraries, no dependency hell. That's a big reason Go dominates cloud-native tooling."
+  - q: "How do you cross-compile a Linux/arm64 binary from a macOS laptop?"
+    options:
+      - text: "GOOS=linux GOARCH=arm64 go build — set the target with environment variables"
+        correct: true
+      - text: "You can't; you need a Linux machine"
+        correct: false
+      - text: "Install an arm64 emulator first"
+        correct: false
+      - text: "Use cgo with a cross C toolchain (always required)"
+        correct: false
+    explain: "Go cross-compiles out of the box: set GOOS and GOARCH and `go build` emits a binary for that target, no extra toolchain (as long as CGO is off). This is why one CI job can build releases for every platform."
+  - q: "Go has a garbage collector. Why is it still suitable for systems work?"
+    options:
+      - text: "Its GC is low-latency (sub-millisecond pauses), and you can tune or sidestep allocation in hot paths — the productivity/safety win outweighs the cost for most systems software"
+        correct: true
+      - text: "Go's GC never runs"
+        correct: false
+      - text: "Systems programs don't allocate memory"
+        correct: false
+      - text: "The GC is disabled in compiled binaries"
+        correct: false
+    explain: "Go trades C's manual memory management for a concurrent, low-latency GC plus memory safety. For the vast majority of systems software (CLIs, daemons, network services) that's the right trade; where it isn't, you reduce allocations or set GOGC/GOMEMLIMIT — see the internals track."
+  - q: "Which of these widely-used infrastructure tools are written in Go?"
+    options:
+      - text: "Docker, Kubernetes, etcd, Prometheus, Terraform"
+        correct: true
+      - text: "Linux kernel, glibc, systemd"
+        correct: false
+      - text: "Postgres, Redis, nginx"
+        correct: false
+      - text: "Bash, coreutils, OpenSSL"
+        correct: false
+    explain: "Go became the de facto language of cloud-native infrastructure — Docker, Kubernetes, etcd, Prometheus, Terraform, Consul, and more. Static binaries + cheap concurrency + a strong stdlib made it a natural fit."
+  - q: "What does the standard `os` package abstract for you across platforms?"
+    options:
+      - text: "Files, environment, processes, and signals behind a portable API, while syscall/x/sys give raw access when you need it"
+        correct: true
+      - text: "Nothing — you must call syscalls directly"
+        correct: false
+      - text: "Only string formatting"
+        correct: false
+      - text: "Networking only"
+        correct: false
+    explain: "os (with io, os/exec, os/signal) gives a portable layer over OS services. When you need platform-specific calls, drop to the syscall package or golang.org/x/sys — the rest of this track lives at that boundary."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛠️ Analogy">
+Most languages talk to the operating system through a thick interpreter or a heavy runtime — like ordering through a concierge who relays everything. Go is more like having your own key to the building: a small runtime, a single static binary, and direct access to system calls. You still get safety rails (a garbage collector, memory safety), but you're close enough to the metal to write the daemons, CLIs, and agents that *are* the infrastructure.
+</Callout>
+
+## What "systems programming" means here
+
+Systems programming is software that talks to the **operating system** rather than to a user or a browser: command-line tools, daemons and agents, container runtimes, schedulers, log processors, network services. It's about **files, processes, signals, pipes, sockets, and memory** — the primitives the OS exposes.
+
+Go was built at Google explicitly for this layer, and it shows. This track lives at the boundary between your program and the kernel; this page is the *why* before the *how*.
+
+## The four things that make Go a systems language
+
+<Mermaid code={String.raw`graph TD
+  GO["Go program"] --> A["single static binary<br/>(no runtime to install)"]
+  GO --> B["cross-compiles anywhere<br/>(GOOS/GOARCH)"]
+  GO --> C["tiny runtime<br/>+ memory safety"]
+  GO --> D["goroutines<br/>(cheap concurrency)"]
+  A --> SHIP["copy & run on scratch/distroless"]
+  B --> SHIP
+  C --> SHIP
+  D --> SHIP`} />
+
+- **Static binaries.** `CGO_ENABLED=0 go build` yields one self-contained executable. No interpreter, no shared libraries — `scp` it to a `scratch` container and it runs. Deployment is *copy the file*.
+- **Cross-compilation.** Set `GOOS`/`GOARCH` and build for any platform from any platform, no cross toolchain required. One CI job ships Linux, macOS, Windows, amd64 and arm64.
+- **A tiny runtime with safety.** You get a concurrent low-latency garbage collector and memory safety, but the runtime is small and you can talk to the kernel directly through `syscall`/`x/sys`.
+- **Cheap concurrency.** Goroutines make "one goroutine per connection / per file / per signal" affordable, so event-driven system software stays simple.
+
+## See it: who am I, where am I running?
+
+A systems program almost always starts by asking the runtime about its environment. This runs anywhere — including the playground:
+
+<Playground client:visible title="env.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+)
+
+func main() {
+	fmt.Println("go version: ", runtime.Version())
+	fmt.Printf("target:      %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Println("CPUs:        ", runtime.NumCPU())
+	fmt.Println("PID:         ", os.Getpid())
+
+	// The environment is a key/value view of the process's world.
+	if home, ok := os.LookupEnv("HOME"); ok {
+		fmt.Println("HOME:        ", home)
+	}
+	wd, _ := os.Getwd()
+	fmt.Println("working dir: ", wd)
+}`} />
+
+`runtime.GOOS`/`GOARCH` are how portable code branches on platform; `os` is your portable window onto the process — its PID, environment, working directory, and standard streams.
+
+## Cross-compiling and shipping
+
+The release story is the headline. None of this needs a special toolchain:
+
+```bash
+# Build for five targets from one machine, no cgo, fully static.
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o app-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -o app-linux-arm64 .
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o app-macos .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o app.exe .
+
+# A minimal container: the binary is the whole image.
+#   FROM scratch
+#   COPY app-linux-amd64 /app
+#   ENTRYPOINT ["/app"]
+```
+
+<Callout type="go" title="🐹 The portable layer, and the escape hatch">
+Most of what you need is portable: `os`, `io`, `os/exec`, `os/signal`, `time`, `net`. Write against those and your code runs on Linux, macOS, and Windows unchanged. When you genuinely need a platform-specific call (an `ioctl`, a Linux-only flag), drop to <a href="/systems/system-calls/"><code>syscall</code></a> or <code>golang.org/x/sys</code> behind a build-tagged file. The rest of this track lives at exactly that boundary — portable when it can be, raw when it must be.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ cgo quietly breaks 'static and portable'">
+The static-binary superpower depends on **cgo being off**. Import a package that uses cgo (some DB drivers, or `net`/`os/user` with the C resolver) and your "static" binary may dynamically link libc — so it won't run on `scratch`, and it won't cross-compile without a C cross-toolchain. Set `CGO_ENABLED=0` and test on your actual deploy image. Also: file modes, path separators, and signals differ across OSes — don't hard-code `/tmp` or assume `SIGUSR1` exists on Windows.
+</Callout>
+
+## See also
+
+- [system calls](/systems/system-calls/) — how Go actually asks the kernel for services.
+- [files & directories](/systems/files-and-directories/) — the first system resource you'll touch.
+- [compile & link (internals)](/internals/compile-and-link/) — how the static binary is actually produced.
+- [the go toolchain (stdlib)](/stdlib/go-toolchain/) — `go build`, modules, and cross-compilation in depth.
+
+Next: how a Go program actually crosses into the kernel — [system calls](/systems/system-calls/).

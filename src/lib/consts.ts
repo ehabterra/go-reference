@@ -204,4 +204,32 @@ export const INTERNALS_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Systems-programming categories (the journey on /systems/). */
+export const SYSTEMS_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'syscalls',
+    title: 'The OS Interface',
+    blurb:
+      'Where Go meets the kernel — why Go suits systems work, system calls and the syscall/x/sys packages, file descriptors, and the standard streams.',
+  },
+  {
+    key: 'files',
+    title: 'Files & Directories',
+    blurb:
+      'Working the filesystem — permissions, walking directory trees, computing sizes and finding duplicates, symlinks, temp files, and crash-safe atomic writes.',
+  },
+  {
+    key: 'processes',
+    title: 'Processes & Events',
+    blurb:
+      'Programs that react — launching processes with os/exec, handling OS signals for graceful shutdown, and scheduling, tickers, and watching the filesystem for changes.',
+  },
+  {
+    key: 'ipc',
+    title: 'IPC & Sockets',
+    blurb:
+      'Talking between processes — anonymous and named pipes, Unix domain sockets (and HTTP over them), and memory-mapped files for zero-copy sharing.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

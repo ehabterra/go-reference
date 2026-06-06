@@ -1,0 +1,191 @@
+---
+title: "Pipes"
+category: ipc
+kind: topic
+order: 8
+difficulty: "Intermediate"
+status: ready
+intent: "The simplest IPC — anonymous pipes (os.Pipe, io.Pipe), named pipes (FIFOs), piping one process's output into another, and back-pressure."
+related:
+  - unix-sockets
+  - processes-and-exec
+  - pipeline
+quiz:
+  - q: "What is a pipe, in OS terms?"
+    options:
+      - text: "A unidirectional in-kernel byte stream with a read end and a write end — what you write to one end you read from the other"
+        correct: true
+      - text: "A file on disk"
+        correct: false
+      - text: "A network socket"
+        correct: false
+      - text: "A shared memory region"
+        correct: false
+    explain: "A pipe is a kernel buffer with two file descriptors: write to the write-end, read from the read-end. It's one-directional and stream-oriented (no message boundaries). The shell's `a | b` wires a's stdout to b's stdin through exactly this."
+  - q: "What's the difference between os.Pipe and io.Pipe?"
+    options:
+      - text: "os.Pipe is a real kernel pipe (two *os.File with real fds, usable across processes); io.Pipe is an in-memory, in-process synchronous pipe between goroutines"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "io.Pipe uses the kernel; os.Pipe is in-memory"
+        correct: false
+      - text: "os.Pipe is for networking only"
+        correct: false
+    explain: "os.Pipe() returns real OS pipe fds — you can hand the write end to a child process. io.Pipe() is pure Go: an in-process, synchronous io.Reader/io.Writer pair connecting goroutines, with no kernel involvement (great for streaming between APIs without a temp buffer)."
+  - q: "What is a named pipe (FIFO)?"
+    options:
+      - text: "A pipe with a name in the filesystem (created with mkfifo), so unrelated processes can open it by path to communicate"
+        correct: true
+      - text: "A pipe that preserves message order only"
+        correct: false
+      - text: "A faster anonymous pipe"
+        correct: false
+      - text: "A pipe limited to one process"
+        correct: false
+    explain: "An anonymous pipe is shared by passing the fd to a child. A FIFO (mkfifo /tmp/myfifo) has a filesystem path, so any process can open(\"/tmp/myfifo\") — one for writing, one for reading — to talk, even without a parent/child relationship. It behaves like a pipe, not a regular file."
+  - q: "What happens when a pipe's buffer fills up and nobody is reading?"
+    options:
+      - text: "The writer blocks until a reader drains it — natural back-pressure that bounds memory"
+        correct: true
+      - text: "The data is silently dropped"
+        correct: false
+      - text: "The writer gets an error immediately"
+        correct: false
+      - text: "The buffer grows without limit"
+        correct: false
+    explain: "A pipe has a fixed kernel buffer (often 64 KB). When it's full, write() blocks until a reader makes room — so a fast producer can't outrun a slow consumer, keeping memory bounded. (Conversely, reading an empty pipe blocks until data arrives or all write ends close → EOF.)"
+  - q: "What signal can a writer get if all readers of a pipe have closed?"
+    options:
+      - text: "SIGPIPE — writing to a pipe with no readers raises SIGPIPE (or returns EPIPE); it's why `cmd | head` doesn't error noisily"
+        correct: true
+      - text: "SIGKILL"
+        correct: false
+      - text: "SIGCHLD"
+        correct: false
+      - text: "No signal ever"
+        correct: false
+    explain: "If every read end is closed and you write, the kernel sends SIGPIPE (default: terminate) or, if ignored, write returns EPIPE. Go programs usually get the EPIPE error rather than dying, but it's the mechanism behind a pipeline stopping when a downstream like `head` exits early."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🪈 Analogy">
+A pipe is exactly what it sounds like: a tube with water poured in one end coming out the other. You can only pour one way (it's unidirectional), there are no "bottles" — just a continuous stream of bytes — and the tube holds a fixed amount, so if the far end stops draining, the pouring backs up and you have to wait (back-pressure). The shell's `ls | grep go | wc -l` is three programs joined by two such tubes, each one's output flowing into the next one's input.
+</Callout>
+
+## What a pipe is
+
+A **pipe** is the oldest, simplest IPC: a one-directional, in-kernel **byte stream** with a *write end* and a *read end*. Bytes written to one end come out the other, in order, with no message boundaries. There are two flavors:
+
+- **Anonymous pipe** — no name; shared by handing a file descriptor to a child process. This is what the shell's `|` builds.
+- **Named pipe (FIFO)** — has a filesystem path, so *unrelated* processes can connect by opening it.
+
+Go also gives a pure-Go, in-process pipe (`io.Pipe`) for streaming between goroutines.
+
+## In-process streaming: io.Pipe
+
+`io.Pipe()` connects an `io.Reader` and `io.Writer` in memory — perfect for feeding one API's output straight into another's input without a temp buffer. It's synchronous (a write blocks until a read consumes it), so it runs on the playground:
+
+<Playground client:visible title="iopipe.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"io"
+	"strings"
+)
+
+func main() {
+	pr, pw := io.Pipe() // reader end, writer end
+
+	// Producer goroutine writes, then closes the write end (→ EOF for reader).
+	go func() {
+		defer pw.Close()
+		for i := 1; i <= 3; i++ {
+			fmt.Fprintf(pw, "line %d\n", i) // blocks until the reader reads
+		}
+	}()
+
+	// Consumer reads the stream to completion.
+	var sb strings.Builder
+	io.Copy(&sb, pr) // reads until the write end is closed
+	fmt.Print(sb.String())
+}`} />
+
+The classic use: stream a large response body through a transform (compress, hash, re-encode) into an uploader, with **constant memory** — the writer can't outrun the reader because each `Write` waits for a `Read`.
+
+## Real kernel pipes: os.Pipe
+
+`os.Pipe()` returns two real `*os.File`s backed by an actual kernel pipe — so you can hand the write end to a **child process**:
+
+```go
+pr, pw, _ := os.Pipe()        // real fds
+
+cmd := exec.Command("wc", "-l")
+cmd.Stdin = pr                // child reads from the pipe
+go func() {
+	defer pw.Close()
+	fmt.Fprintln(pw, "one")   // we write...
+	fmt.Fprintln(pw, "two")
+}()
+out, _ := cmd.Output()        // ...child counts the lines → "2"
+```
+
+Often you don't even need `os.Pipe` directly: `exec` wires pipes for you when you connect commands.
+
+<Mermaid code={String.raw`graph LR
+  A["producer (write end)"] -->|"kernel pipe buffer"| B["consumer (read end)"]
+  B -. "buffer full → writer blocks (back-pressure)" .-> A`} />
+
+## Connecting two processes
+
+To reproduce `ls | wc -l` in Go, connect one command's `StdoutPipe` to another's `Stdin`:
+
+```go
+ls := exec.Command("ls", "-1")
+wc := exec.Command("wc", "-l")
+
+wc.Stdin, _ = ls.StdoutPipe() // ls's stdout → wc's stdin
+wc.Stdout = os.Stdout
+
+wc.Start()
+ls.Run()      // run the producer
+wc.Wait()     // wait for the consumer
+```
+
+## Named pipes (FIFOs)
+
+When the processes aren't parent/child, give the pipe a **name** in the filesystem:
+
+```go
+// One-time: create the FIFO (or `mkfifo /tmp/events` in the shell).
+syscall.Mkfifo("/tmp/events", 0o644)
+
+// Writer process:
+w, _ := os.OpenFile("/tmp/events", os.O_WRONLY, 0)
+fmt.Fprintln(w, "event: deploy")
+
+// Reader process (any unrelated program):
+r, _ := os.Open("/tmp/events")
+io.Copy(os.Stdout, r)
+```
+
+A FIFO looks like a file (`ls -l` shows a `p`) but behaves like a pipe: `open` blocks until both a reader and writer are present, and it carries a stream, not stored contents.
+
+<Callout type="go" title="🐹 Pipes are the spine of Go's streaming model">
+`io.Pipe` is the in-process cousin of the channel-based [pipeline pattern](/patterns/pipeline/): both connect a producer to a consumer with built-in back-pressure. Reach for `io.Pipe` when you're bridging two **`io`-based** APIs (one wants an `io.Writer`, the next wants an `io.Reader`) without buffering the whole stream in memory — exactly how you'd pipe an archive through gzip into an HTTP upload. For talking to *other programs*, `os/exec`'s pipes; for talking to *unrelated processes*, a FIFO or a [Unix socket](/systems/unix-sockets/).
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Close the write end, mind SIGPIPE and deadlocks">
+Three traps. **The reader only sees EOF when *every* write end is closed** — forget `pw.Close()` and `io.Copy` blocks forever. **Writing to a pipe whose readers all closed** raises SIGPIPE/`EPIPE` — usually surfaced as a write error in Go; handle it (it's normal when a downstream like `head` exits early). And **don't deadlock**: with `os/exec`, if you write to a child's stdin pipe while it's blocked writing a full stdout pipe you're not reading, both hang — read output concurrently (or use `cmd.Output()`, which manages this for you).
+</Callout>
+
+## See also
+
+- [Unix sockets](/systems/unix-sockets/) — bidirectional local IPC when pipes aren't enough.
+- [processes & exec](/systems/processes-and-exec/) — wiring pipes between commands.
+- [the pipeline pattern](/patterns/pipeline/) — the channel-based, in-process analog.
+- [fmt & io (stdlib)](/stdlib/fmt-and-io/) — the `io.Reader`/`io.Writer` interfaces pipes implement.
+
+Next: bidirectional local IPC — [Unix sockets](/systems/unix-sockets/).

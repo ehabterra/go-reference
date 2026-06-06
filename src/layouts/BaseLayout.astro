@@ -19,6 +19,7 @@ const fundamentals = await getCollection('fundamentals');
 const stdlib = await getCollection('stdlib');
 const web = await getCollection('web');
 const internals = await getCollection('internals');
+const systems = await getCollection('systems');
 const searchIndex = [
   ...patterns.map((p) => ({ t: p.data.title, u: `/patterns/${p.id}/`, c: p.data.category, s: 'Design Patterns', i: p.data.intent })),
   ...concurrency.map((p) => ({ t: p.data.title, u: `/concurrency/${p.id}/`, c: p.data.category, s: 'Concurrency', i: p.data.intent })),
@@ -27,6 +28,7 @@ const searchIndex = [
   ...stdlib.map((p) => ({ t: p.data.title, u: `/stdlib/${p.id}/`, c: p.data.category, s: 'Stdlib', i: p.data.intent })),
   ...web.map((p) => ({ t: p.data.title, u: `/web/${p.id}/`, c: p.data.category, s: 'Web', i: p.data.intent })),
   ...internals.map((p) => ({ t: p.data.title, u: `/internals/${p.id}/`, c: p.data.category, s: 'Go Internals', i: p.data.intent })),
+  ...systems.map((p) => ({ t: p.data.title, u: `/systems/${p.id}/`, c: p.data.category, s: 'Systems', i: p.data.intent })),
 ];
 ---
 <!doctype html>

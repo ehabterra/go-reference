@@ -353,6 +353,10 @@ img { max-width: 100%; }
   --dp-representation:  #6366f1;
   --dp-execution:       #0ea5e9;
   --dp-toolchain:       #f59e0b;
+  --dp-syscalls:        #14b8a6;
+  --dp-files:           #3b82f6;
+  --dp-processes:       #f97316;
+  --dp-ipc:             #a855f7;
 }
 .dp-badge[data-cat="building-blocks"] { color: var(--dp-building-blocks); }
 .dp-badge[data-cat="coordination"]    { color: var(--dp-coordination); }
@@ -377,6 +381,10 @@ img { max-width: 100%; }
 .dp-badge[data-cat="representation"]  { color: var(--dp-representation); }
 .dp-badge[data-cat="execution"]       { color: var(--dp-execution); }
 .dp-badge[data-cat="toolchain"]       { color: var(--dp-toolchain); }
+.dp-badge[data-cat="syscalls"]        { color: var(--dp-syscalls); }
+.dp-badge[data-cat="files"]           { color: var(--dp-files); }
+.dp-badge[data-cat="processes"]       { color: var(--dp-processes); }
+.dp-badge[data-cat="ipc"]             { color: var(--dp-ipc); }
 .dp-card[data-cat="building-blocks"]  { --c: var(--dp-building-blocks); }
 .dp-card[data-cat="coordination"]     { --c: var(--dp-coordination); }
 .dp-card[data-cat="runtime"]          { --c: var(--dp-runtime); }
@@ -400,6 +408,10 @@ img { max-width: 100%; }
 .dp-card[data-cat="representation"]   { --c: var(--dp-representation); }
 .dp-card[data-cat="execution"]        { --c: var(--dp-execution); }
 .dp-card[data-cat="toolchain"]        { --c: var(--dp-toolchain); }
+.dp-card[data-cat="syscalls"]         { --c: var(--dp-syscalls); }
+.dp-card[data-cat="files"]            { --c: var(--dp-files); }
+.dp-card[data-cat="processes"]        { --c: var(--dp-processes); }
+.dp-card[data-cat="ipc"]              { --c: var(--dp-ipc); }
 
 /* hub topic cards */
 .dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
@@ -418,6 +430,7 @@ img { max-width: 100%; }
 .dp-topic[data-cat="essentials"]      { --c: var(--dp-essentials); }
 .dp-topic[data-cat="net-basics"]      { --c: var(--dp-net-basics); }
 .dp-topic[data-cat="memory"]          { --c: var(--dp-memory); }
+.dp-topic[data-cat="syscalls"]        { --c: var(--dp-syscalls); }
 .dp-topic:not(.dp-topic--soon):hover { transform: translateY(-3px); border-color: var(--c); box-shadow: var(--dp-shadow-sm); color: #fff; text-decoration: none; }
 .dp-topic__icon { font-size: 2rem; }
 .dp-topic h3 { margin: .2rem 0 0; font-size: 1.4rem; }

@@ -1,0 +1,168 @@
+---
+title: "Memory-Mapped Files"
+category: ipc
+kind: topic
+order: 10
+difficulty: "Advanced"
+status: ready
+intent: "Mapping a file into memory — mmap via syscall/x/sys, accessing a file as a byte slice, zero-copy reads and shared memory, and when it wins (and when it doesn't)."
+related:
+  - unix-sockets
+  - files-and-directories
+  - memory-allocator
+quiz:
+  - q: "What does mmap do?"
+    options:
+      - text: "Maps a file (or anonymous region) directly into the process's address space, so you access its contents as ordinary memory — the kernel pages data in on demand"
+        correct: true
+      - text: "Copies the whole file into a Go slice up front"
+        correct: false
+      - text: "Compresses a file in memory"
+        correct: false
+      - text: "Allocates heap memory only"
+        correct: false
+    explain: "mmap creates a mapping between a region of virtual memory and a file. Reading the memory triggers the kernel to page in the corresponding file blocks lazily; writing (in shared mode) eventually flushes back. You treat a file as a []byte without explicit read/write syscalls per access."
+  - q: "What's the main performance advantage of mmap for large files?"
+    options:
+      - text: "Zero-copy and lazy paging — no read() into a user buffer, and only the pages you touch are loaded, so random access over a huge file avoids reading it all"
+        correct: true
+      - text: "It compresses the file"
+        correct: false
+      - text: "It runs on the GPU"
+        correct: false
+      - text: "It never uses RAM"
+        correct: false
+    explain: "Normal I/O copies file data kernel→user buffer on every read. mmap maps the kernel's page cache straight into your address space (zero-copy) and loads pages only when accessed. For random access over multi-GB files (databases, indexes), that's a big win over read/seek."
+  - q: "How can two processes share memory with mmap?"
+    options:
+      - text: "Both mmap the same file with MAP_SHARED — writes by one become visible to the other through the shared pages"
+        correct: true
+      - text: "mmap can't be shared between processes"
+        correct: false
+      - text: "By copying bytes over a pipe"
+        correct: false
+      - text: "Only via TCP"
+        correct: false
+    explain: "A MAP_SHARED mapping of the same file (or a shared anonymous mapping passed across fork) gives both processes views of the same physical pages — the fastest IPC there is, since there's no copying at all. The trade-off is you must synchronize access yourself (the kernel won't)."
+  - q: "Why does mmap'd data NOT pressure Go's garbage collector?"
+    options:
+      - text: "The mapped region is kernel-managed memory outside the Go heap — the GC doesn't scan or reclaim it"
+        correct: true
+      - text: "Because mmap disables the GC"
+        correct: false
+      - text: "Because it's always small"
+        correct: false
+      - text: "It does pressure the GC heavily"
+        correct: false
+    explain: "Unlike a []byte you allocated, an mmap region lives outside the Go heap (it's backed by the file/page cache), so the GC neither scans nor counts it. That's part of mmap's appeal for huge datasets — but it also means you must Munmap explicitly; the GC won't free it for you."
+  - q: "What's a key risk of accessing a memory-mapped file?"
+    options:
+      - text: "If the file is truncated or an I/O error occurs while you touch a mapped page, the process can get SIGBUS/SIGSEGV — and you must Munmap manually or leak the mapping"
+        correct: true
+      - text: "It always corrupts the file"
+        correct: false
+      - text: "It can't be read"
+        correct: false
+      - text: "Go forbids it entirely"
+        correct: false
+    explain: "Touching a page whose backing file shrank (or hit a disk error) raises SIGBUS — harder to handle than an error return. And because the mapping is outside the heap, forgetting Munmap leaks address space. mmap trades convenience and speed for these lower-level hazards."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗺️ Analogy">
+Normal file I/O is like phoning the archive and asking a clerk to photocopy pages and mail them to you (each `read` copies bytes from the kernel into your buffer). **Memory mapping** is like getting the archive's floor plan overlaid on your own office: the shelves now *appear* in your room, and a book only physically materializes the moment you reach for it (the kernel pages it in on demand). No copying, and you only pull in what you touch — but you're now holding real shelves, so if the archive demolishes one while you're reaching (the file is truncated), you don't get a polite "not found" — you grab at thin air (SIGBUS).
+</Callout>
+
+<Callout type="gotcha" title="🧪 Not runnable here">
+`mmap` needs a real file descriptor and OS memory manager, which the Go Playground sandbox doesn't provide — so every example on this page is **study-only (fenced)**. They're correct for a real Linux/macOS machine.
+</Callout>
+
+## What memory mapping is
+
+`mmap` asks the kernel to map a file (or an anonymous region) directly into your process's **virtual address space**. After that, the file's bytes *are* memory: you read and write them like a `[]byte`, and the kernel pages the actual data in from disk **on demand** and flushes writes back lazily.
+
+<Mermaid code={String.raw`graph LR
+  F["file on disk"] -->|"mmap"| V["region of virtual memory"]
+  V -->|"access page → page fault"| K["kernel pages it in (lazy)"]
+  V -. "[]byte view, no read() per access" .-> APP["your Go code"]`} />
+
+The two payoffs: **zero-copy** (no `read()` into a user buffer) and **laziness** (only the pages you touch are loaded). For random access over a multi-gigabyte file — a database file, a search index, a column store — that beats `read`/`seek`, which would copy and often over-read.
+
+## Mapping a file in Go
+
+There's no standard `os.Mmap`; use `golang.org/x/sys/unix` (or `syscall`). The result is a `[]byte` aliasing the file:
+
+```go
+//go:build unix
+
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+func main() {
+	f, _ := os.Open("big.dat")
+	defer f.Close()
+
+	info, _ := f.Stat()
+	size := int(info.Size())
+
+	// Map the whole file read-only into memory.
+	data, err := unix.Mmap(int(f.Fd()), 0, size,
+		unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		panic(err)
+	}
+	defer unix.Munmap(data) // outside the Go heap — must free it yourself
+
+	// data is a []byte view of the file; no per-access read syscall.
+	fmt.Printf("first 4 bytes: %v\n", data[:4])
+	fmt.Printf("byte at 1<<20: %d\n", data[1<<20]) // pages in just that block
+}
+```
+
+For **writable** mappings, add `PROT_WRITE` and `MAP_SHARED`, mutate the slice, and call `unix.Msync(data, unix.MS_SYNC)` to force changes to disk.
+
+## Shared memory between processes
+
+Two processes that `mmap` the **same file with `MAP_SHARED`** see the *same physical pages* — the fastest IPC possible, because nothing is copied at all:
+
+```go
+// Process A and Process B both:
+data, _ := unix.Mmap(fd, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+// A writes data[i] = x  →  B sees x at data[i]
+```
+
+The catch: the kernel gives you shared bytes but **no synchronization**. You must coordinate access yourself — a mutex in a shared header, atomic operations, or a separate signaling channel — or you'll have data races across processes.
+
+## When mmap wins — and when it doesn't
+
+| Good fit | Poor fit |
+|---|---|
+| Random access over large files | Small files (overhead beats benefit) |
+| Read-mostly shared datasets (indexes) | Sequential streaming (plain `bufio` is simpler/faster) |
+| Zero-copy IPC between local processes | Files that may be truncated under you (SIGBUS risk) |
+| Memory-mapped databases (BoltDB/bbolt) | Code that must stay portable with no cgo/x-sys |
+
+<Callout type="go" title="🐹 You've probably used mmap without writing it">
+Memory mapping is most often something you *benefit from*, not code by hand. **bbolt** (the embedded KV store behind etcd) mmaps its database file for fast reads; many search indexes and caches do the same. Reach for raw `unix.Mmap` only when profiling shows that `read`/`seek` copying is your bottleneck on big, randomly-accessed files — and wrap it behind a small interface so the platform-specific, build-tagged code stays isolated (it's the most "below the os package" thing in this track). For most file work, [the os package](/systems/files-and-directories/) and `bufio` are the right, portable choice.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ SIGBUS, manual Munmap, and portability">
+mmap drops below Go's safety net. **Truncation = SIGBUS**: if the backing file shrinks (or a disk error hits) while you touch a mapped page, you get a signal, not an error return — far harder to recover from than `io` errors. **The mapping is outside the GC heap**, so you *must* `Munmap` (defer it); forgetting leaks address space. It's **platform-specific** (`x/sys/unix` vs `/windows`, build tags required) and the byte slice **aliases live kernel pages** — don't let it outlive the `Munmap`, or you've got a dangling slice. High reward, sharp edges: measure first.
+</Callout>
+
+## See also
+
+- [Unix sockets](/systems/unix-sockets/) — the other fast local-IPC mechanism.
+- [files & directories](/systems/files-and-directories/) — the portable file API to prefer by default.
+- [the memory allocator (internals)](/internals/memory-allocator/) — why mmap'd memory sits outside the Go heap.
+- [system calls](/systems/system-calls/) — `mmap`/`munmap`/`msync` are syscalls behind `x/sys`.
+
+Next: the foundations these primitives run on — [the internals track](/internals/).

@@ -1,0 +1,182 @@
+---
+title: "Unix Sockets"
+category: ipc
+kind: topic
+order: 9
+difficulty: "Intermediate"
+status: ready
+intent: "Fast local IPC — Unix domain sockets vs TCP, building a server over a Unix socket, and serving HTTP over one."
+related:
+  - pipes
+  - tcp-sockets
+  - memory-mapping
+quiz:
+  - q: "What is a Unix domain socket?"
+    options:
+      - text: "A bidirectional IPC endpoint addressed by a filesystem path (or abstract name), for communication between processes on the same host"
+        correct: true
+      - text: "A socket that only works over the network"
+        correct: false
+      - text: "A type of file you read with ReadFile"
+        correct: false
+      - text: "A shared memory segment"
+        correct: false
+    explain: "A Unix domain socket (UDS) is a socket whose address is a path like /tmp/app.sock instead of an IP:port. It gives full-duplex, connection-oriented (or datagram) IPC between processes on the same machine, through the socket API you already know from net."
+  - q: "Why choose a Unix socket over TCP on localhost?"
+    options:
+      - text: "It's faster (no TCP/IP stack, checksums, or loopback overhead) and more secure (filesystem permissions control access; nothing is exposed on the network)"
+        correct: true
+      - text: "It works across different machines"
+        correct: false
+      - text: "It's the only way to do IPC"
+        correct: false
+      - text: "TCP can't use localhost"
+        correct: false
+    explain: "UDS skips the entire TCP/IP machinery, so it's lower-latency and higher-throughput than 127.0.0.1, and it never touches the network — access is gated by the socket file's Unix permissions. The trade-off: same-host only. Docker's daemon, PostgreSQL, and many databases default to a Unix socket locally."
+  - q: "How little has to change to use a Unix socket instead of TCP in Go?"
+    options:
+      - text: "Almost nothing — net.Listen(\"unix\", path) and net.Dial(\"unix\", path); the returned net.Conn has the same Read/Write interface"
+        correct: true
+      - text: "You must rewrite everything with syscalls"
+        correct: false
+      - text: "Unix sockets use a different package entirely"
+        correct: false
+      - text: "You need cgo"
+        correct: false
+    explain: "Go's net package abstracts the network: swap the network string from \"tcp\" to \"unix\" and the address from \":8080\" to \"/tmp/app.sock\". The net.Listener and net.Conn you get back behave identically, so the same handler code works over either transport."
+  - q: "Can you serve HTTP over a Unix socket?"
+    options:
+      - text: "Yes — net/http works over any net.Listener, so http.Serve(unixListener, handler) serves HTTP on a socket file; clients dial it with a custom Transport"
+        correct: true
+      - text: "No, HTTP requires TCP"
+        correct: false
+      - text: "Only HTTP/2 can"
+        correct: false
+      - text: "Only with a reverse proxy"
+        correct: false
+    explain: "http.Server.Serve takes a net.Listener; pass it one from net.Listen(\"unix\", ...) and you have HTTP over UDS — the pattern admin/metrics endpoints and the Docker API use. Clients set http.Transport.DialContext to dial the socket path."
+  - q: "What's a common gotcha when (re)starting a Unix socket server?"
+    options:
+      - text: "A leftover socket file from a previous run makes Listen fail with 'address already in use' — remove the stale path (or use the same path) before listening"
+        correct: true
+      - text: "Unix sockets can't be restarted"
+        correct: false
+      - text: "The port is taken"
+        correct: false
+      - text: "You must reboot"
+        correct: false
+    explain: "The socket file persists if the process didn't clean up. net.Listen(\"unix\", path) then fails because the path exists. Remove it first (os.Remove(path)) on startup, and remove it on shutdown — net.UnixListener.SetUnlinkOnClose(true) (the default for paths it created) helps."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏠 Analogy">
+A TCP connection on `localhost` is like mailing a letter to your own house — it goes out to the post office (the full TCP/IP stack) and comes back, even though the recipient is in the next room. A **Unix domain socket** is an intercom on the wall: a direct line between rooms in the same building, with no postal system involved. It's faster (no stamps, no routing), and only people *inside the building* (processes on the same host, with permission to the socket file) can use it.
+</Callout>
+
+## Same socket API, local address
+
+A **Unix domain socket (UDS)** is a connection endpoint addressed by a **filesystem path** (`/tmp/app.sock`) rather than an `IP:port`. It gives the same full-duplex, stream-oriented connections as TCP — but only between processes on the **same machine**, and it skips the entire network stack.
+
+The beauty in Go: the `net` package treats it as just another network. Change `"tcp"` → `"unix"` and the address, and your code is otherwise identical.
+
+<Mermaid code={String.raw`graph LR
+  subgraph host["one host"]
+    C["client process"] -->|"net.Dial(unix, /tmp/app.sock)"| S["server process"]
+    S -->|"net.Listen(unix, /tmp/app.sock)"| C
+  end`} />
+
+## A bidirectional conn, runnable
+
+Real UDS needs a filesystem socket the sandbox can't create, so here's the **same `net.Conn` request/response model** over an in-memory `net.Pipe` — the exact interface a Unix socket gives you:
+
+<Playground client:visible title="conn.go" code={String.raw`package main
+
+import (
+	"bufio"
+	"fmt"
+	"net"
+)
+
+func main() {
+	// net.Pipe gives two connected, in-memory net.Conn endpoints —
+	// the same Read/Write interface a Unix (or TCP) socket provides.
+	server, client := net.Pipe()
+
+	// Server goroutine: read a request line, write a response.
+	go func() {
+		defer server.Close()
+		req, _ := bufio.NewReader(server).ReadString('\n')
+		fmt.Fprintf(server, "echo: %s", req)
+	}()
+
+	// Client: send a request, read the reply.
+	fmt.Fprintln(client, "ping")
+	resp, _ := bufio.NewReader(client).ReadString('\n')
+	fmt.Print(resp) // echo: ping
+	client.Close()
+}`} />
+
+Over a real Unix socket the only difference is how you *obtain* the conn — `Listen`/`Accept`/`Dial` on a path — not how you use it.
+
+## A real Unix-socket server and client
+
+On an actual machine:
+
+```go
+// Server — listen on a socket file.
+os.Remove("/tmp/app.sock") // clear any stale socket from a crash
+ln, err := net.Listen("unix", "/tmp/app.sock")
+if err != nil { log.Fatal(err) }
+defer ln.Close()
+for {
+	conn, err := ln.Accept()
+	if err != nil { break }
+	go handle(conn) // one goroutine per connection, just like TCP
+}
+
+// Client — dial the path.
+conn, err := net.Dial("unix", "/tmp/app.sock")
+```
+
+Restrict who can connect with the socket file's permissions:
+
+```go
+os.Chmod("/tmp/app.sock", 0o600) // only the owner may connect
+```
+
+## HTTP over a Unix socket
+
+Because `http.Serve` accepts any `net.Listener`, you can speak HTTP over a socket file — the pattern used by the **Docker daemon**, admin/metrics endpoints, and sidecars that shouldn't be on the network:
+
+```go
+// Server:
+ln, _ := net.Listen("unix", "/tmp/api.sock")
+http.Serve(ln, mux) // HTTP, but over the socket file
+
+// Client: teach the Transport to dial the socket; the URL host is ignored.
+client := &http.Client{Transport: &http.Transport{
+	DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", "/tmp/api.sock")
+	},
+}}
+resp, _ := client.Get("http://unix/status")
+```
+
+<Callout type="go" title="🐹 The default choice for same-host services">
+When two processes on one box need to talk, a Unix socket is usually the right answer over `localhost` TCP: faster, and access is controlled by filesystem permissions instead of being reachable by anything that can open a port. It's why PostgreSQL, MySQL, Redis, and Docker all default to (or offer) a socket file locally. And since Go's `net` abstracts the transport, you can offer **both** — listen on a Unix socket for local admin and TCP for remote clients — with the same handlers. See the [TCP sockets page](/web/tcp-sockets/) for the same `net` API over the network.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Stale socket files, permissions, and path limits">
+Three edges. **Clean up the socket file** — if the server crashes without `Close`, the path lingers and the next `Listen` fails with "address already in use"; `os.Remove(path)` on startup (and on shutdown) fixes it. **Permissions are your access control** — a world-writable socket lets any local user connect, so `Chmod` it (and mind the *directory's* permissions too). And **socket paths are short** — the OS caps them (~104 bytes on macOS, ~108 on Linux), so don't bury sockets under deep temp paths; Linux's *abstract* namespace (a leading `@`/NUL) avoids the filesystem entirely if you don't need a real file.
+</Callout>
+
+## See also
+
+- [pipes](/systems/pipes/) — simpler, one-directional local IPC.
+- [TCP sockets (web)](/web/tcp-sockets/) — the same `net` API over the network.
+- [UDP sockets (web)](/web/udp-sockets/) — connectionless datagrams.
+- [memory-mapped files](/systems/memory-mapping/) — another zero-copy local sharing trick.
+
+Next: sharing a file as memory, with no copies — [memory-mapped files](/systems/memory-mapping/).

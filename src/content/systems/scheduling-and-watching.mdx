@@ -1,0 +1,172 @@
+---
+title: "Scheduling & Watching"
+category: processes
+kind: topic
+order: 7
+difficulty: "Intermediate"
+status: ready
+intent: "Programs that wake on a schedule or a change — tickers and timers, cron-style scheduling, watching the filesystem with fsnotify, and log rotation."
+related:
+  - signals
+  - processes-and-exec
+  - context-cancellation
+quiz:
+  - q: "What's the difference between time.Timer and time.Ticker?"
+    options:
+      - text: "A Timer fires once after a duration; a Ticker fires repeatedly at an interval"
+        correct: true
+      - text: "A Ticker fires once; a Timer repeats"
+        correct: false
+      - text: "They are identical"
+        correct: false
+      - text: "Timers are for hours, Tickers for seconds"
+        correct: false
+    explain: "time.NewTimer(d) sends one value on its channel after d. time.NewTicker(d) sends on every tick of d until you Stop it. Use a Timer for a one-shot delay/timeout, a Ticker for periodic work (poll every 30s)."
+  - q: "Why must you call Stop() on a Ticker?"
+    options:
+      - text: "A Ticker keeps an underlying runtime timer alive; not stopping it leaks resources (and the goroutine if it's blocked on the channel)"
+        correct: true
+      - text: "Stop() is optional and does nothing"
+        correct: false
+      - text: "To make it fire faster"
+        correct: false
+      - text: "It resets the count"
+        correct: false
+    explain: "time.NewTicker allocates a runtime timer that keeps firing. `defer ticker.Stop()` releases it; otherwise it lingers for the program's life, and any goroutine ranging its channel may never exit — a classic leak."
+  - q: "How do you watch a directory for file changes (created/modified/deleted) efficiently?"
+    options:
+      - text: "fsnotify — it uses the OS's native notification API (inotify/kqueue/ReadDirectoryChangesW) to deliver events, instead of polling"
+        correct: true
+      - text: "Poll the directory with ReadDir in a tight loop"
+        correct: false
+      - text: "Re-hash every file every second"
+        correct: false
+      - text: "You can't watch for changes in Go"
+        correct: false
+    explain: "github.com/fsnotify/fsnotify wraps each OS's kernel notification mechanism (Linux inotify, BSD/macOS kqueue, Windows ReadDirectoryChangesW) so you get Create/Write/Remove/Rename events pushed to a channel — far cheaper and timelier than polling."
+  - q: "For periodic work that must respect cancellation, what's the idiomatic loop?"
+    options:
+      - text: "for { select { case <-ticker.C: doWork(); case <-ctx.Done(): return } }"
+        correct: true
+      - text: "for { time.Sleep(d); doWork() }"
+        correct: false
+      - text: "A recursive function with no exit"
+        correct: false
+      - text: "go doWork() in an infinite loop"
+        correct: false
+    explain: "Select on both the ticker and ctx.Done() so the loop does periodic work AND exits promptly on cancellation/shutdown. A bare time.Sleep loop can't be cancelled mid-sleep and ignores shutdown signals."
+  - q: "What's the simplest robust approach to scheduled jobs (cron-like) in a Go service?"
+    options:
+      - text: "A ticker-driven loop for simple intervals, or a library like robfig/cron for crontab-style schedules — in-process, no external cron needed"
+        correct: true
+      - text: "Shell out to the system crontab for everything"
+        correct: false
+      - text: "time.Sleep with hard-coded offsets"
+        correct: false
+      - text: "Goroutines that busy-wait on time.Now()"
+        correct: false
+    explain: "For 'every N minutes', a ticker loop is enough. For real calendar schedules ('0 3 * * *' = 3am daily), an in-process scheduler like robfig/cron parses cron expressions and runs jobs on goroutines — keeping scheduling inside your single binary rather than depending on system cron."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="⏰ Analogy">
+Two kinds of "wake me up." One is an **alarm clock**: ring every morning at the same interval, whether or not anything happened — that's a ticker doing periodic work. The other is a **doorbell**: stay quiet until something actually arrives, then notify instantly — that's the OS telling you a file changed, via fsnotify. Polling ("check the door every second") works but wastes effort; the doorbell (kernel notifications) is both cheaper and faster. Good system software uses the alarm for routine chores and the doorbell for reacting to change.
+</Callout>
+
+## Periodic work: tickers
+
+For "do something every N", use a **`time.Ticker`** and select on it alongside cancellation so the loop shuts down cleanly. This runs anywhere:
+
+<Playground client:visible title="ticker.go" code={String.raw`package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+func main() {
+	// Cancel after a short while so the demo terminates.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop() // release the runtime timer — don't leak it
+
+	n := 0
+	for {
+		select {
+		case t := <-ticker.C: // fires every 50ms
+			n++
+			fmt.Printf("tick %d at +%dms\n", n, t.Sub(t.Truncate(time.Second)).Milliseconds()%1000)
+		case <-ctx.Done(): // shutdown / cancellation
+			fmt.Printf("stopped after %d ticks\n", n)
+			return
+		}
+	}
+}`} />
+
+The `select { case <-ticker.C ... case <-ctx.Done() ... }` shape is the canonical periodic loop: it does work on each tick **and** exits the instant the context is cancelled (a [signal](/systems/signals/), a deadline, a shutdown). A `for { time.Sleep(d) }` loop can't do the second part.
+
+For a one-shot delay use `time.NewTimer` / `time.After`; for cron-style calendar schedules (`0 3 * * *`), reach for an in-process scheduler like `github.com/robfig/cron`.
+
+## Reacting to change: fsnotify
+
+Polling a directory (`ReadDir` in a loop) is wasteful and laggy. The OS can *push* you change events through its native API — `inotify` on Linux, `kqueue` on BSD/macOS, `ReadDirectoryChangesW` on Windows — and **`github.com/fsnotify/fsnotify`** wraps all three behind one channel:
+
+```go
+watcher, _ := fsnotify.NewWatcher()
+defer watcher.Close()
+watcher.Add("/etc/myapp") // watch a directory (or file)
+
+for {
+	select {
+	case ev := <-watcher.Events:
+		if ev.Op&fsnotify.Write != 0 {
+			log.Println("changed, reloading:", ev.Name)
+			reloadConfig(ev.Name)
+		}
+	case err := <-watcher.Errors:
+		log.Println("watch error:", err)
+	}
+}
+```
+
+<Mermaid code={String.raw`graph LR
+  FS["file changes"] -->|"inotify / kqueue / Win32"| W["fsnotify watcher"]
+  W -->|"Events channel"| APP["reload config / reindex / rotate"]`} />
+
+This is how tools do **live config reload**, hot asset rebuilds, and watch-mode test runners.
+
+## Log rotation
+
+A long-running daemon's log file grows forever. **Rotation** caps it: when the file passes a size (or on a schedule), rename it aside (`app.log` → `app.log.1`), open a fresh `app.log`, and delete old generations. Libraries like `gopkg.in/natefinch/lumberjack.v2` implement this as an `io.Writer` you point your logger at:
+
+```go
+log.SetOutput(&lumberjack.Logger{
+	Filename:   "/var/log/app.log",
+	MaxSize:    100, // MB before rotating
+	MaxBackups: 3,   // keep app.log.1..3
+	MaxAge:     28,  // days
+	Compress:   true,
+})
+```
+
+<Callout type="go" title="🐹 Keep scheduling in-process">
+A big part of why Go suits infrastructure is that one static binary can own its *own* timers, watchers, and rotation — no system `cron`, no external `logrotate`, no extra moving parts to deploy. Tickers + `select`-on-`ctx`, fsnotify for change, and a rotating `io.Writer` for logs let a single Go service schedule and react entirely on its own. That self-containment is exactly the property that makes Go binaries easy to ship and operate.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Stop your tickers; debounce your watchers">
+**Always `defer ticker.Stop()`** — an unstopped ticker leaks a runtime timer and can pin a goroutine forever. **fsnotify is chatty** — a single "save" in an editor often fires multiple Write/Create/Rename events (and editors write via temp-file-rename, so you may see the *temp* file), so **debounce**: wait a beat after the last event before acting, and re-`Add` watches on directories since some editors replace files. And watching a directory is *not* recursive — add subdirectories yourself (or use a helper that walks the tree).
+</Callout>
+
+## See also
+
+- [signals](/systems/signals/) — the other way programs react to the outside world.
+- [processes & exec](/systems/processes-and-exec/) — running a command on a schedule.
+- [time (stdlib)](/stdlib/time/) — timers, tickers, durations in depth.
+- [context & cancellation (patterns)](/patterns/context-cancellation/) — stopping the periodic loop.
+
+Next: the simplest way two processes talk — [pipes](/systems/pipes/).

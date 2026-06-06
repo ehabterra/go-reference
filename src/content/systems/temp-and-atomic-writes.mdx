@@ -1,0 +1,191 @@
+---
+title: "Temp Files & Atomic Writes"
+category: files
+kind: topic
+order: 4
+difficulty: "Intermediate"
+status: ready
+intent: "Crash-safe file writes in Go — temp files and directories, the write-temp-then-rename pattern for atomic updates, fsync, and avoiding half-written files."
+related:
+  - files-and-directories
+  - signals
+  - files-and-os
+quiz:
+  - q: "Why is writing directly over an existing file with os.WriteFile risky for important data?"
+    options:
+      - text: "If the program crashes or is killed mid-write, the file is left truncated/half-written and the old contents are gone"
+        correct: true
+      - text: "os.WriteFile is always slower"
+        correct: false
+      - text: "It can't write more than 4 KB"
+        correct: false
+      - text: "It changes the file's permissions"
+        correct: false
+    explain: "Overwriting in place is not atomic: a crash, power loss, or SIGKILL between truncation and the final byte leaves a corrupt file — and the previous good version is already gone. The fix is to write a temp file and rename it into place."
+  - q: "What makes the write-temp-then-rename pattern atomic?"
+    options:
+      - text: "rename() within the same filesystem is an atomic operation — readers see either the old file or the fully-written new one, never a partial state"
+        correct: true
+      - text: "Renaming is faster than writing"
+        correct: false
+      - text: "It compresses the file"
+        correct: false
+      - text: "The OS locks the file during rename"
+        correct: false
+    explain: "POSIX guarantees rename() atomically replaces the destination (on the same filesystem). So you write the full new contents to a temp file, then a single rename swaps it in — any reader sees a complete file, old or new, never a torn one."
+  - q: "Why must the temp file be on the SAME filesystem as the destination?"
+    options:
+      - text: "rename() is only atomic within one filesystem; across filesystems it becomes a copy+delete, which isn't atomic"
+        correct: true
+      - text: "Temp files are illegal on other filesystems"
+        correct: false
+      - text: "It would be slower only"
+        correct: false
+      - text: "It changes the file mode"
+        correct: false
+    explain: "Cross-device rename can't be atomic — the kernel falls back to copy-then-unlink (and os.Rename returns an error you'd have to handle by copying). So create the temp file in the SAME directory as the target (e.g. via os.CreateTemp(dir, ...)), guaranteeing the same filesystem."
+  - q: "What does fsync (File.Sync) add to durability?"
+    options:
+      - text: "It forces buffered data to the physical disk, so the write survives a power loss — rename alone only guarantees ordering, not that bytes hit the platter"
+        correct: true
+      - text: "It renames the file"
+        correct: false
+      - text: "It compresses the data"
+        correct: false
+      - text: "Nothing; it's a no-op"
+        correct: false
+    explain: "Writes sit in OS page cache. f.Sync() (fsync) flushes them to stable storage. For true crash durability you fsync the temp file before rename, and ideally fsync the directory after, so the rename itself is persisted. For most apps, the atomic rename is enough; for databases/critical state, add the fsyncs."
+  - q: "What's the right way to create a uniquely-named temp file?"
+    options:
+      - text: "os.CreateTemp(dir, pattern) — it creates and opens a uniquely-named file, avoiding collisions and races"
+        correct: true
+      - text: "Concatenate time.Now() into a filename"
+        correct: false
+      - text: "Always name it tmp.txt"
+        correct: false
+      - text: "Use a random number without checking"
+        correct: false
+    explain: "os.CreateTemp(dir, \"prefix-*.tmp\") atomically creates and opens a file with a unique name (the * becomes random chars), returning the open *os.File. It avoids the classic race of 'check if name is free, then create' and lets you pick the directory (use the target's dir for atomic rename)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📝 Analogy">
+Editing an important document, you don't scribble over the original in ink — if you're interrupted halfway, you've destroyed it. You write a *clean copy* on a fresh sheet, and only when it's complete do you swap it for the original in one motion. The write-temp-then-rename pattern is exactly that: build the new file off to the side, then `rename` it into place in a single atomic swap. A reader always gets a whole document — the old one or the new one, never a half-finished mess.
+</Callout>
+
+## The problem: in-place writes aren't atomic
+
+The obvious way to update a file —
+
+```go
+os.WriteFile("config.json", data, 0o644) // truncates, then writes
+```
+
+— is dangerous for anything you care about. `WriteFile` truncates the file and *then* writes the bytes. If the process crashes, the machine loses power, or someone sends `SIGKILL` between those steps, you're left with a **truncated or half-written file**, and the previous good contents are already gone. Config files, caches, saved state, databases — all need better.
+
+## The pattern: write to temp, then rename
+
+The fix relies on one guarantee: **`rename()` is atomic within a filesystem.** So:
+
+<Mermaid code={String.raw`graph LR
+  W["write full contents<br/>to temp file"] --> S["(optional) fsync<br/>temp file"]
+  S --> R["rename temp → target<br/>(atomic swap)"]
+  R --> DONE["readers see old OR new,<br/>never partial"]`} />
+
+This runs on the playground — it writes a temp file in the *same directory*, then renames it over the target, and proves the result is intact:
+
+<Playground client:visible title="atomic.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// atomicWrite writes data to path crash-safely: temp file + rename.
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	// Temp file in the SAME directory → same filesystem → atomic rename.
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // clean up if we bail out before rename
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil { // flush to disk for durability
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path) // the atomic swap
+}
+
+func main() {
+	dir, _ := os.MkdirTemp("", "atomic")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "config.json")
+
+	os.WriteFile(path, []byte("{\"v\":1}"), 0o644) // an existing good file
+
+	if err := atomicWrite(path, []byte("{\"v\":2}"), 0o644); err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+
+	got, _ := os.ReadFile(path)
+	fmt.Printf("file is intact: %s\n", got) // {"v":2}
+}`} />
+
+Even if the program died right after `CreateTemp` or mid-`Write`, `config.json` would still hold the old `{"v":1}` — the rename only happens once the new file is complete.
+
+## Temp files and directories
+
+Go gives you race-free temp creation:
+
+- **`os.CreateTemp(dir, pattern)`** — creates *and opens* a uniquely-named file (`*` in the pattern becomes random chars). Pass `""` for the OS temp dir, or the target's dir for atomic rename.
+- **`os.MkdirTemp(dir, pattern)`** — a uniquely-named temp directory; pair with `defer os.RemoveAll(dir)`.
+- **`os.TempDir()`** — the system temp location (`$TMPDIR` or `/tmp`).
+
+```go
+f, _ := os.CreateTemp("", "report-*.csv") // /tmp/report-3f9a1.csv
+defer os.Remove(f.Name())
+defer f.Close()
+```
+
+## Durability: where fsync fits
+
+`rename` guarantees *ordering* (no torn file), but bytes may still sit in the OS page cache when power is lost. For true crash durability:
+
+1. `tmp.Sync()` — flush the temp file's data to stable storage **before** the rename.
+2. After the rename, `fsync` the *directory* so the rename entry itself is persisted.
+
+Most applications stop at the atomic rename (step 1 optional). Databases and anything that must survive a yanked power cord do all of it.
+
+<Callout type="go" title="🐹 This is how real tools save state">
+The temp-then-rename dance is everywhere in production Go: writing a config, updating a cache file, checkpointing state, generating a build artifact. It's also why robust tools create their temp file *in the destination directory* rather than `/tmp` — so the rename stays on one filesystem. Reach for a small `atomicWrite` helper (or a library like `lestrrat-go/atomicwrite` / `google/renameio`) instead of `os.WriteFile` whenever a half-written file would be a bug.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Same filesystem, leftover temps, and Windows">
+Three sharp edges. **Cross-filesystem rename isn't atomic** — `os.Rename` from `/tmp` to `/var/lib/app` may fail with an "invalid cross-device link" error or degrade to copy+delete; always create the temp file beside the target. **Clean up on failure** — `defer os.Remove(tmpName)` so a crashed write doesn't litter `.tmp-*` files. And on **Windows**, `rename` over an *open* destination file fails, so close any readers first; `google/renameio` papers over these platform differences if you need cross-platform guarantees.
+</Callout>
+
+## See also
+
+- [files & directories](/systems/files-and-directories/) — reading, walking, and metadata.
+- [signals](/systems/signals/) — why a write can be interrupted, and graceful shutdown.
+- [files & the os package (stdlib)](/stdlib/files-and-os/) — the broader file API.
+- [system calls](/systems/system-calls/) — the `rename`/`fsync` calls underneath.
+
+Next: programs that launch and manage other programs — [processes & exec](/systems/processes-and-exec/).

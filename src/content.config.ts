@@ -42,6 +42,11 @@ const refSchema = z.object({
     'representation',
     'execution',
     'toolchain',
+    // systems-programming categories
+    'syscalls',
+    'files',
+    'processes',
+    'ipc',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -107,4 +112,9 @@ const internals = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals };
+const systems = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/systems' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals, systems };
