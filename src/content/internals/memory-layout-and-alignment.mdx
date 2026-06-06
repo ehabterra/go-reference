@@ -1,0 +1,181 @@
+---
+title: "Memory Layout & Alignment"
+category: representation
+kind: topic
+order: 5
+difficulty: "Advanced"
+status: ready
+intent: "How Go lays structs out in memory — alignment and padding, field ordering, unsafe.Sizeof/Alignof/Offsetof, and cache lines."
+related:
+  - unsafe-and-pointers
+  - memory-allocator
+  - garbage-collector
+quiz:
+  - q: "Why does struct{ a bool; b int64; c bool } take 24 bytes instead of 10?"
+    options:
+      - text: "Alignment padding — int64 must sit on an 8-byte boundary, so the compiler inserts padding around the bool fields"
+        correct: true
+      - text: "Go always rounds structs to 24 bytes"
+        correct: false
+      - text: "bool is secretly 8 bytes"
+        correct: false
+      - text: "The fields are stored as pointers"
+        correct: false
+    explain: "Each field must be aligned to its type's alignment (int64 → 8). With bool, int64, bool in that order, the compiler pads after the first bool to align the int64, then pads the end so the struct's size is a multiple of its alignment. Reordering to int64, bool, bool shrinks it to 16."
+  - q: "What does unsafe.Alignof(x) return?"
+    options:
+      - text: "The required address alignment of x's type (e.g. 8 for int64), which the field's offset must be a multiple of"
+        correct: true
+      - text: "The size of x in bytes"
+        correct: false
+      - text: "The number of fields in x"
+        correct: false
+      - text: "The cache line size"
+        correct: false
+    explain: "Alignof reports the alignment requirement: a value of that type must start at an address that's a multiple of this number. A struct's alignment is the max of its fields' alignments, and its size is rounded up to a multiple of that."
+  - q: "How should you order struct fields to minimize size?"
+    options:
+      - text: "Generally largest-alignment first (int64/pointers), then smaller (int32, int16, bool) — to pack and minimize padding"
+        correct: true
+      - text: "Alphabetically"
+        correct: false
+      - text: "Smallest first always"
+        correct: false
+      - text: "Order never affects size"
+        correct: false
+    explain: "Grouping fields from largest alignment to smallest avoids gaps: an int64 followed by bools packs the bools into what would otherwise be padding. Field order is purely a layout concern in Go — it never changes behavior, only size and sometimes cache performance."
+  - q: "What is false sharing?"
+    options:
+      - text: "Two goroutines updating different variables that happen to share a CPU cache line, causing cache-coherency traffic and slowdowns"
+        correct: true
+      - text: "Two goroutines sharing a mutex"
+        correct: false
+      - text: "Sharing a slice's backing array by mistake"
+        correct: false
+      - text: "Reading a variable from two goroutines"
+        correct: false
+    explain: "CPUs move memory in cache-line units (commonly 64 bytes). If two cores write to distinct variables that sit in the same line, each write invalidates the other core's copy of the line, ping-ponging it between caches. Padding hot per-goroutine counters to a full cache line avoids this."
+  - q: "Why must unsafe.Sizeof and a struct's field offsets be known at compile time?"
+    options:
+      - text: "Layout is fixed by the type, not the value — Sizeof/Alignof/Offsetof are compile-time constants"
+        correct: true
+      - text: "Because the GC computes them at runtime"
+        correct: false
+      - text: "They aren't — they're runtime calls"
+        correct: false
+      - text: "Because the OS decides them"
+        correct: false
+    explain: "A type's size, alignment, and field offsets are determined entirely by the type definition and the target architecture, so the compiler computes them statically. unsafe.Sizeof(x) is a constant expression; it doesn't even evaluate x at runtime."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Think of a struct as a row of parking spaces where some vehicles can only park on certain markings: motorcycles (a `bool`) fit anywhere, but a bus (an `int64`) may only start on every 8th line painted on the lot. If you park a motorcycle, then try to bring in a bus, you have to *skip forward* to the next 8-line — leaving an empty gap (**padding**). Park the bus first and the motorcycles afterward, and they tuck into the leftover space with no wasted lot. Same vehicles, different order, very different number of spaces used. That's struct field ordering.
+</Callout>
+
+## Layout is fixed by the type
+
+A struct's bytes are laid out in **field declaration order**, but each field must satisfy its type's **alignment**: an `int64` must begin at an address that's a multiple of 8, an `int32` at a multiple of 4, and so on. To honor that, the compiler inserts **padding** — unused bytes — between fields and at the end. The whole thing is decided at compile time from the type and the target architecture; the value's contents never matter.
+
+Two facts drive everything:
+
+- A struct's **alignment** is the **maximum** alignment of its fields.
+- A struct's **size** is rounded **up** to a multiple of its alignment (so arrays of it stay aligned).
+
+## Padding, seen three ways
+
+`unsafe` exposes the layout numbers as compile-time constants. This program prints the size, alignment, and field offsets for two structs with the *same fields in different order*:
+
+<Playground client:visible title="layout.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"unsafe"
+)
+
+// Poorly ordered: bool, int64, bool → padding forced around the int64.
+type Bad struct {
+	a bool  // offset 0
+	b int64 // must be 8-aligned → 7 bytes padding before it
+	c bool  // offset 16, then 7 bytes tail padding
+}
+
+// Well ordered: int64 first, bools packed after.
+type Good struct {
+	b int64 // offset 0
+	a bool  // offset 8
+	c bool  // offset 9, then 6 bytes tail padding
+}
+
+func main() {
+	var bad Bad
+	var good Good
+
+	fmt.Printf("Bad:  size=%d align=%d  offsets a=%d b=%d c=%d\n",
+		unsafe.Sizeof(bad), unsafe.Alignof(bad),
+		unsafe.Offsetof(bad.a), unsafe.Offsetof(bad.b), unsafe.Offsetof(bad.c))
+
+	fmt.Printf("Good: size=%d align=%d  offsets b=%d a=%d c=%d\n",
+		unsafe.Sizeof(good), unsafe.Alignof(good),
+		unsafe.Offsetof(good.b), unsafe.Offsetof(good.a), unsafe.Offsetof(good.c))
+
+	fmt.Println("saved per value:", unsafe.Sizeof(bad)-unsafe.Sizeof(good), "bytes")
+}`} />
+
+`Bad` is 24 bytes, `Good` is 16 — a third smaller, for free, just by ordering largest-alignment fields first. Across a slice of millions, that's real memory and fewer cache misses.
+
+<Mermaid code={String.raw`graph TD
+  subgraph Bad["Bad — 24 bytes"]
+    B0["a (1)"] --> B1["pad (7)"] --> B2["b: int64 (8)"] --> B3["c (1)"] --> B4["pad (7)"]
+  end
+  subgraph Good["Good — 16 bytes"]
+    G0["b: int64 (8)"] --> G1["a (1)"] --> G2["c (1)"] --> G3["pad (6)"]
+  end`} />
+
+## Sizes of the common types
+
+| Type | Size (64-bit) | Alignment |
+|---|---|---|
+| `bool`, `int8`, `uint8` | 1 | 1 |
+| `int16` | 2 | 2 |
+| `int32`, `rune`, `float32` | 4 | 4 |
+| `int`, `int64`, `float64`, pointer | 8 | 8 |
+| `string` | 16 (ptr + len) | 8 |
+| `[]T` (slice) | 24 (ptr + len + cap) | 8 |
+| `interface{}` / `any` | 16 (type + data) | 8 |
+| `struct{}` (empty) | 0 | 1 |
+
+The zero-size empty struct is why `map[string]struct{}` is the idiomatic **set**: the keys carry the data, and the values cost nothing.
+
+## Cache lines and false sharing
+
+Alignment also matters for *speed*, not just size. CPUs move memory in **cache-line** units — typically 64 bytes. If two goroutines on different cores repeatedly write to two distinct variables that happen to live in the **same cache line**, every write invalidates the other core's copy, and the line ping-pongs between caches. This is **false sharing**, and it can quietly destroy the scaling of per-goroutine counters.
+
+The fix is to **pad** hot, independently-written fields out to their own cache line:
+
+```go
+type counter struct {
+	n   uint64
+	_   [56]byte // pad to 64 bytes so neighbors land in separate cache lines
+}
+var counters [8]counter // each counter[i] owns its line
+```
+
+<Callout type="go" title="🐹 Don't reorder fields by reflex — measure first">
+Field reordering is a real, free win for types you allocate *in bulk* — but for the 99% of structs you have a handful of, layout is noise and **clarity wins**: group fields by meaning, not by alignment. Reach for the optimization when a type appears in a giant slice/array, a hot cache, or a tight struct-of-arrays loop, and let a tool find the waste — <code>fieldalignment</code> (from <code>golang.org/x/tools</code>) flags and even auto-fixes badly packed structs. Optimize the types that show up in [pprof](/stdlib/profiling-pprof/) heap profiles, leave the rest readable.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Layout is platform-dependent and not guaranteed stable">
+`unsafe.Sizeof` and offsets differ across architectures: `int` and pointers are 8 bytes on 64-bit, 4 on 32-bit, so a struct's size and padding **change with GOARCH**. Never hard-code offsets or assume a wire format matches your in-memory layout — use [`encoding/binary`](/web/framing-and-protocols/) for serialization, not raw struct bytes. Also, 64-bit *atomic* operations require 8-byte alignment of the value; on 32-bit platforms a mis-aligned `atomic.AddInt64` panics, which is why such fields go first in a struct (or you use `atomic.Int64`, aligned by construction).
+</Callout>
+
+## See also
+
+- [unsafe & pointers](/internals/unsafe-and-pointers/) — `Sizeof`/`Alignof`/`Offsetof` and pointer reinterpretation.
+- [the memory allocator](/internals/memory-allocator/) — smaller structs drop into smaller size classes.
+- [the garbage collector](/internals/garbage-collector/) — pointer-free structs are cheaper to scan.
+- [structs (fundamentals)](/fundamentals/structs/) — the language-level view of struct types.
+
+Next: reinterpreting those bytes directly — [unsafe & pointers](/internals/unsafe-and-pointers/).

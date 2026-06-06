@@ -1,0 +1,174 @@
+---
+title: "The Memory Allocator"
+category: memory
+kind: topic
+order: 3
+difficulty: "Advanced"
+status: ready
+intent: "How Go serves memory without a syscall every time — the tiered allocator (mcache/mcentral/mheap), size classes, and the tiny-object allocator."
+related:
+  - stack-and-heap
+  - garbage-collector
+  - escape-analysis
+quiz:
+  - q: "Why does Go group heap allocations into fixed 'size classes' instead of allocating the exact requested size?"
+    options:
+      - text: "Rounding up to ~70 fixed sizes makes allocation O(1), reduces fragmentation, and lets each size be managed in its own pool"
+        correct: true
+      - text: "To waste memory on purpose"
+        correct: false
+      - text: "Because Go can't compute exact sizes"
+        correct: false
+      - text: "To make every object the same size"
+        correct: false
+    explain: "Go rounds each request up to one of ~70 size classes (8, 16, 24, 32, … bytes). Each class has its own free lists, so allocating is just popping a free slot — O(1), with bounded internal fragmentation and no global search for a fitting hole."
+  - q: "What is the mcache, and why does it make allocation fast and lock-free?"
+    options:
+      - text: "A per-P cache of free spans, so most allocations need no lock — only the owning P touches it"
+        correct: true
+      - text: "A global cache shared by all goroutines behind a mutex"
+        correct: false
+      - text: "The CPU's L1 cache"
+        correct: false
+      - text: "A cache of garbage-collected objects"
+        correct: false
+    explain: "Each P (scheduler processor) owns an mcache holding spans for each size class. Because only that P allocates from its mcache, the common path needs no locking. It refills from the (locked) mcentral, which in turn gets memory from the mheap."
+  - q: "Put the allocator tiers in order from fastest/most-local to slowest/most-global."
+    options:
+      - text: "mcache (per-P, lock-free) → mcentral (per size class, locked) → mheap (global, manages pages from the OS)"
+        correct: true
+      - text: "mheap → mcentral → mcache"
+        correct: false
+      - text: "stack → mcache → OS"
+        correct: false
+      - text: "L1 → L2 → L3 cache"
+        correct: false
+    explain: "The fast path hits the per-P mcache with no lock. A miss falls to the mcentral for that size class (locked, shared). A miss there goes to the mheap, the global heap that requests memory pages from the OS and carves them into spans."
+  - q: "What does the 'tiny allocator' optimize?"
+    options:
+      - text: "Many small, pointer-free objects (< 16 bytes) packed into a single block to cut overhead"
+        correct: true
+      - text: "Large arrays"
+        correct: false
+      - text: "Goroutine stacks"
+        correct: false
+      - text: "Pointers only"
+        correct: false
+    explain: "Tiny, non-pointer allocations (like small strings or boxed integers under 16 bytes) are sub-allocated from a shared block by the tiny allocator, so dozens of them share one size-class slot instead of each wasting a full slot. They must be pointer-free so the GC can treat the combined block uniformly."
+  - q: "A 'span' in the Go allocator is…"
+    options:
+      - text: "A run of contiguous memory pages dedicated to one size class, carved into equal-sized object slots"
+        correct: true
+      - text: "A single allocated object"
+        correct: false
+      - text: "A goroutine's stack segment"
+        correct: false
+      - text: "A GC generation"
+        correct: false
+    explain: "A span (mspan) is a contiguous group of 8 KB pages assigned to a single size class. It's divided into equal slots; the allocator hands out free slots and tracks which are in use. Spans are the unit the mheap manages and the GC sweeps."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Picture a busy coffee shop that never wants to run to the warehouse mid-rush. Each barista keeps a small tray of pre-sorted cup sizes at their own station (the **per-P mcache**) — grabbing one needs no coordination with anyone. When a barista's tray runs low on a size, they refill from the back-counter stock for that size (the **mcentral**, shared, so they briefly take a lock). When the back counter is empty, someone finally walks to the warehouse for a fresh case (the **mheap**, which gets pallets from the supplier — the OS). Cups come in standard sizes, not custom — so there's never a search for "the right cup," just grab the next one.
+</Callout>
+
+## Why not just call the OS?
+
+Asking the operating system for memory on every `new` would be catastrophically slow — a syscall, a lock, and kernel bookkeeping per allocation. Instead Go (like other modern runtimes, drawing on TCMalloc) keeps its own allocator that requests big chunks from the OS rarely and hands out small pieces constantly. Two ideas make the common path nearly free: **size classes** and a **tiered, mostly-lock-free cache**.
+
+## Size classes: ~70 standard sizes
+
+Rather than allocating the exact number of bytes requested, Go rounds each request **up** to one of about 70 fixed **size classes** — 8, 16, 24, 32, 48, 64, … bytes. Each class has its own pools, so allocating is just "pop the next free slot of class N" — O(1), no scanning the heap for a hole that fits.
+
+The cost is **internal fragmentation**: a 33-byte object occupies a 48-byte slot, wasting 15 bytes. The benefit is speed and low *external* fragmentation. Objects larger than 32 KB skip the size-class machinery and are allocated directly from the heap as "large objects."
+
+<Mermaid code={String.raw`graph LR
+  R["request: 33 bytes"] --> C["round up to<br/>size class: 48 bytes"]
+  C --> S["take a free 48-byte slot<br/>from a span"]`} />
+
+## The three tiers
+
+A heap allocation walks a hierarchy, stopping as soon as it finds free space. The first tier is per-P and needs no lock; only misses pay for synchronization.
+
+<Mermaid code={String.raw`graph TD
+  A["allocate object of size class N"] --> M["mcache (per-P)<br/>lock-free fast path"]
+  M -->|"empty for class N"| Ce["mcentral[N]<br/>(shared, locked)"]
+  Ce -->|"no free span"| H["mheap<br/>(global, page-level)"]
+  H -->|"out of pages"| OS["ask the OS<br/>(mmap)"]`} />
+
+- **mcache** — each [P (scheduler processor)](/internals/scheduler-internals/) owns one. It holds a span per size class. Allocation pops a free slot with **no lock**, because only the owning P touches it. This is the overwhelmingly common path.
+- **mcentral** — one per size class, shared across all Ps. When an mcache runs out of a class, it grabs a fresh span here (briefly locked).
+- **mheap** — the global heap. It manages memory in **8 KB pages**, carves them into **spans** (runs of pages assigned to one size class), and asks the OS (`mmap`) for more when it runs dry.
+
+## The tiny allocator
+
+Many programs allocate swarms of *tiny*, pointer-free values — a one-character string, a boxed `int`, a small `[]byte`. Giving each its own 8- or 16-byte slot wastes space and slot count. The **tiny allocator** packs several such sub-16-byte, pointer-free objects into a **single** block, bumping a small offset within it. They must be pointer-free so the GC can scan the shared block as one unit.
+
+## Watching the allocator work
+
+You can't poke the mcache directly from Go, but `MemStats` exposes the shape of what the allocator is doing — object counts, live heap, and how many size-class objects exist:
+
+<Playground client:visible title="allocstats.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+func snapshot(label string) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Printf("%-7s HeapAlloc=%4d KB  Mallocs=%d  Frees=%d  HeapObjects=%d\n",
+		label, m.HeapAlloc/1024, m.Mallocs, m.Frees, m.HeapObjects)
+}
+
+func main() {
+	snapshot("start")
+
+	// Allocate many small objects of the same size class.
+	keep := make([][]byte, 0, 50_000)
+	for i := 0; i < 50_000; i++ {
+		keep = append(keep, make([]byte, 24)) // rounds to the 24- or 32-byte class
+	}
+	snapshot("after")
+
+	// Drop references and force a GC so Frees climbs.
+	keep = nil
+	runtime.GC()
+	snapshot("gc")
+	_ = keep
+}`} />
+
+`Mallocs` jumps by ~50,000 during the loop; after dropping the slice and running the GC, `Frees` catches up and `HeapObjects`/`HeapAlloc` fall. Each of those allocations took the lock-free mcache path the vast majority of the time.
+
+## Reference
+
+| Term | What it is |
+|---|---|
+| Size class | One of ~70 fixed allocation sizes (8, 16, 24, …) |
+| Span (`mspan`) | Contiguous pages for one size class, split into slots |
+| `mcache` | Per-P, lock-free cache of spans (fast path) |
+| `mcentral` | Per-size-class shared pool (locked) |
+| `mheap` | Global page-level heap; talks to the OS |
+| Tiny allocator | Packs sub-16-byte pointer-free objects together |
+| Large object | > 32 KB; allocated straight from the heap |
+
+<Callout type="go" title="🐹 sync.Pool: reuse instead of re-allocate">
+The allocator is fast, but the fastest allocation is the one you don't make. When you churn through short-lived objects of the same type in a hot path (buffers, parsers, request scratch space), <a href="/concurrency/sync-package/"><code>sync.Pool</code></a> lets you recycle them, cutting allocator traffic *and* GC work. It's per-P internally — mirroring the mcache design — so `Get`/`Put` are cheap and mostly lock-free. Don't reach for it by default (it complicates lifetimes), but it's the standard answer when pprof shows allocation in a tight loop.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Internal fragmentation and large objects">
+Two things to keep in mind. **Size-class rounding wastes memory**: a struct that's 33 bytes uses a 48-byte slot — if you allocate millions, reorder fields (see [memory layout](/internals/memory-layout-and-alignment/)) or shrink the type to drop into a smaller class. **Objects over 32 KB bypass the size-class fast path** and are served directly by the mheap, page-aligned — cheap individually but they don't benefit from the mcache, so a flood of large objects pressures the global heap and the GC. When in doubt, `ReadMemStats` and `pprof -alloc_space` show where the bytes go.
+</Callout>
+
+## See also
+
+- [the stack & the heap](/internals/stack-and-heap/) — only heap allocations reach the allocator.
+- [escape analysis](/internals/escape-analysis/) — what decides an allocation is a heap allocation.
+- [the garbage collector](/internals/garbage-collector/) — reclaims the spans this allocator hands out.
+- [memory layout & alignment](/internals/memory-layout-and-alignment/) — shrink types to land in smaller size classes.
+
+Next: how all this heap memory gets reclaimed — [the garbage collector](/internals/garbage-collector/).

@@ -1,0 +1,196 @@
+---
+title: "The Stack & the Heap"
+category: memory
+kind: topic
+order: 1
+difficulty: "Intermediate"
+status: ready
+intent: "Where Go values live — the fast per-goroutine stack vs the garbage-collected heap, why stacks grow and get copied, and how the compiler (not you) decides."
+related:
+  - escape-analysis
+  - memory-allocator
+  - garbage-collector
+quiz:
+  - q: "In Go, who decides whether a value goes on the stack or the heap?"
+    options:
+      - text: "The compiler, via escape analysis — there is no stack/heap keyword"
+        correct: true
+      - text: "You do, with new() for heap and var for stack"
+        correct: false
+      - text: "The garbage collector at runtime"
+        correct: false
+      - text: "The operating system"
+        correct: false
+    explain: "Go has no malloc/free and no stack/heap annotations. The compiler runs escape analysis at build time: if a value can be proven not to outlive its function, it lives on the stack; otherwise it escapes to the heap. new() and & don't force the heap — &x can stay on the stack if it doesn't escape."
+  - q: "What's the key cost difference between stack and heap allocation?"
+    options:
+      - text: "Stack alloc is a pointer bump and frees automatically on return; heap alloc costs allocator work and must be reclaimed by the GC"
+        correct: true
+      - text: "The heap is always faster because it's bigger"
+        correct: false
+      - text: "Stack memory is reclaimed by the GC, heap memory is not"
+        correct: false
+      - text: "There is no performance difference"
+        correct: false
+    explain: "A stack allocation just moves the stack pointer, and the whole frame is freed instantly when the function returns. A heap allocation involves the allocator and later GC marking/sweeping. That's why reducing escapes (fewer heap allocations) is a common Go optimization."
+  - q: "What happens when a goroutine's stack runs out of space?"
+    options:
+      - text: "The runtime allocates a bigger stack, copies the old one over, and fixes up pointers — stacks are growable"
+        correct: true
+      - text: "The program panics with stack overflow immediately"
+        correct: false
+      - text: "The OS grows the thread stack"
+        correct: false
+      - text: "Nothing — Go stacks are a fixed 1 MB"
+        correct: false
+    explain: "Goroutines start with a tiny (~2 KB) contiguous stack. When a function call would overflow it, the runtime allocates a larger segment, copies the existing frames, rewrites pointers into the stack, and continues. This copy-on-grow is why goroutines are cheap to start yet can recurse deeply."
+  - q: "Why are goroutine stacks so cheap to create compared to OS threads?"
+    options:
+      - text: "They start at ~2 KB and grow on demand, instead of reserving ~1 MB up front like an OS thread"
+        correct: true
+      - text: "They don't use any memory at all"
+        correct: false
+      - text: "They share one global stack"
+        correct: false
+      - text: "The OS pre-allocates them"
+        correct: false
+    explain: "An OS thread typically reserves around 1 MB of stack. A goroutine starts with a ~2 KB growable stack managed by the Go runtime, so spawning hundreds of thousands of them is realistic. The stack grows (and can shrink) as the goroutine needs."
+  - q: "A function returns &localStruct{}. What does escape analysis conclude?"
+    options:
+      - text: "The value escapes to the heap — the pointer outlives the function, so it can't live on the stack"
+        correct: true
+      - text: "It stays on the stack because it's a local variable"
+        correct: false
+      - text: "It panics because you can't return a pointer to a local"
+        correct: false
+      - text: "It depends on GOGC"
+        correct: false
+    explain: "Returning the address of a local means the value must remain valid after the frame is gone, so it can't live on the stack — it escapes to the heap. (Unlike C, this is safe in Go precisely because the compiler heap-allocates escaping locals.)"
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Think of the **stack** as a stack of sticky notes on your desk: you add a note for each task you start, scribble on it, and tear it off the instant the task finishes — instant, orderly, no cleanup crew needed. The **heap** is a shared warehouse: anything that has to outlive the task that made it gets shelved there, and a janitor (the garbage collector) periodically walks the aisles throwing out what nobody references anymore. Stack memory is reclaimed for free on return; heap memory has to be found and reclaimed later.
+</Callout>
+
+## Two places a value can live
+
+Every value your program creates lives in one of two regions:
+
+- The **stack** — a contiguous, per-goroutine region that grows and shrinks with function calls. Each call pushes a **frame** (its parameters and locals); returning pops it. Allocation is a single pointer bump; deallocation is automatic.
+- The **heap** — a process-wide region for values that must **outlive** the function that created them. Allocation goes through the [memory allocator](/internals/memory-allocator/), and reclamation is the job of the [garbage collector](/internals/garbage-collector/).
+
+The crucial Go fact: **you don't choose.** There is no `malloc`, no `stack`/`heap` keyword. The compiler decides during [escape analysis](/internals/escape-analysis/), and `new(T)` or `&x` does *not* force the heap.
+
+<Mermaid code={String.raw`graph TD
+  V["a value is created"] --> Q{"can it be proven<br/>not to outlive<br/>its function?"}
+  Q -->|"yes"| S["stack frame<br/>(freed on return)"]
+  Q -->|"no — it escapes"| H["heap<br/>(reclaimed by GC)"]`} />
+
+## The stack: a frame per call
+
+When a goroutine calls a function, the runtime pushes a frame holding that call's locals and arguments. When the function returns, the frame is popped — every local in it is gone at once, for free. No bookkeeping, no GC involvement.
+
+This program shows the discipline: the deeper you call, the more frames stack up, and they unwind in exactly reverse order.
+
+<Playground client:visible title="frames.go" code={String.raw`package main
+
+import "fmt"
+
+func work(depth int) {
+	if depth == 0 {
+		return
+	}
+	x := depth * depth // a local — lives in this frame only
+	fmt.Printf("enter depth=%d (x=%d)\n", depth, x)
+	work(depth - 1) // pushes a new frame
+	fmt.Printf("leave depth=%d\n", depth)
+}
+
+func main() {
+	work(3)
+	// Notice the symmetric enter/leave: frames pop in reverse (LIFO).
+}`} />
+
+## Stacks grow — that's why goroutines are cheap
+
+An OS thread reserves a big stack (often ~1 MB) when it's created. A goroutine starts with a **tiny ~2 KB stack** and grows on demand. When a call would overflow the current stack, the runtime:
+
+1. allocates a larger stack segment,
+2. **copies** the existing frames into it,
+3. rewrites every pointer that referred into the old stack,
+4. and resumes as if nothing happened.
+
+<Mermaid code={String.raw`graph LR
+  A["~2 KB stack<br/>(goroutine start)"] -->|"call would overflow"| B["allocate 2× stack"]
+  B --> C["copy frames + fix pointers"]
+  C --> D["resume on bigger stack"]`} />
+
+Because stacks are small at birth, you can spawn hundreds of thousands of goroutines; because they grow, deep recursion still works. (Growth isn't free — the copy is O(stack size) — but it's rare and amortized.) The same machinery shrinks stacks that have become over-large, returning memory to the runtime.
+
+<Callout type="go" title="🐹 'Returning a pointer to a local' is safe in Go — and that's escape analysis at work">
+In C, `return &local;` is a classic bug: the frame vanishes and the pointer dangles. In Go it's idiomatic and safe — `return &T{}` is everywhere. The reason is that the compiler *notices* the address escapes the function and quietly allocates the value on the **heap** instead of the stack. You get C-like syntax with garbage-collected safety. The cost is a heap allocation you may not have intended — which is exactly what [escape analysis](/internals/escape-analysis/) lets you see and avoid.
+</Callout>
+
+## Watching the heap move
+
+You can't directly observe an individual stack vs heap decision at runtime, but you *can* watch the heap grow as escaping allocations pile up. `runtime.ReadMemStats` reports cumulative heap activity:
+
+<Playground client:visible title="heapstats.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+type Point struct{ X, Y int }
+
+// newPoint returns a pointer, so the Point escapes to the heap.
+func newPoint(x, y int) *Point { return &Point{x, y} }
+
+func readMallocs() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.Mallocs // cumulative count of heap objects allocated
+}
+
+func main() {
+	before := readMallocs()
+
+	pts := make([]*Point, 0, 1000)
+	for i := 0; i < 1000; i++ {
+		pts = append(pts, newPoint(i, i)) // 1000 heap allocations
+	}
+
+	after := readMallocs()
+	fmt.Printf("heap objects allocated by the loop: ~%d\n", after-before)
+	fmt.Println("kept alive:", len(pts))
+}`} />
+
+Returning `*Point` forces each `Point` onto the heap, so `Mallocs` climbs by ~1000. Build the slice as `[]Point` of values instead and most of that heap traffic disappears — the lever every Go performance guide pulls.
+
+## Reference
+
+| | Stack | Heap |
+|---|---|---|
+| Scope | Per goroutine | Process-wide |
+| Allocate | Pointer bump (cheap) | Allocator (size class) |
+| Free | Automatic on return | Garbage collector |
+| Decided by | Compiler (escape analysis) | Compiler (escape analysis) |
+| Start size | ~2 KB, grows/shrinks | grows as needed |
+| Failure mode | `stack overflow` (very deep) | GC pressure / OOM |
+
+<Callout type="gotcha" title="⚠️ new() and & don't mean 'heap'; the heap isn't always slower-to-you">
+Two myths to drop. First, **`new(T)` and `&T{}` do not force a heap allocation** — if the result doesn't escape, it lives happily on the stack. The keyword that allocates on the heap is… none; only escape analysis decides. Second, **don't over-optimize on instinct.** A heap allocation is cheap in isolation; the cost shows up as *GC pressure* when you make millions of them. Profile with [pprof](/stdlib/profiling-pprof/) and read `-gcflags=-m` before restructuring code to avoid escapes — premature de-allocation-tuning hurts readability for no measurable gain.
+</Callout>
+
+## See also
+
+- [escape analysis](/internals/escape-analysis/) — the compiler pass that makes the stack-vs-heap call.
+- [the memory allocator](/internals/memory-allocator/) — what actually services a heap allocation.
+- [the garbage collector](/internals/garbage-collector/) — how heap memory is reclaimed.
+- [GC, stacks & escape analysis (concurrency)](/concurrency/gc-and-stacks/) — the same story from the goroutine-cost angle.
+
+Next: how the compiler actually decides what escapes — [escape analysis](/internals/escape-analysis/).

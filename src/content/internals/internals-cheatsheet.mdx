@@ -1,0 +1,176 @@
+---
+title: "Go Internals Cheat-Sheet"
+category: toolchain
+kind: topic
+order: 12
+difficulty: "Reference"
+status: ready
+intent: "One-page map of Go internals — memory, GC, value representation, the scheduler, and the toolchain, plus the runtime and GODEBUG knobs worth memorizing."
+related:
+  - garbage-collector
+  - scheduler-internals
+  - runtime-introspection
+quiz:
+  - q: "You see high GCCPUFraction and frequent GC cycles. What's the first fix to try?"
+    options:
+      - text: "Reduce allocation rate — cut escapes, reuse buffers (sync.Pool), preallocate slices — not call runtime.GC()"
+        correct: true
+      - text: "Call runtime.GC() more often"
+        correct: false
+      - text: "Set GOGC=off in production"
+        correct: false
+      - text: "Add more goroutines"
+        correct: false
+    explain: "GC cost is driven by how much garbage you create. The lever is the allocation rate: fewer escapes, pooled buffers, preallocated slices, value types. Forcing GC makes it worse; GOGC=off risks OOM. Tune the garbage, not the collector."
+  - q: "A struct{ a bool; b int64; c bool } wastes memory. Why, and what fixes it?"
+    options:
+      - text: "Alignment padding around the int64 makes it 24 bytes; reorder largest-first (int64, bool, bool) to get 16"
+        correct: true
+      - text: "Nothing's wrong; it's 10 bytes"
+        correct: false
+      - text: "bool is 8 bytes; nothing helps"
+        correct: false
+      - text: "Use pointers for every field"
+        correct: false
+    explain: "The int64 must be 8-aligned, forcing padding around the bools. Ordering fields from largest alignment to smallest packs them and drops the size from 24 to 16. Matters at scale (large slices); use fieldalignment to find offenders."
+  - q: "Which environment variable caps total memory to avoid OOM in a container?"
+    options:
+      - text: "GOMEMLIMIT (a soft total-memory ceiling, Go 1.19+)"
+        correct: true
+      - text: "GOGC"
+        correct: false
+      - text: "GOMAXPROCS"
+        correct: false
+      - text: "GODEBUG"
+        correct: false
+    explain: "GOGC is relative to live heap and can overshoot a hard container limit on a burst. GOMEMLIMIT sets a soft total-memory target the GC works to stay under, the standard defense against Kubernetes OOM-kills."
+  - q: "An interface holding a nil *T compares != nil. Why?"
+    options:
+      - text: "An interface is (type, data); the type word is set to *T, so it's non-nil even though data is nil"
+        correct: true
+      - text: "It's a compiler bug"
+        correct: false
+      - text: "nil pointers are non-nil"
+        correct: false
+      - text: "Because of the GC"
+        correct: false
+    explain: "An interface is nil only when both its type and data words are nil. Assigning a typed nil pointer sets the type word, so the interface is non-nil — the classic typed-nil error bug. Return a literal nil on the success path."
+  - q: "Which command produces a small, fully static binary for a scratch container?"
+    options:
+      - text: "CGO_ENABLED=0 go build -ldflags=\"-s -w\""
+        correct: true
+      - text: "go build -O3"
+        correct: false
+      - text: "go build --static"
+        correct: false
+      - text: "go run ."
+        correct: false
+    explain: "CGO_ENABLED=0 forces pure-Go (static, no libc) and -ldflags=\"-s -w\" strips the symbol table and DWARF to shrink it. The result runs on scratch/distroless with no dependencies."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+
+The whole track on one page — the mental model, the costs, and the knobs. Each row links to the full page; skim to find what you need, then dive in.
+
+<Callout type="tip" title="🎯 How to read this">
+Internals matter for **diagnosis**, not daily coding: you write Go without thinking about any of this until a memory, latency, or allocation problem sends you looking. These tables are the map from a *symptom* to the *mechanism* and the *knob*.
+</Callout>
+
+## The big picture
+
+<Mermaid code={String.raw`graph TD
+  SRC["your Go source"] -->|"compile + link"| BIN["static binary<br/>(code + runtime)"]
+  BIN --> RT["runtime"]
+  RT --> SCHED["scheduler<br/>G-M-P, sysmon"]
+  RT --> MEM["memory<br/>stack/heap, allocator"]
+  RT --> GC["garbage collector<br/>tricolor mark-sweep"]
+  SCHED -.-> CPU["CPUs"]
+  MEM -.-> GC`} />
+
+## Memory & GC at a glance
+
+| Concept | Key fact | Page |
+|---|---|---|
+| Stack | Per-goroutine, ~2 KB start, grows/copies; free on return | [stack & heap](/internals/stack-and-heap/) |
+| Heap | Process-wide; GC-managed; for escaping values | [stack & heap](/internals/stack-and-heap/) |
+| Escape analysis | Compiler decides stack vs heap; see `-gcflags=-m` | [escape analysis](/internals/escape-analysis/) |
+| Allocator | Tiered: mcache (per-P, lock-free) → mcentral → mheap | [allocator](/internals/memory-allocator/) |
+| Size classes | ~70 fixed sizes; O(1) alloc, some internal fragmentation | [allocator](/internals/memory-allocator/) |
+| GC | Concurrent tricolor mark-sweep; non-moving; write barrier | [garbage collector](/internals/garbage-collector/) |
+| `GCCPUFraction` | The "is GC a problem?" number; usually a few % | [runtime introspection](/internals/runtime-introspection/) |
+
+## Value representation
+
+| Type | Size (64-bit) | Note |
+|---|---|---|
+| `bool`/`int8` | 1 | alignment 1 |
+| `int32`/`rune`/`float32` | 4 | |
+| `int`/`int64`/pointer/`float64` | 8 | |
+| `string` | 16 | ptr + len |
+| `[]T` slice | 24 | ptr + len + cap |
+| `any` / interface | 16 | (type, data) — two words |
+| `struct{}` | 0 | empty; `map[K]struct{}` = a set |
+
+Order struct fields **largest-alignment first** to minimize padding. An interface is `(itab/type, data)` — nil only when **both** words are nil. See [memory layout](/internals/memory-layout-and-alignment/) and [interfaces, itab & eface](/internals/interfaces-itab-eface/).
+
+## The scheduler
+
+| Term | Meaning |
+|---|---|
+| G / M / P | goroutine / OS thread / logical processor (run queue) |
+| `GOMAXPROCS` | number of Ps = parallelism bound (default `NumCPU`) |
+| Handoff | P detached from a syscall-blocked M to keep running Gs |
+| Work-stealing | idle P steals ~half a victim P's queue |
+| netpoller | epoll/kqueue/IOCP; parks Gs on I/O, frees the M |
+| sysmon | P-less monitor: preemption, retake, netpoll, GC timers |
+| Async preemption | SIGURG interrupts hog goroutines (Go 1.14+) |
+
+Full detail: [scheduler internals](/internals/scheduler-internals/).
+
+## The knobs
+
+| Knob | Effect |
+|---|---|
+| `GOGC=100` | GC when heap grows ~100% (default); higher = less GC, more RAM; `off` disables |
+| `GOMEMLIMIT=512MiB` | Soft total-memory ceiling (Go 1.19+); use in containers |
+| `GOMAXPROCS=N` | Number of Ps; set to CPU *limit* in containers |
+| `GODEBUG=gctrace=1` | One line per GC cycle |
+| `GODEBUG=schedtrace=1000` | Scheduler state every 1000 ms |
+| `-gcflags=-m` | Print escape / inline decisions |
+| `-gcflags=-S` | Print generated assembly |
+| `-ldflags="-s -w"` | Strip symbol table + DWARF (smaller binary) |
+| `-ldflags="-X pkg.v=1.2.3"` | Stamp a value at link time |
+| `CGO_ENABLED=0` | Pure-Go, fully static binary |
+| `GOOS` / `GOARCH` | Cross-compile target |
+
+## Toolchain
+
+| Tool | Does |
+|---|---|
+| `go tool compile -S` | Source → assembly |
+| `go tool link` | Objects + runtime → binary |
+| `go tool nm` | List symbols |
+| `go version -m ./bin` | Module + build settings baked in |
+| `go tool pprof` | *Where* CPU/memory goes |
+| `go tool trace` | *When* — scheduler/GC timeline |
+
+<Callout type="go" title="✅ Symptom → mechanism → fix">
+<strong>High latency spikes</strong> → GC pauses or scheduler starvation → check `gctrace`/`schedtrace`; reduce allocation, set `GOMEMLIMIT`. <br/>
+<strong>Memory keeps growing</strong> → a reachable leak (goroutine that never exits, unpruned map) → `NumGoroutine`, heap profile — the [GC](/internals/garbage-collector/) can't free reachable objects. <br/>
+<strong>Surprising allocations</strong> → escapes → `-gcflags=-m`, then cut interface boxing / return values not pointers. <br/>
+<strong>Big binary</strong> → embedded runtime + symbols → `-ldflags="-s -w"`, `CGO_ENABLED=0`. <br/>
+<strong>Won't run on scratch image</strong> → cgo dynamic-linked libc → `CGO_ENABLED=0`.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ The recurring traps">
+**Don't call `runtime.GC()`** to fix GC pressure — reduce garbage instead. **Don't set `GOGC=off`** in production — use `GOMEMLIMIT`. **Typed-nil interfaces** silently break `err != nil` — return literal `nil`. **`uintptr` is not a reference** — never hold one across statements; the GC may move/free the target. **Layout/assembly are arch- and version-specific** — never hard-code offsets or codegen assumptions. **Optimize after measuring** — pprof and benchmarks first, internals second.
+</Callout>
+
+## See also
+
+- [the garbage collector](/internals/garbage-collector/) — the GC knobs and model.
+- [scheduler internals](/internals/scheduler-internals/) — G-M-P, sysmon, preemption.
+- [runtime introspection](/internals/runtime-introspection/) — MemStats, runtime/metrics, GODEBUG.
+- [compile & link](/internals/compile-and-link/) — build flags and the binary.
+
+That's the internals track. Next, see how these foundations power real systems across the [networking & web](/web/) and [concurrency](/concurrency/) tracks.

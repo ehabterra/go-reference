@@ -1,0 +1,72 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CategorySection from '../../components/CategorySection.astro';
+import Card from '../../components/Card.astro';
+import { INTERNALS_CATEGORIES } from '../../lib/consts';
+
+const topics = await getCollection('internals');
+const slugs = topics.filter((t) => t.data.kind === 'topic').map((t) => t.id).join(',');
+const cheat = topics.find((t) => t.id === 'internals-cheatsheet');
+---
+<BaseLayout title="Go Internals" description="A Go-first guide to how Go runs — the stack and heap, escape analysis, the size-class allocator and concurrent garbage collector, memory layout, unsafe, interfaces under the hood, the goroutine scheduler, and the compile-to-binary toolchain, with diagrams and runnable code.">
+  <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Internals</span></nav>
+
+  <header class="dp-hero">
+    <p class="dp-hero__eyebrow" data-i18n="internals.eyebrow">Under the hood</p>
+    <h1 data-i18n="internals.h1">Go Internals, Explained</h1>
+    <p class="dp-hero__lede" data-i18n-html="internals.lede">
+      You know how to write Go — now learn how it <strong>runs</strong>. From the
+      <code>stack</code> and <code>heap</code> to escape analysis, the garbage collector, the
+      <code>itab</code> behind every interface, and the goroutine scheduler — each page pairs a clear mental
+      model with code you can <strong>run right here</strong> and the runtime knobs worth knowing.
+    </p>
+    <div class="dp-hero__cta">
+      <a class="dp-btn dp-btn--primary" href="/internals/stack-and-heap/" data-i18n="ui.startJourney">Start the journey →</a>
+      <a class="dp-btn dp-btn--ghost" href="#representation" data-i18n="internals.cta.jump">Jump to representation</a>
+    </div>
+  </header>
+
+  <div class="dp-overall">
+    <div class="dp-overall__top">
+      <strong data-i18n="internals.progressTitle">Your internals progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset data-i18n="ui.reset">Reset</button>
+    </div>
+    <div class="dp-progress" data-dp-progress data-slugs={slugs}>
+      <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
+      <span class="dp-progress__label"></span>
+    </div>
+    <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="internals.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
+  </div>
+
+  {INTERNALS_CATEGORIES.map((c) => (
+    <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="internals" base="/internals" />
+  ))}
+
+  {cheat && (
+    <Fragment>
+      <h2 class="dp-section-head" style="border:0;" data-i18n="internals.revise">Revise</h2>
+      <div class="dp-grid">
+        <Card
+          slug={cheat.id}
+          category="toolchain"
+          title={cheat.data.title}
+          intent={cheat.data.intent}
+          numLabel={`REFERENCE · ${cheat.data.difficulty}`}
+          footLabel="One-page recap"
+          base="/internals"
+        />
+      </div>
+    </Fragment>
+  )}
+
+  <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
+    <p class="dp-callout__title" data-i18n="internals.go.title">🐹 You rarely need this to write Go — but it explains everything</p>
+    <p data-i18n="internals.go.body">
+      Go hides the runtime on purpose: you allocate without thinking about the heap, spawn goroutines without
+      touching a thread. But when you chase a memory leak, a latency spike, or a surprising allocation, these are
+      the mechanics that explain <em>why</em> — and the <code>runtime</code>, <code>unsafe</code> and
+      <code>go tool</code> knobs that let you see and shape them.
+    </p>
+  </div>
+</BaseLayout>

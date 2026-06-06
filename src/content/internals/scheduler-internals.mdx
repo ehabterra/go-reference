@@ -1,0 +1,212 @@
+---
+title: "Scheduler Internals"
+category: execution
+kind: topic
+order: 8
+difficulty: "Advanced"
+status: ready
+intent: "Below the M:N model — the sysmon monitor thread, preemption, the netpoller, and work-stealing with handoff — deeper than the concurrency scheduler page."
+related:
+  - runtime-introspection
+  - garbage-collector
+  - stack-and-heap
+quiz:
+  - q: "What do G, M, and P stand for in the Go scheduler?"
+    options:
+      - text: "G = goroutine, M = OS thread (machine), P = processor (a scheduling context that holds a run queue)"
+        correct: true
+      - text: "G = global, M = memory, P = pointer"
+        correct: false
+      - text: "G = group, M = mutex, P = pipe"
+        correct: false
+      - text: "They're all the same thing"
+        correct: false
+    explain: "Goroutines (G) run on OS threads (M), but only while the M holds a P. A P is a logical processor: it owns a local run queue of runnable goroutines and the mcache. The number of Ps is GOMAXPROCS, which bounds how many goroutines run in parallel."
+  - q: "Why does a P need to exist separately from an M?"
+    options:
+      - text: "It decouples runnable work (queues, caches) from threads, so when an M blocks in a syscall its P can be handed to another M and keep running goroutines"
+        correct: true
+      - text: "Ps make threads faster"
+        correct: false
+      - text: "Ps are just a counter"
+        correct: false
+      - text: "To use more memory"
+        correct: false
+    explain: "If a goroutine makes a blocking syscall, its M parks in the kernel. The P it was holding is detached and handed to another (or new) M so the local run queue keeps executing. This handoff is why a few blocking syscalls don't stall all your goroutines — the P, not the M, owns the schedulable work."
+  - q: "What is work-stealing?"
+    options:
+      - text: "An idle P, finding its own run queue empty, steals half the goroutines from another P's queue (or the global queue) to stay busy"
+        correct: true
+      - text: "One goroutine stealing another's memory"
+        correct: false
+      - text: "The GC taking CPU from goroutines"
+        correct: false
+      - text: "Threads stealing locks"
+        correct: false
+    explain: "To balance load without a central dispatcher, an idle P checks the global queue and the netpoller, then steals ~half of a randomly chosen victim P's local run queue. This keeps all Ps busy with minimal coordination, the core of the scheduler's scalability."
+  - q: "What does sysmon do?"
+    options:
+      - text: "A dedicated monitor thread that runs without a P — it preempts long-running goroutines, retakes Ps from goroutines stuck in syscalls, and polls the network/forces GC when needed"
+        correct: true
+      - text: "It collects garbage"
+        correct: false
+      - text: "It's the main goroutine"
+        correct: false
+      - text: "It logs scheduler events"
+        correct: false
+    explain: "sysmon (system monitor) is a special M that runs in a loop without needing a P. It handles the things that can't wait for a normal scheduling point: marking long-running goroutines for preemption, taking back Ps from Ms blocked in syscalls, network polling, and triggering GC or scavenging on timers."
+  - q: "How does Go preempt a goroutine that never makes a function call (e.g. a tight math loop), as of Go 1.14+?"
+    options:
+      - text: "Asynchronous preemption — sysmon signals the thread, and the runtime safely interrupts the goroutine at a safe point"
+        correct: true
+      - text: "It can't — such loops run forever and block the scheduler"
+        correct: false
+      - text: "It waits for the loop to finish"
+        correct: false
+      - text: "It kills the OS thread"
+        correct: false
+    explain: "Before Go 1.14, preemption was cooperative — only at function-call safe points — so a tight loop with no calls could monopolize a P. Go 1.14 added asynchronous preemption: sysmon sends a signal (SIGURG on Unix) to the running thread, and the runtime stops the goroutine at a safe point, guaranteeing fairness and timely GC."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+Picture a workshop with a few **workbenches** (the **P**s — exactly `GOMAXPROCS` of them), a pool of **workers** (the OS threads, **M**s), and a big pile of **job tickets** (goroutines, **G**s). A worker can only work at a bench, and each bench keeps its own short stack of next tickets. If a worker has to leave for a long phone call (a blocking syscall), they hand their bench to another worker so the queued tickets keep moving. A bench that runs out of tickets doesn't idle — its worker walks over and **steals half** of a busy bench's stack. And a floor manager (**sysmon**) roams without a bench, tapping anyone who's hogged a bench too long and reclaiming benches from workers stuck on the phone.
+</Callout>
+
+This page assumes the [concurrency scheduler page](/concurrency/scheduler/), which introduces the G-M-P model and `GOMAXPROCS`. Here we go beneath it: the monitor thread, preemption, the netpoller, and stealing.
+
+## G, M, P — the quick recap
+
+- **G** — a goroutine: its stack, instruction pointer, and scheduling state.
+- **M** — a "machine," i.e. an OS thread. Only an M can execute code.
+- **P** — a logical processor: a scheduling context holding a **local run queue** and the [mcache](/internals/memory-allocator/). An M must hold a P to run Gs. There are `GOMAXPROCS` Ps, which bounds parallelism.
+
+<Mermaid code={String.raw`graph TD
+  subgraph P0["P (local run queue)"]
+    G1["G"] --- G2["G"] --- G3["G"]
+  end
+  subgraph P1["P (local run queue)"]
+    G4["G"] --- G5["G"]
+  end
+  M0["M (OS thread)"] --> P0
+  M1["M (OS thread)"] --> P1
+  GQ["global run queue"] -.->|"refilled from / stolen to"| P0
+  GQ -.-> P1
+  SM["sysmon (no P)"] -.->|"preempt · retake P · netpoll"| M0`} />
+
+## Handoff: why a blocking syscall doesn't stall everything
+
+The P/M split exists for one big reason. When a goroutine makes a **blocking syscall**, its M parks in the kernel and can't run anything. If work lived on the M, the whole local queue would freeze. Instead the work lives on the **P**: the runtime detaches the P from the blocked M and hands it to another M (waking a parked one or spawning a new one), which immediately resumes the queued goroutines. When the syscall returns, the original M tries to reacquire a P; if none is free, its goroutine goes to the global queue and the M parks.
+
+This **handoff** is why a handful of blocking calls don't tank throughput — but it's also why a program that spawns thousands of *simultaneously blocking* syscalls can create thousands of Ms.
+
+## Work-stealing with handoff
+
+There's no central dispatcher assigning goroutines to Ps. Instead, when a P's local run queue empties, its M looks for work in order:
+
+1. its own local queue (empty),
+2. the **global** run queue,
+3. the **netpoller** (goroutines whose I/O just became ready),
+4. **steal** ~half of a randomly chosen other P's local queue.
+
+Stealing half (not one) means a freshly-stolen P quickly has work to share again, spreading load in a few hops. New goroutines go on the creator's local queue (fast, no lock); overflow spills to the global queue.
+
+## sysmon and preemption
+
+A normal scheduling decision happens at a *safe point* — typically a function call. But some things can't wait for the running goroutine to be polite:
+
+- a goroutine in a **tight loop with no calls** would never yield;
+- an M stuck in a **long syscall** holds resources;
+- the **network** needs polling and the **GC** needs triggering on time.
+
+So Go runs **sysmon**, a special M with **no P** that loops forever (backing off when idle). sysmon:
+
+- **retakes Ps** from Ms blocked in syscalls for too long,
+- **marks long-running goroutines for preemption**,
+- **polls the network** (the netpoller integrates epoll/kqueue/IOCP so a blocked socket parks its goroutine instead of its thread),
+- triggers **GC** and memory **scavenging** on timers.
+
+Since **Go 1.14**, preemption is **asynchronous**: sysmon sends a signal (`SIGURG` on Unix) to a thread running a hog goroutine; the runtime handler stops it at a safe point. Before 1.14, a `for {}` with no calls could pin a P forever and even stall the GC — now it can't.
+
+## Observing the scheduler
+
+You can't watch the run queues from pure Go, but you can see the moving parts — `GOMAXPROCS`, thread and goroutine counts — and the effect of yielding:
+
+<Playground client:visible title="sched.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+	"sync"
+)
+
+func main() {
+	fmt.Println("GOMAXPROCS (P count):", runtime.GOMAXPROCS(0))
+	fmt.Println("NumCPU:", runtime.NumCPU())
+	fmt.Println("goroutines at start:", runtime.NumGoroutine())
+
+	var wg sync.WaitGroup
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			// A little CPU work; the scheduler multiplexes 1000 Gs onto GOMAXPROCS Ps.
+			sum := 0
+			for j := 0; j < 1000; j++ {
+				sum += j
+			}
+			if n == 0 {
+				fmt.Println("peak goroutines (incl. this one):", runtime.NumGoroutine())
+			}
+			runtime.Gosched() // voluntarily yield this G back to the scheduler
+		}(i)
+	}
+	wg.Wait()
+	fmt.Println("goroutines after wait:", runtime.NumGoroutine())
+}`} />
+
+`runtime.Gosched()` is the explicit "yield the P now" call. You rarely need it — the scheduler preempts for you — but it makes the cooperative side of scheduling concrete.
+
+To watch the scheduler itself, use the `schedtrace` debug knob (build-time/runtime env, not in-playground):
+
+```bash
+# Print scheduler state every 1000ms: run queue sizes, idle Ps/Ms, etc.
+GODEBUG=schedtrace=1000 ./myprogram
+# SCHED 1003ms: gomaxprocs=8 idleprocs=6 threads=12 spinningthreads=1 runqueue=0 ...
+
+# Add scheddetail=1 for per-P/per-M breakdowns.
+GODEBUG=schedtrace=1000,scheddetail=1 ./myprogram
+```
+
+## Reference
+
+| Term | Meaning |
+|---|---|
+| G / M / P | Goroutine / OS thread / logical processor |
+| `GOMAXPROCS` | Number of Ps (parallelism bound) |
+| Local run queue | Per-P queue (lock-free fast path) |
+| Global run queue | Shared overflow queue |
+| Handoff | Detach P from a syscall-blocked M to another M |
+| Work-stealing | Idle P steals ~half a victim P's queue |
+| netpoller | epoll/kqueue/IOCP integration; parks Gs on I/O |
+| sysmon | P-less monitor: preemption, retake, netpoll, GC timers |
+| Async preemption | SIGURG-based interruption of hog goroutines (1.14+) |
+
+<Callout type="go" title="🐹 GOMAXPROCS, blocking, and the netpoller">
+Three practical takeaways. **`GOMAXPROCS` defaults to `NumCPU`** — usually right; in containers, set it to your CPU *limit* (or use `automaxprocs`) so the runtime doesn't over-schedule. **Network I/O doesn't burn a thread** — the netpoller parks the goroutine and frees the M, so "a goroutine per connection" scales to hundreds of thousands. But **blocking *syscalls* (file I/O, cgo, some DNS) do tie up an M** via handoff, so a flood of them can spawn many threads — bound that concurrency with a [semaphore](/concurrency/semaphore/) or [worker pool](/patterns/worker-pool/).
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Fairness is good now, but starvation patterns remain">
+Async preemption (1.14+) killed the classic "tight loop pins a CPU and stalls GC" bug — but a few sharp edges remain. **cgo and blocking syscalls** run outside Go's preemption, so a long C call holds its M the whole time. **`runtime.LockOSThread`** pins a goroutine to its M (needed for some OS/graphics APIs) and that M won't run other Gs until you unlock. And `runtime.Gosched()` is almost never the fix for a performance problem — if goroutines aren't progressing, look for blocking calls, lock contention, or unbounded goroutine creation, not missing yields. Verify with `schedtrace` and the [execution tracer](/internals/runtime-introspection/).
+</Callout>
+
+## See also
+
+- [the scheduler (concurrency)](/concurrency/scheduler/) — the G-M-P model and `GOMAXPROCS` at the user level.
+- [runtime introspection](/internals/runtime-introspection/) — `schedtrace`, `NumGoroutine`, the execution tracer.
+- [goroutines (concurrency)](/concurrency/goroutines/) — what's being scheduled, and leak avoidance.
+- [the garbage collector](/internals/garbage-collector/) — why timely preemption matters for GC.
+
+Next: observing all of this from inside your program — [runtime introspection](/internals/runtime-introspection/).

@@ -1,0 +1,219 @@
+---
+title: "Runtime Introspection"
+category: execution
+kind: topic
+order: 9
+difficulty: "Intermediate"
+status: ready
+intent: "Observe the live runtime from inside your program — runtime.MemStats, the modern runtime/metrics package, and GODEBUG knobs like gctrace and schedtrace."
+related:
+  - garbage-collector
+  - scheduler-internals
+  - memory-allocator
+quiz:
+  - q: "What does runtime.ReadMemStats give you?"
+    options:
+      - text: "A snapshot of heap and GC statistics — allocations, live heap, GC count, pause times, and CPU fraction"
+        correct: true
+      - text: "A CPU profile"
+        correct: false
+      - text: "The source code of the runtime"
+        correct: false
+      - text: "Per-goroutine stack traces"
+        correct: false
+    explain: "ReadMemStats fills a runtime.MemStats struct with counters: Alloc/HeapAlloc (live bytes), TotalAlloc and Mallocs/Frees (cumulative), NumGC, PauseNs, and GCCPUFraction. It's a stop-the-world snapshot, so call it sparingly, not in a hot loop."
+  - q: "Why is the runtime/metrics package preferred over runtime.MemStats for new code?"
+    options:
+      - text: "It exposes a stable, self-describing, extensible set of metrics (including ones MemStats lacks) without the stop-the-world cost of a full MemStats read"
+        correct: true
+      - text: "It prints prettier output"
+        correct: false
+      - text: "It's the only way to read memory stats"
+        correct: false
+      - text: "It disables the GC"
+        correct: false
+    explain: "runtime/metrics (Go 1.16+) is the modern interface: metrics are named strings with documented units, the set can grow across versions without breaking you, and you can read just the ones you want. MemStats is still fine for quick checks but is a coarse, all-or-nothing snapshot."
+  - q: "What does GODEBUG=gctrace=1 do?"
+    options:
+      - text: "Prints a line to stderr for every GC cycle: timing, heap sizes before/after, and CPU usage — no recompile needed"
+        correct: true
+      - text: "Disables the garbage collector"
+        correct: false
+      - text: "Writes a heap profile to a file"
+        correct: false
+      - text: "Makes GC run twice as often"
+        correct: false
+    explain: "GODEBUG is a runtime environment variable read at startup. gctrace=1 emits one line per GC with phase timings, the heap goal, and GC CPU percentage — the fastest way to see GC behavior in production without code changes or a profiler."
+  - q: "How do you get the current number of live goroutines?"
+    options:
+      - text: "runtime.NumGoroutine()"
+        correct: true
+      - text: "runtime.MemStats.Goroutines"
+        correct: false
+      - text: "len(runtime.Goroutines())"
+        correct: false
+      - text: "GODEBUG=goroutines=1"
+        correct: false
+    explain: "runtime.NumGoroutine() returns the count of goroutines that currently exist. Watching it climb without bound is the classic signal of a goroutine leak. For the actual stacks, use runtime.Stack or the goroutine profile from net/http/pprof."
+  - q: "What is the execution tracer (go tool trace) good for that pprof isn't?"
+    options:
+      - text: "A timeline of scheduler/GC/goroutine events — seeing latency, blocking, and how goroutines are scheduled over time, not just where CPU/memory goes"
+        correct: true
+      - text: "Nothing — it's identical to pprof"
+        correct: false
+      - text: "Editing the source"
+        correct: false
+      - text: "Counting allocations only"
+        correct: false
+    explain: "pprof answers 'where is time/memory spent' (aggregated). The execution tracer (runtime/trace + go tool trace) answers 'what happened when' — a fine-grained timeline of goroutine scheduling, GC phases, syscalls, and blocking, ideal for latency and concurrency problems."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📖 Analogy">
+A running Go program is like a car on the road. You don't need to open the engine ([the GC](/internals/garbage-collector/), [the scheduler](/internals/scheduler-internals/)) to know how it's doing — you read the **dashboard**. `runtime.MemStats` is a quick glance at the fuel and temperature gauges. `runtime/metrics` is the modern, expandable instrument cluster with proper labels and units. `GODEBUG` knobs are like flipping on a diagnostic readout that streams telemetry while you drive. And the **execution tracer** is the full black-box recorder you play back later to see exactly what happened, second by second.
+</Callout>
+
+## Three levels of looking inside
+
+Go ships rich, built-in introspection — no agent, no external profiler required to start:
+
+- **`runtime` quick reads** — `MemStats`, `NumGoroutine`, `Version`, `GOMAXPROCS`. Cheap to sprinkle in for a glance.
+- **`runtime/metrics`** — the modern, stable, self-describing metrics interface (Go 1.16+). What you wire into Prometheus/dashboards.
+- **`GODEBUG` + tracing** — zero-code production telemetry (`gctrace`, `schedtrace`) and the deep [pprof](/stdlib/profiling-pprof/) / execution-tracer tooling for offline analysis.
+
+## MemStats: the quick gauge
+
+`runtime.ReadMemStats` fills a struct with heap and GC counters. It's the fastest way to answer "how much am I allocating and how often does the GC run?" — but it's a stop-the-world snapshot, so don't poll it in a hot loop.
+
+<Playground client:visible title="memstats.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+func dump(label string) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Printf("%-6s HeapAlloc=%4dKB  TotalAlloc=%5dKB  Mallocs=%d  NumGC=%d\n",
+		label, m.HeapAlloc/1024, m.TotalAlloc/1024, m.Mallocs, m.NumGC)
+}
+
+func main() {
+	fmt.Println("Go version:", runtime.Version())
+	fmt.Println("GOMAXPROCS:", runtime.GOMAXPROCS(0))
+	dump("start")
+
+	// Allocate ~8 MB of short-lived garbage.
+	var sink [][]byte
+	for i := 0; i < 128; i++ {
+		sink = append(sink, make([]byte, 64*1024))
+	}
+	dump("alloc")
+
+	sink = nil
+	runtime.GC()
+	dump("gc")
+	_ = sink
+}`} />
+
+`HeapAlloc` is live memory *right now*; `TotalAlloc` and `Mallocs` only ever climb (cumulative); `NumGC` counts completed cycles. After dropping the slice and forcing a GC, `HeapAlloc` falls back while the cumulative counters stay high.
+
+## runtime/metrics: the modern instrument cluster
+
+`runtime/metrics` replaces ad-hoc `MemStats` reads for anything you'll monitor over time. Metrics are *named* (e.g. `/gc/heap/allocs:bytes`), carry documented **units**, and the set can grow across Go versions without breaking your code. You read only what you ask for:
+
+<Playground client:visible title="metrics.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime/metrics"
+)
+
+func main() {
+	// Ask for a few specific, stable metrics by name.
+	samples := []metrics.Sample{
+		{Name: "/gc/heap/allocs:bytes"},        // cumulative bytes allocated
+		{Name: "/gc/cycles/total:gc-cycles"},   // completed GC cycles
+		{Name: "/sched/goroutines:goroutines"}, // live goroutines
+		{Name: "/memory/classes/heap/objects:bytes"},
+	}
+
+	// Allocate a little so the numbers are non-zero.
+	var keep [][]byte
+	for i := 0; i < 1000; i++ {
+		keep = append(keep, make([]byte, 1024))
+	}
+
+	metrics.Read(samples)
+	for _, s := range samples {
+		switch s.Value.Kind() {
+		case metrics.KindUint64:
+			fmt.Printf("%-44s = %d\n", s.Name, s.Value.Uint64())
+		case metrics.KindFloat64:
+			fmt.Printf("%-44s = %f\n", s.Name, s.Value.Float64())
+		default:
+			fmt.Printf("%-44s = (other)\n", s.Name)
+		}
+	}
+	_ = keep
+}`} />
+
+Call `metrics.All()` to discover every available metric with its description and unit — a self-documenting catalog that grows with the runtime.
+
+## GODEBUG: telemetry with zero code
+
+`GODEBUG` is an environment variable the runtime reads at startup. It turns on built-in tracing without recompiling — invaluable in production:
+
+```bash
+# One line per GC: pause times, heap before->after->goal, GC CPU%.
+GODEBUG=gctrace=1 ./app
+
+# Scheduler state every 1000ms: run queues, idle Ps/Ms, spinning threads.
+GODEBUG=schedtrace=1000 ./app
+
+# Combine; comma-separated. Allocation/free tracing (very verbose):
+GODEBUG=gctrace=1,schedtrace=2000 ./app
+```
+
+For deep, offline analysis there are two tools, both fed by the `runtime` package:
+
+<Mermaid code={String.raw`graph LR
+  A["runtime/pprof<br/>net/http/pprof"] --> P["go tool pprof<br/>(where: CPU, heap, blocking)"]
+  B["runtime/trace"] --> T["go tool trace<br/>(when: scheduler/GC timeline)"]`} />
+
+- **pprof** answers *where* — aggregated CPU, heap, goroutine, mutex, and block profiles. See [profiling with pprof](/stdlib/profiling-pprof/).
+- **the execution tracer** (`runtime/trace` → `go tool trace`) answers *when* — a timeline of goroutine scheduling, GC phases, syscalls, and blocking events, the right tool for latency and concurrency mysteries.
+
+## Reference
+
+| Tool | Reads | Use |
+|---|---|---|
+| `runtime.ReadMemStats` | Heap/GC counters | Quick glance (stop-the-world) |
+| `runtime.NumGoroutine` | Live goroutine count | Leak detection |
+| `runtime.Version` / `GOMAXPROCS` | Build/runtime config | Diagnostics |
+| `runtime/metrics` | Named, stable metrics | Dashboards/monitoring |
+| `GODEBUG=gctrace=1` | Per-GC lines | Prod GC behavior |
+| `GODEBUG=schedtrace=N` | Scheduler state | Prod scheduling behavior |
+| `runtime/pprof` | CPU/heap/block profiles | *Where* time/memory goes |
+| `runtime/trace` | Event timeline | *When* things happen |
+| `expvar` | Published variables over HTTP | Lightweight metrics endpoint |
+
+<Callout type="go" title="🐹 MemStats to look, runtime/metrics to monitor, GODEBUG to diagnose">
+A simple decision rule. For a **one-off check** in a test or a script, `ReadMemStats` is the quickest. For **continuous monitoring** (exported to Prometheus, Grafana, etc.), wire up `runtime/metrics` — it's stable across versions and won't surprise you. For a **production incident** where you can't redeploy, `GODEBUG=gctrace=1`/`schedtrace` give instant insight with an env var. And when you need to actually *find* a bottleneck, reach for [pprof](/stdlib/profiling-pprof/) and the execution tracer rather than hand-rolled counters.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Don't poll MemStats in hot paths; mind GODEBUG's stability">
+`runtime.ReadMemStats` **stops the world** to take a consistent snapshot — calling it on every request will add latency and skew the very numbers you're measuring; sample it on a timer (e.g. once a second) or use `runtime/metrics`, which is far cheaper for the common counters. Also, `GODEBUG` settings are **diagnostic, not a stable API** — names and output formats can change between Go releases, so parse `gctrace`/`schedtrace` output defensively and prefer `runtime/metrics` for anything programmatic. Finally, leaving the `net/http/pprof` endpoint exposed on a public interface is a real **security** risk — bind it to localhost or behind auth.
+</Callout>
+
+## See also
+
+- [the garbage collector](/internals/garbage-collector/) — what `gctrace` and the GC metrics describe.
+- [scheduler internals](/internals/scheduler-internals/) — what `schedtrace` and the execution tracer reveal.
+- [profiling with pprof (stdlib)](/stdlib/profiling-pprof/) — the *where* tool, in depth.
+- [the memory allocator](/internals/memory-allocator/) — the allocation counters' source.
+
+Next: from source to a running binary — [compile & link](/internals/compile-and-link/).
