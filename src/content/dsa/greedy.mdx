@@ -64,7 +64,7 @@ But "when it works" is the whole catch. Greedy is correct only when the problem 
 
 When those hold, greedy is provably optimal *and* fast. When they don't, you need [dynamic programming](/dsa/dynamic-programming/), which explores all options instead of committing early.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   S["problem"] --> C{"greedy-choice<br/>property?"}
   C -->|yes| G["greedy: one pass, locally optimal"]
   C -->|no| D["dynamic programming: explore all options"]
@@ -79,7 +79,7 @@ A few classics greedy nails: **interval scheduling** (most non-overlapping meeti
 
 You have a set of meetings, each with a start and finish time, and one room. Pick the **most** meetings that don't overlap. The optimal greedy rule is counterintuitive: ignore start times and **sort by finish time**, then walk through taking any meeting that starts at or after the last one you took finishes. Finishing early leaves the most room for what follows.
 
-<Playground client:visible title="interval_scheduling.go" code={`package main
+<Playground client:visible title="interval_scheduling.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -137,7 +137,7 @@ The same "take the biggest that fits" instinct that works for US coins breaks on
 
 This playground runs both and prints the gap, so the failure is concrete and deterministic:
 
-<Playground client:visible title="greedy_vs_dp_coins.go" code={`package main
+<Playground client:visible title="greedy_vs_dp_coins.go" code={String.raw`package main
 
 import (
 	"fmt"

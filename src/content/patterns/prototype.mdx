@@ -67,7 +67,7 @@ Sometimes building an object from scratch is expensive or fiddly — lots of set
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Cloner {
     <<interface>>
     +Clone() Cloner
@@ -84,7 +84,7 @@ Sometimes building an object from scratch is expensive or fiddly — lots of set
 
 Go has no built-in deep copy. `cp := *c` copies value fields but **shares** slices and maps, so `Clone` must duplicate them. Edit and **Run** — notice the base stays untouched:
 
-<Playground client:visible title="prototype.go" code={`package main
+<Playground client:visible title="prototype.go" code={String.raw`package main
 
 import "fmt"
 

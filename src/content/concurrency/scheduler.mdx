@@ -63,7 +63,7 @@ Most languages map one goroutine-equivalent to one OS thread. Go multiplexes **m
 
 You have **`GOMAXPROCS`** Ps (default = number of CPUs). That's the cap on true parallelism.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   subgraph P1["P — run queue"]
     G1["G"] --- G2["G"] --- G3["G"]
   end
@@ -85,7 +85,7 @@ When a P's run queue empties, it doesn't go idle — it **steals** half the goro
 
 ## Peek at the runtime
 
-<Playground client:visible title="scheduler.go" code={`package main
+<Playground client:visible title="scheduler.go" code={String.raw`package main
 
 import (
 	"fmt"

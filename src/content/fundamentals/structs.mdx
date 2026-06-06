@@ -5,11 +5,12 @@ kind: topic
 order: 5
 difficulty: "Beginner"
 status: ready
-intent: "Grouping related fields into one named type — literals, the zero value, nesting, embedding, value comparison with ==, and struct tags."
+intent: "Grouping related fields into one named type — literals, the zero value, nesting, anonymous structs, embedding, struct tags, value-copy semantics, comparability with ==, the empty struct, and a note on field layout."
 related:
   - pointers
   - methods
   - slices
+  - embedding
 quiz:
   - q: "What is the zero value of a struct you declare but don't initialize, like `var p Point`?"
     options:
@@ -44,18 +45,40 @@ quiz:
       - text: "Validates that the value is a name"
         correct: false
     explain: "A struct tag is just a string attached to a field. It has no effect until some package reads it with reflection — for example `encoding/json` uses the `json:\"...\"` tag to decide the JSON key for that field."
+  - q: "You pass a large struct to a function by value and the function mutates a field. What does the caller see?"
+    options:
+      - text: "Nothing changed — the function received a full copy; mutate the original by passing a pointer"
+        correct: true
+      - text: "The caller's struct is mutated, because Go passes structs by reference"
+        correct: false
+      - text: "A compile error — structs can't be passed to functions"
+        correct: false
+      - text: "Only exported fields change"
+        correct: false
+    explain: "Assigning or passing a struct copies the whole value, fields and all. The function works on its own copy, so the caller is unaffected. To mutate the caller's struct (or to avoid copying a big one), pass a *pointer."
+  - q: "What is `map[string]struct{}` a common idiom for?"
+    options:
+      - text: "A set — the empty struct is a zero-byte value, so only the keys (the members) carry information"
+        correct: true
+      - text: "A map that can't be modified"
+        correct: false
+      - text: "A map with string values"
+        correct: false
+      - text: "An ordered map"
+        correct: false
+    explain: "`struct{}` occupies zero bytes, so `map[K]struct{}` is the idiomatic Go set: presence of a key means membership and the value costs nothing. The empty struct is also used for signal-only channels (`chan struct{}`)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🗂️ Analogy">
-A struct is a labeled form: one printed sheet with named blanks — *Name*, *Age*, *Email* — that you fill in and carry around as a single thing. Go has no classes; a struct is simply the **shape** of grouped data, and behavior gets attached later as [methods](/fundamentals/methods/).
+A struct is a labeled form: one printed sheet with named blanks — *Name*, *Age*, *Email* — that you fill in and carry around as a single thing. Go has no classes; a struct is simply the **shape** of grouped data, and behavior gets attached later as [methods](/fundamentals/methods/). Crucially, the form is the *whole* value: hand someone a copy and they can scribble on it without touching your original.
 </Callout>
 
-## Defining and building a struct
+## What a struct is
 
-You define a struct type once, then create values from it:
+A struct is a **composite type**: a fixed collection of named **fields**, each with its own type, laid out together in memory as one value. You declare the type once, then create as many values from it as you like:
 
 ```go
 type Point struct {
@@ -64,42 +87,42 @@ type Point struct {
 }
 ```
 
+There is no inheritance and no class. A struct is pure data shape — the Go way to say "these things belong together." Behavior is bolted on separately as [methods](/fundamentals/methods/), and richer designs come from *composing* structs, not from extending them.
+
+### The mental model
+
+Think of a struct value as a single contiguous block of memory holding its fields back to back. Two things follow from that, and they explain almost every struct surprise you'll hit:
+
+- **A struct *is* its fields.** It has no hidden header, no identity, no reference cell. `Point{1, 2}` is just eight bytes (two ints) sitting next to each other.
+- **Therefore copying a struct copies the fields.** Assignment, function arguments, return values, appending to a slice — all of these duplicate the whole block. That's why value semantics are the default and why a [pointer](/fundamentals/pointers/) is how you opt into sharing.
+
+## Building a struct: literals and the dot
+
 There are several ways to make a value, and one way to read its parts — the dot:
 
 ```go
 p := Point{X: 1, Y: 2} // keyed literal (preferred — order-independent, safe)
-q := Point{3, 4}       // positional literal — must list every field in order
+q := Point{3, 4}       // positional literal — must list EVERY field in order
 var z Point            // zero value: X and Y are both 0
 p.X = 10               // field access with the dot
 ```
 
-Prefer the **keyed** form: it survives a field being added or reordered, and it lets you set only the fields you care about (the rest stay at their zero value).
+Prefer the **keyed** form. It survives a field being added or reordered, it documents intent at the call site, and it lets you set only the fields you care about (the rest stay at their zero value). The **positional** form is terse but brittle: it must name every field in declaration order, so adding a field breaks it — reserve it for tiny, stable types like `Point{3, 4}`.
 
-## Zero value, comparison, and tags
+| Form | Example | When to use |
+|---|---|---|
+| Keyed | `Point{X: 1, Y: 2}` | almost always — robust to field changes |
+| Positional | `Point{3, 4}` | only for tiny, stable structs |
+| Zero value | `var z Point` | when the all-zero state is meaningful and usable |
+| Pointer to new | `p := &Point{X: 1}` | when you'll share or mutate it |
 
-Declare a struct without initializing it and you still get a fully usable value — every field is set to its own zero value, so there's no "uninitialized garbage." Only a *pointer* to a struct can be `nil`.
+## The zero value: always usable, never nil
 
-Structs compare with `==` field-by-field, as long as **every field is itself comparable**:
+Declare a struct without initializing it and you still get a fully formed value — **every field is set to its own zero value**, recursively. There is no "uninitialized garbage" and no nil struct. A `var z Person` has an empty `Name`, an `Age` of `0`, and a zeroed nested `Address`.
 
-<Mermaid code={`graph TD
-  S["struct value"] --> C{"all fields comparable?"}
-  C -->|yes| OK["== works: equal iff every field equal"]
-  C -->|"no (has slice/map/func)"| ERR["== is a compile error"]`} />
+This is a deliberate design choice: a well-chosen zero value makes a type useful with no constructor. `bytes.Buffer`, `sync.Mutex`, and `sync.WaitGroup` are all meant to be used straight from `var b bytes.Buffer`. When you design your own structs, aim for the same — pick field types so the all-zero state is a valid, ready-to-use object. Only a *pointer* to a struct can be `nil`.
 
-Fields can carry a back-tick **tag** — metadata that does nothing on its own, but that packages like `encoding/json` read by reflection to control encoding (here, the JSON key names):
-
-```go
-type User struct {
-	Name  string `json:"name"`
-	Email string `json:"email,omitempty"`
-}
-```
-
-## Nesting and embedding
-
-A field can itself be a struct (nesting), or a struct can be **embedded** by writing just its type name — the embedded fields are promoted so you can reach them directly:
-
-<Playground client:visible title="structs.go" code={`package main
+<Playground client:visible title="build-and-nest.go" code={String.raw`package main
 
 import "fmt"
 
@@ -115,6 +138,7 @@ type Person struct {
 }
 
 func main() {
+	// Keyed literal: order-independent and safe against added fields.
 	p := Person{
 		Name: "Ada",
 		Age:  36,
@@ -124,23 +148,220 @@ func main() {
 		},
 	}
 
-	p.Address.City = "Cambridge" // reach into the nested struct
+	p.Address.City = "Cambridge" // reach into the nested struct with the dot
 	fmt.Println(p.Name, "lives in", p.Address.City)
 
-	// %+v prints field names with their values — great for debugging.
-	fmt.Printf("%+v\n", p)
+	// %v prints just the values; %+v adds the field names; %#v is Go syntax.
+	fmt.Printf("%v\\n", p)
+	fmt.Printf("%+v\\n", p)
+	fmt.Printf("%#v\\n", p)
 
-	// Comparison: == is true only when every field matches.
-	q := p
-	fmt.Println("p == q:", p == q) // true (a struct is copied by value)
-	q.Age = 37
-	fmt.Println("p == q:", p == q) // false
+	// var z Person gives the zero value: every field set to its own zero.
+	var z Person
+	fmt.Printf("zero: %+v\\n", z)
 }`} />
 
-The struct is copied **by value**: `q := p` makes an independent copy, so changing `q.Age` does not touch `p`. When you want a function to mutate the original instead, pass a [pointer](/fundamentals/pointers/).
+`%+v` (field names) is the everyday debugging verb for structs; reach for `%#v` when you want output that reads like the Go literal that produced it.
+
+## Nesting and embedding
+
+A field can itself be a struct (**nesting**), which is exactly what `Address` is above — a named field with a struct type, reached with a second dot: `p.Address.City`.
+
+There's also a special form, **embedding**, where you write just the type name with *no field name*. The embedded type's fields and methods are **promoted** so you can reach them directly:
+
+```go
+type Person struct {
+	Name string
+	Address // embedded: no field name
+}
+
+p.City // promoted — shorthand for p.Address.City
+```
+
+Embedding is Go's composition mechanism — it's how you get something resembling inheritance without the hierarchy, and it powers interface composition too. It has its own rules (promotion, shadowing, method sets), so it gets its own page: [struct & interface embedding](/fundamentals/embedding/).
+
+## Anonymous structs
+
+You don't have to name a struct type to use one. An **anonymous struct** declares the shape and the value in one breath:
+
+```go
+cfg := struct {
+	Host string
+	Port int
+}{Host: "localhost", Port: 8080}
+```
+
+These shine where a named type would be noise: the case rows of a **table-driven test**, a one-off JSON payload, or grouping a couple of values to push through a channel. If the same shape shows up in more than one place, that's the signal to give it a real name.
+
+## The empty struct `struct{}`
+
+The empty struct has **no fields and occupies zero bytes**. That sounds useless until you realize "zero bytes" is exactly what you want when you only care about a key's *presence* or an event's *occurrence*:
+
+- **Sets:** `map[T]struct{}` is the idiomatic Go set. The keys are the members; the values carry no information and cost no memory. (A `map[T]bool` works too, but wastes a byte per entry and invites the `m[k] == false` ambiguity.)
+- **Signal channels:** `chan struct{}` carries timing, not data. `close(done)` or `done <- struct{}{}` says "it happened" with nothing to allocate.
+
+<Playground client:visible title="empty-struct.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func main() {
+	// struct{} is the empty struct: it occupies ZERO bytes. As a map value it
+	// turns a map into a set — the keys are the members, the values cost nothing.
+	seen := map[string]struct{}{}
+	for _, w := range []string{"go", "rust", "go", "zig", "rust", "go"} {
+		seen[w] = struct{}{} // struct{}{} is the one and only empty-struct value
+	}
+
+	_, hasGo := seen["go"]
+	fmt.Println("contains go?", hasGo)
+	fmt.Println("unique count:", len(seen))
+
+	// Sort before printing a map: iteration order is randomized in Go.
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	fmt.Println("members:", keys)
+
+	// A signal channel carries no data, only the fact that something happened.
+	done := make(chan struct{})
+	go func() { close(done) }()
+	<-done
+	fmt.Println("signalled")
+
+	// An anonymous struct: a one-off shape with no named type. Common for
+	// table-driven tests and ad-hoc grouping.
+	cfg := struct {
+		Host string
+		Port int
+	}{Host: "localhost", Port: 8080}
+	fmt.Printf("%s:%d\\n", cfg.Host, cfg.Port)
+}`} />
+
+## Struct tags
+
+Each field may carry a **tag** — a string of metadata that does *nothing* on its own. It only matters when some package reads it via [reflection](/fundamentals/reflection/). The most common reader is `encoding/json`, which uses the `json:"..."` tag to decide each field's JSON key and options like `omitempty`:
+
+```go
+type User struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"` // omitted when empty
+	Age   int    `json:"age"`
+}
+```
+
+Tags are conventionally written with **back-ticks** (a raw string literal), so the quotes inside don't need escaping. The example below uses an ordinary double-quoted string instead — which the compiler treats identically — purely so it runs in this editor; in real code, use back-ticks.
+
+<Playground client:visible title="struct-tags.go" code={String.raw`package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// Tags are normally written with back-ticks. A double-quoted string literal
+// with escaped quotes is identical to the compiler — used here so it runs in
+// this editor. Both forms produce the same tag string.
+type User struct {
+	Name  string "json:\"name\""
+	Email string "json:\"email,omitempty\""
+	Age   int    "json:\"age\""
+	pwd   string // unexported: never marshaled, no tag needed
+}
+
+func main() {
+	u := User{Name: "Ada", Age: 36, pwd: "secret"}
+
+	// Marshal: tags decide the JSON keys. Email is omitted (omitempty + zero).
+	out, _ := json.Marshal(u)
+	fmt.Println("encoded:", string(out))
+
+	// Unmarshal: the same tags map JSON keys back onto fields.
+	var back User
+	_ = json.Unmarshal([]byte("{\"name\":\"Linus\",\"email\":\"l@x.io\",\"age\":54}"), &back)
+	fmt.Printf("decoded: %+v\\n", back)
+}`} />
+
+Two rules worth burning in: only **exported** (capitalized) fields are visible to `encoding/json` — the lowercase `pwd` above is never marshaled — and a malformed tag fails silently, so double-check the spelling.
+
+## Value-copy semantics: a struct is the whole value
+
+Assigning a struct, passing it to a function, returning it, or storing it in a slice **copies every field**. The copy is independent; mutating it never touches the original.
+
+<Playground client:visible title="copy-and-compare.go" code={String.raw`package main
+
+import "fmt"
+
+type Point struct{ X, Y int }
+
+// Comparable: every field is comparable, so == works and Point is a valid map key.
+type Line struct{ A, B Point }
+
+func main() {
+	p := Point{1, 2}
+	q := p // a struct is copied by VALUE: q is fully independent
+
+	fmt.Println("p == q:", p == q) // true: every field equal
+	q.X = 99
+	fmt.Println("p == q:", p == q) // false: the copy changed, p did not
+	fmt.Println("p still:", p)     // {1 2}
+
+	// Because == works, comparable structs can be map keys.
+	dist := map[Line]float64{
+		{Point{0, 0}, Point{3, 4}}: 5,
+	}
+	fmt.Println("len via key:", dist[Line{Point{0, 0}, Point{3, 4}}])
+
+	// A struct with a slice/map/func field is NOT comparable.
+	// Uncommenting the == below is a COMPILE error:
+	//   invalid operation: struct containing []string cannot be compared
+	type Tagged struct{ Tags []string }
+	_ = Tagged{Tags: []string{"a"}}
+	fmt.Println("a struct with a slice field cannot use ==")
+}`} />
+
+This is why a method with a value receiver, `func (p Point) Move()`, can't mutate the caller's struct — it gets a copy. **Use a pointer when** you need to mutate the original, when the struct is large enough that copying it is wasteful, or when a method must see the latest state. **Stick with values** for small, immutable-ish data where copies are cheap and aliasing bugs are not worth the risk. See [pointers](/fundamentals/pointers/) and [methods](/fundamentals/methods/) for the receiver-choice details.
+
+## Comparability with `==`
+
+Structs support `==` **exactly when every field is comparable**, and then two structs are equal iff all their fields are equal:
+
+<Mermaid code={String.raw`graph TD
+  S["struct value"] --> C{"all fields comparable?"}
+  C -->|yes| OK["== works: equal iff every field equal; usable as a map key"]
+  C -->|"no (has slice / map / func)"| ERR["== is a COMPILE error"]`} />
+
+A struct that contains a **slice, map, or function** field (directly or nested) is *not* comparable, and `==` on it is a compile-time error — not a runtime surprise. When you need value-equality for such a type, write your own `Equal` method or reach for `reflect.DeepEqual` (slower, last resort). Comparability also gates **map keys**: a struct can be a key only if it's comparable, which is why `map[Line]float64` above is legal.
+
+## Field layout, alignment, and ordering
+
+This rarely matters, but it's the kind of internals knowledge that pays off in hot paths. Fields are laid out in **declaration order**, and the compiler inserts **padding** so each field starts at an address aligned to its size (an `int64` on an 8-byte boundary, and so on). Order your fields carelessly and padding inflates the struct:
+
+```go
+type Bad  struct { a bool; b int64; c bool } // 8 + 8 + 8 = 24 bytes (padding around the bools)
+type Good struct { b int64; a bool; c bool } // 8 + 1 + 1 (+6 tail) = 16 bytes
+```
+
+The rule of thumb when size matters: **group fields largest-to-smallest**. You almost never need to do this by hand — clarity beats a few saved bytes — but for structs you allocate by the million, `go vet`'s `fieldalignment` check (via `go vet -vettool` / `fieldalignment`) will flag the wins.
+
+<Callout type="gotcha" title="⚠️ Copying a struct copies its slices and maps shallowly">
+A struct copy is **shallow**. Value fields (`int`, `string`, nested structs) are duplicated, but a **slice, map, or pointer field copies the reference**, not the data behind it. So `q := p` gives `q` its own header for a slice field — but both headers point at the *same backing array*. Mutating `q.Items[0]` is visible through `p.Items[0]`. If you truly need an independent struct, you must deep-copy the reference fields yourself (e.g. `slices.Clone` for a slice field). This is the same aliasing trap covered in [slices](/fundamentals/slices/).
+</Callout>
 
 <Callout type="tip" title="🐹 Structs hold data; methods give them behavior">
-A struct on its own is just grouped fields. You add behavior by attaching **methods** — functions with a receiver, like `func (p Point) Distance() float64`. That receiver can be a value (a copy) or a pointer (to mutate the original). Structs are also the building blocks you'll put inside [slices](/fundamentals/slices/) and maps. Next up: [methods](/fundamentals/methods/).
+A struct on its own is just grouped fields. You add behavior by attaching **methods** — functions with a receiver, like `func (p Point) Distance() float64`. That receiver can be a value (a copy) or a pointer (to mutate the original and avoid copying). Structs are also the building blocks you'll put inside [slices](/fundamentals/slices/) and [maps](/fundamentals/maps/), and the natural unit to compose via [embedding](/fundamentals/embedding/).
 </Callout>
+
+## See also
+
+- [Pointers](/fundamentals/pointers/) — sharing and mutating a struct instead of copying it.
+- [Methods](/fundamentals/methods/) — attaching behavior, and choosing value vs pointer receivers.
+- [Embedding](/fundamentals/embedding/) — composition and field/method promotion.
+- [Interfaces](/fundamentals/interfaces/) — letting structs satisfy behavioral contracts.
+- [Reflection](/fundamentals/reflection/) — how packages read struct tags at runtime.
 
 Next: a growable, ordered collection — [slices](/fundamentals/slices/).

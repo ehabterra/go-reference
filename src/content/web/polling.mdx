@@ -57,7 +57,7 @@ Polling is the kid in the back seat: "Are we there yet? … Are we there yet?" T
 
 The client requests the same endpoint every few seconds; the server answers with the current state. Dead simple, works through any proxy — here's the loop, driven in-process:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   C["client"] -->|"GET /status (t=0s)"| S["server"]
   S -->|"version=1"| C
   C -->|"GET /status (t=5s)"| S
@@ -65,7 +65,7 @@ The client requests the same endpoint every few seconds; the server answers with
   C -->|"GET /status (t=10s)"| S
   S -->|"version=3"| C`} />
 
-<Playground client:visible title="polling.go" code={`package main
+<Playground client:visible title="polling.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -110,7 +110,7 @@ func longPoll(w http.ResponseWriter, r *http.Request) {
 
 ## Choosing
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   Q["need updates?"] --> A["rarely / non-urgent<br/>→ short polling"]
   Q --> B["near real-time, server → client<br/>→ long polling or SSE"]
   Q --> C["two-way, high frequency<br/>→ WebSockets"]`} />

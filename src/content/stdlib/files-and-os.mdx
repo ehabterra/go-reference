@@ -57,7 +57,7 @@ The `os` package is the **doorway between your program and the machine**. `os.Re
 
 For small files, read or write everything in one call. `os.ReadFile` returns a `[]byte`; `os.WriteFile` takes the bytes plus a **permission** mode (`0644` = owner read/write, everyone else read):
 
-<Playground client:visible title="wholefile.go" code={`package main
+<Playground client:visible title="wholefile.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -92,7 +92,7 @@ func main() {
 
 When a file is large — or you process it one line at a time — don't load it all. `os.Open` returns an `*os.File` (an `io.Reader`); always `defer f.Close()` so the handle is released even on an early return. Wrap it in a `bufio.Scanner` to walk it line by line:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   F["os.Open(path)"] --> FILE["*os.File<br/>(io.Reader)"]
   FILE --> SC["bufio.Scanner"]
   SC -->|"Scan() / Text()"| L["one line at a time"]
@@ -100,7 +100,7 @@ When a file is large — or you process it one line at a time — don't load it 
 
 The same `bufio.Scanner` pattern reads from **any** `io.Reader` — a file, `os.Stdin`, or a `strings.Reader`. Here it scans an in-memory reader so the output is fully deterministic:
 
-<Playground client:visible title="scan.go" code={`package main
+<Playground client:visible title="scan.go" code={String.raw`package main
 
 import (
 	"bufio"

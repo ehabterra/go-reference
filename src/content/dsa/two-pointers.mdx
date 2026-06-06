@@ -63,14 +63,14 @@ The brute-force way to find a pair summing to a target is two nested loops — *
 
 Because the two indices only ever step toward each other, the loop runs at most **n** times — **O(n)** time, **O(1)** extra space.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   A["[1, 3, 4, 6, 8, 11]  target = 10"] --> B["lo=1 hi=11 → 12 too big, hi--"]
   B --> C["lo=1 hi=8 → 9 too small, lo++"]
   C --> D["lo=3 hi=8 → 11 too big, hi--"]
   D --> E["lo=3 hi=6 → 9 too small, lo++"]
   E --> F["lo=4 hi=6 → 10 found"]`} />
 
-<Playground client:visible title="two_sum_sorted.go" code={`package main
+<Playground client:visible title="two_sum_sorted.go" code={String.raw`package main
 
 import "fmt"
 
@@ -115,12 +115,12 @@ There are two flavours:
 
 The longest-substring-without-repeating-characters problem is the canonical variable window. Track the **last-seen index** of each byte; when the right edge meets a byte already inside the window, jump the left edge just past that earlier occurrence.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   A["a b c a b c b b"] --> B["window grows: a, ab, abc"]
   B --> C["next a repeats → left jumps past old a"]
   C --> D["best length seen = 3 (abc)"]`} />
 
-<Playground client:visible title="longest_unique.go" code={`package main
+<Playground client:visible title="longest_unique.go" code={String.raw`package main
 
 import "fmt"
 

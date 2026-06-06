@@ -66,7 +66,7 @@ You launch many goroutines, but only a handful may do the heavy or scarce thing 
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   subgraph tokens["sem: buffered chan, cap N"]
     T1["•"]
     T2["•"]
@@ -79,7 +79,7 @@ You launch many goroutines, but only a handful may do the heavy or scarce thing 
 
 A buffered channel is the whole mechanism: send to acquire a slot, receive to release. Here six goroutines run, but the observed peak concurrency never exceeds the limit. Edit and **Run**:
 
-<Playground client:visible title="semaphore.go" code={`package main
+<Playground client:visible title="semaphore.go" code={String.raw`package main
 
 import (
 	"fmt"

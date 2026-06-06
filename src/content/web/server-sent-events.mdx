@@ -57,7 +57,7 @@ Server-Sent Events is a radio broadcast: you tune in once (open one HTTP request
 
 The client makes a normal `GET`; the server keeps the response **open** and writes `text/event-stream` frames over time. The browser's built-in `EventSource` parses them and **auto-reconnects** if the link drops:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   C["client<br/>EventSource(/events)"] -->|"GET, stays open"| S["server"]
   S -->|"data: 1"| C
   S -->|"data: 2"| C
@@ -76,7 +76,7 @@ data: {"price": 101.5}
 
 An SSE handler sets the content type, then writes-and-**flushes** each event. We can run the exact handler in-process and capture the stream it produces:
 
-<Playground client:visible title="sse.go" code={`package main
+<Playground client:visible title="sse.go" code={String.raw`package main
 
 import (
 	"fmt"

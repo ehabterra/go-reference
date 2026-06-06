@@ -67,7 +67,7 @@ When you consume a channel from code you don't own, a plain `for v := range c` c
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   SRC["source chan<br/>(you don't own)"] --> OD["orDone<br/>select on done"]
   DONE["done chan"] -.-> OD
   OD --> C["consumer<br/>plain range"]`} />
@@ -76,7 +76,7 @@ When you consume a channel from code you don't own, a plain `for v := range c` c
 
 `orDone` relays values from `c` but exits the instant `done` closes — so `main` just ranges. Edit and **Run**:
 
-<Playground client:visible title="or_done.go" code={`package main
+<Playground client:visible title="or_done.go" code={String.raw`package main
 
 import "fmt"
 

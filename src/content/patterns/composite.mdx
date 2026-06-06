@@ -81,7 +81,7 @@ Every operation re-implements that type switch and recursion. Composite removes 
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Component {
     <<interface>>
     +Name() string
@@ -107,7 +107,7 @@ The crucial line is `Folder o--> Component`: a container holds the **same interf
 
 One call on the root fans out through the whole tree:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   P["Folder: project"] --> M["File: go.mod"]
   P --> S["Folder: src"]
   S --> A["File: main.go"]
@@ -117,7 +117,7 @@ One call on the root fans out through the whole tree:
 
 There's no inheritance — just a small interface and a struct that embeds a slice of it. Edit and **Run**:
 
-<Playground client:visible title="composite.go" code={`package main
+<Playground client:visible title="composite.go" code={String.raw`package main
 
 import (
 	"fmt"

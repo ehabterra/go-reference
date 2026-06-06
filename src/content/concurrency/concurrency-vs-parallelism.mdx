@@ -62,7 +62,7 @@ One barista taking an order, then starting the espresso, then steaming milk, the
 
 Concurrent code on a single core is **interleaved**, not parallel — the runtime rapidly switches between tasks. Give it more cores (via `GOMAXPROCS`) and the same concurrent code becomes parallel, with no rewrite.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   subgraph S1["Concurrent · 1 core (interleaved)"]
     A1["A"] --> B1["B"] --> A2["A"] --> B2["B"]
   end
@@ -94,7 +94,7 @@ Both coordinate goroutines; pick by intent:
 
 Three goroutines run concurrently; the runtime interleaves them, so the order is **not** deterministic. Edit and **Run** (run it twice — the order can change):
 
-<Playground client:visible title="concurrency.go" code={`package main
+<Playground client:visible title="concurrency.go" code={String.raw`package main
 
 import (
 	"fmt"

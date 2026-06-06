@@ -67,7 +67,7 @@ When every object holds references to every other object it interacts with, you 
 
 ## Structure
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["Alice"] --> M["ChatRoom<br/>(mediator)"]
   B["Bob"] --> M
   C["Carol"] --> M
@@ -79,7 +79,7 @@ When every object holds references to every other object it interacts with, you 
 
 A chat room mediates between users: each user sends to the room, and the room broadcasts — users never reference each other. Edit and **Run**:
 
-<Playground client:visible title="mediator.go" code={`package main
+<Playground client:visible title="mediator.go" code={String.raw`package main
 
 import "fmt"
 

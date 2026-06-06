@@ -70,7 +70,7 @@ You want to add features to objects in **arbitrary combinations**. Modelling eac
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Beverage {
     <<interface>>
     +Description() string
@@ -95,14 +95,14 @@ A decorator (`Mocha`) both **implements** `Beverage` and **holds** a `Beverage`.
 
 Each layer delegates to the one it wraps, then adds its own contribution:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   D["DarkRoast<br/>$1.99"] --> M["+ Mocha<br/>+$0.20"] --> M2["+ Mocha<br/>+$0.20"] --> W["+ Whip<br/>+$0.10"] --> T["= $2.49"]`} />
 
 ## Idiomatic Go
 
 A common version uses an explicit `component Beverage` field. Go's **struct embedding** makes it even tighter — embed the interface and override only `Description` and `Cost`. Edit and **Run**:
 
-<Playground client:visible title="decorator.go" code={`package main
+<Playground client:visible title="decorator.go" code={String.raw`package main
 
 import "fmt"
 

@@ -67,7 +67,7 @@ You have a small, well-defined language — arithmetic, a rules expression, a qu
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Expr {
     <<interface>>
     +Eval() int
@@ -83,7 +83,7 @@ You have a small, well-defined language — arithmetic, a rules expression, a qu
 
 The expression `3 + 4 * 2` becomes this tree, evaluated bottom-up:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["Add"] --> N3["Num 3"]
   A --> M["Mul"]
   M --> N4["Num 4"]
@@ -93,7 +93,7 @@ The expression `3 + 4 * 2` becomes this tree, evaluated bottom-up:
 
 Each node implements `Eval`; non-terminal nodes recurse into their children. Edit and **Run**:
 
-<Playground client:visible title="interpreter.go" code={`package main
+<Playground client:visible title="interpreter.go" code={String.raw`package main
 
 import "fmt"
 

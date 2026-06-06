@@ -57,14 +57,14 @@ import Playground from '../../components/islands/Playground.tsx';
 
 Each `flag.String/Int/Bool` takes a **name**, a **default**, and a **usage** string, and returns a pointer that `flag.Parse()` fills in. Read the value through the pointer afterward:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   ARGS["os.Args[1:]<br/>--name go --count 3 file.txt"] --> PARSE["flag.Parse()"]
   PARSE --> VARS["*name, *count, *verbose<br/>(typed, with defaults)"]
   PARSE --> POS["flag.Args()<br/>positional: file.txt"]`} />
 
 This program defines three flags. With no arguments — as on the playground — the **defaults** stand, so it runs deterministically:
 
-<Playground client:visible title="flags.go" code={`package main
+<Playground client:visible title="flags.go" code={String.raw`package main
 
 import (
 	"flag"

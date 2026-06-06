@@ -68,7 +68,7 @@ type User struct {
 
 Run a round-trip (the playground writes the tags as plain string literals, which work identically):
 
-<Playground client:visible title="json.go" code={`package main
+<Playground client:visible title="json.go" code={String.raw`package main
 
 import (
 	"encoding/json"
@@ -101,7 +101,7 @@ func main() {
 
 ## Known shape? Use a struct. Unknown? Use a map
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   J["JSON bytes"] -->|"Unmarshal into &struct"| S["typed struct (you know the shape)"]
   J -->|"Unmarshal into &map[string]any"| M["generic tree: object→map, array→[]any, number→float64"]`} />
 

@@ -57,7 +57,7 @@ Plain HTTP is like sending a letter and waiting for a reply: one request, one re
 
 A WebSocket doesn't start as its own protocol — it **borrows an HTTP request to bootstrap**. The client sends an ordinary `GET` carrying `Connection: Upgrade` and `Upgrade: websocket`. If the server agrees, it replies `101 Switching Protocols`, and from that instant the *same TCP connection* stops speaking HTTP and starts exchanging WebSocket frames in both directions.
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant C as Browser / Client
   participant S as Server
   C->>S: GET /ws  (Upgrade: websocket)

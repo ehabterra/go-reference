@@ -64,7 +64,7 @@ A mutex locks the whole room so one person edits the ledger at a time. An atomic
 
 `sync/atomic` performs indivisible operations on a single value. The racy counter from [Race Conditions](/concurrency/race-conditions/) becomes correct — and lock-free. Prefer the **typed atomics** (Go 1.19+); they prevent mixing atomic and plain access. **Run** it:
 
-<Playground client:visible title="atomic.go" code={`package main
+<Playground client:visible title="atomic.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -104,7 +104,7 @@ Beyond integers: `atomic.Bool` for flags, `atomic.Pointer[T]` for swapping whole
 
 CAS is the heart of lock-free algorithms: read, compute, and commit only if nobody changed the value underneath you — otherwise retry.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   R["read old"] --> C{"CAS(old, new)?"}
   C -->|swapped| D["done"]
   C -->|value changed| R`} />

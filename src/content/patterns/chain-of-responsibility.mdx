@@ -68,7 +68,7 @@ A request could be handled by one of several handlers, but the sender shouldn't 
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   R["Request: $5000"] --> L["Team Lead<br/>≤ $100?"]
   L -->|too big| M["Manager<br/>≤ $1000?"]
   M -->|too big| D["Director<br/>≤ $10000?"]
@@ -78,7 +78,7 @@ A request could be handled by one of several handlers, but the sender shouldn't 
 
 Each approver handles amounts up to its limit, or forwards to the next. Edit and **Run**:
 
-<Playground client:visible title="chain.go" code={`package main
+<Playground client:visible title="chain.go" code={String.raw`package main
 
 import "fmt"
 

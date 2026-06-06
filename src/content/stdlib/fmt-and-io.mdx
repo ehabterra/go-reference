@@ -57,7 +57,7 @@ import Playground from '../../components/islands/Playground.tsx';
 
 `Println` is for quick output; `Printf` gives you **verbs** for control; `Sprintf` returns a string instead of printing:
 
-<Playground client:visible title="fmt.go" code={`package main
+<Playground client:visible title="fmt.go" code={String.raw`package main
 
 import "fmt"
 
@@ -83,14 +83,14 @@ The verbs you'll use most: `%v` (anything), `%d` (integer), `%s` (string), `%q` 
 
 Two one-method interfaces underpin all of Go's I/O:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   SRC["any source<br/>file · socket · string"] -->|"Read(p []byte)"| R["io.Reader"]
   R -->|"io.Copy"| W["io.Writer"]
   W -->|"Write(p []byte)"| DST["any sink<br/>file · terminal · buffer"]`} />
 
 Because files, network connections, `strings.Reader` and `bytes.Buffer` all satisfy them, `io.Copy` streams from **any** Reader to **any** Writer — and `fmt` uses a type's `String()` method (the **Stringer** interface) automatically:
 
-<Playground client:visible title="io.go" code={`package main
+<Playground client:visible title="io.go" code={String.raw`package main
 
 import (
 	"fmt"

@@ -91,7 +91,7 @@ defer rdb.Close()
 
 The most common pattern is **cache-aside**: the application checks the cache, falls back to the database on a miss, and populates the cache for next time.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   APP["request"] --> C{"in Redis?"}
   C -->|hit| RET["return cached value"]
   C -->|miss| DB[("read Postgres")]

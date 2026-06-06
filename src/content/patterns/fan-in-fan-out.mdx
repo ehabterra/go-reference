@@ -68,7 +68,7 @@ One stage of your [pipeline](/patterns/pipeline/) is the bottleneck — say a CP
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   IN["input chan"] --> W1["worker 1"]
   IN --> W2["worker 2"]
   IN --> W3["worker 3"]
@@ -81,7 +81,7 @@ One stage of your [pipeline](/patterns/pipeline/) is the bottleneck — say a CP
 
 Three workers read the **same** input channel (fan-out); `fanIn` merges their outputs with a `WaitGroup` that closes the merged channel once all are done. Edit and **Run**:
 
-<Playground client:visible title="fan_out_in.go" code={`package main
+<Playground client:visible title="fan_out_in.go" code={String.raw`package main
 
 import (
 	"fmt"

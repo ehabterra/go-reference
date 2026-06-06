@@ -55,7 +55,7 @@ A REST API treats your data as **resources** at stable addresses — `/todos`, `
 
 ## Resources, methods, status codes
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["GET /todos"] --> R1["200 · list"]
   B["POST /todos"] --> R2["201 · created"]
   C["GET /todos/{id}"] --> R3["200 · one  /  404 · missing"]
@@ -67,7 +67,7 @@ Map each method to the right status: **2xx** success (200 OK, 201 Created, 204 N
 
 Decode JSON in, encode JSON out, pick the status — driven in-process so it runs anywhere:
 
-<Playground client:visible title="rest.go" code={`package main
+<Playground client:visible title="rest.go" code={String.raw`package main
 
 import (
 	"encoding/json"

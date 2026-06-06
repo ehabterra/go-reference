@@ -5,11 +5,11 @@ kind: topic
 order: 13
 difficulty: "Intermediate"
 status: ready
-intent: "Recovering concrete types from an interface — x.(T), the comma-ok form, the type switch, working with any, and when to reach for reflection."
+intent: "Recovering concrete types from an interface — x.(T) and comma-ok, the type switch with interface/nil/default cases, asserting to an interface, working with any, the typed-nil trap, and when to use reflection or generics instead."
 related:
   - interfaces
   - reflection
-  - errors
+  - generics
 quiz:
   - q: "What does the comma-ok form `v, ok := x.(int)` do when x does not hold an int?"
     options:
@@ -24,7 +24,7 @@ quiz:
     explain: "The single-result form `x.(int)` panics on a wrong type. The two-result comma-ok form is safe: ok reports success and v is the zero value when it fails. Use comma-ok whenever the type isn't guaranteed."
   - q: "What is a type switch used for?"
     options:
-      - text: "Branching on the dynamic type held by an interface value"
+      - text: "Branching on the dynamic (concrete) type held by an interface value"
         correct: true
       - text: "Converting between numeric types"
         correct: false
@@ -32,7 +32,29 @@ quiz:
         correct: false
       - text: "Choosing a goroutine to run"
         correct: false
-    explain: "`switch v := x.(type) { case int: ...; case string: ... }` inspects the concrete type inside an interface and binds v to it in each case, typed appropriately. It's the idiomatic way to handle a value of several possible types."
+    explain: "`switch v := x.(type) { case int: ...; case string: ... }` inspects the concrete type inside an interface and binds v to it in each case, typed appropriately. It is the idiomatic way to handle a value of several possible types."
+  - q: "Is `x.(io.Writer)` a valid type assertion?"
+    options:
+      - text: "Yes — you can assert to an interface, which asks whether the value's method set satisfies io.Writer"
+        correct: true
+      - text: "No — you can only assert to concrete types"
+        correct: false
+      - text: "Only inside a type switch"
+        correct: false
+      - text: "Yes, but it always panics"
+        correct: false
+    explain: "Asserting to an interface type checks, at run time, whether the dynamic value implements that interface. With comma-ok it is the standard way to probe for optional behavior — e.g. does this writer also implement io.Closer?"
+  - q: "An interface holds a nil *T (a typed nil). Does it match `case nil` in a type switch?"
+    options:
+      - text: "No — its dynamic type is *T (non-nil), so it matches a *T or interface case, not case nil"
+        correct: true
+      - text: "Yes — the value is nil so case nil matches"
+        correct: false
+      - text: "It panics in the switch"
+        correct: false
+      - text: "Only if *T has no methods"
+        correct: false
+    explain: "case nil matches only the genuinely nil interface, where both the type and value halves are nil. A nil *T fills the type half, so the interface is non-nil and matches by its concrete type. This is the same typed-nil trap that breaks `err == nil`."
   - q: "When should you prefer reflection over a type assertion or type switch?"
     options:
       - text: "Rarely — only when the set of types is open-ended or unknown at compile time"
@@ -50,35 +72,84 @@ import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📦 Analogy">
-An [interface](/fundamentals/interfaces/) value is a sealed box labeled only with what it can *do*. A **type assertion** is asking "is the thing inside actually a Cat?" — open it and you either get the Cat or, if you ask politely with comma-ok, a "nope." It's how you get the concrete value back out when you need more than the interface promises.
+An [interface](/fundamentals/interfaces/) value is a sealed box labeled only with what it can *do*. A **type assertion** is asking "is the thing inside actually a Cat?" — open it and you either get the Cat or, if you ask politely with comma-ok, a quiet "nope" instead of a broken lid. It's how you recover the concrete value when you need more than the interface promises — or how you ask whether the box *also* fits a second label (another interface).
 </Callout>
+
+## What an assertion really inspects
+
+Recall the model from [interfaces](/fundamentals/interfaces/): an interface value is a **(type, value) pair** — a dynamic *type* (which concrete type it holds) and the data. A type assertion reads that type half. `x.(T)` does not *convert* anything and does not run a constructor; it checks "is the dynamic type exactly `T` (for a concrete `T`), or does it satisfy `T` (for an interface `T`)?" and, if so, hands back the value already inside the box. That's why it's cheap — a type-identity check, not a transformation.
 
 ## Asserting a single type
 
-`x.(T)` claims the interface value `x` holds a `T` and hands it back. In its one-result form it **panics** if you're wrong, so it's only safe when the type is guaranteed. The **comma-ok** form is the safe default:
+`x.(T)` claims the interface value `x` holds a `T` and returns it. In its **one-result** form it **panics** if you're wrong, so it's only safe when the type is guaranteed. The **comma-ok** form is the safe default — it never panics:
 
 ```go
 var x any = "hello"
 
-s := x.(string)      // ok here, but panics if x weren't a string
+s := x.(string)      // ok here, but PANICS if x weren't a string
 s, ok := x.(string)  // comma-ok: ok=true, s="hello"
-n, ok := x.(int)     // ok=false, n=0 — no panic
+n, ok := x.(int)     // ok=false, n=0 — no panic, no drama
 ```
 
-<Mermaid code={`graph TD
-  X["x any"] --> A["x.(T)"]
-  A -->|holds T| OK["value of type T, ok=true"]
-  A -->|other type| BAD["single form: PANIC / comma-ok: zero, false"]`} />
+<Mermaid code={String.raw`graph TD
+  X["x any  (type, value)"] --> A["x.(T)"]
+  A -->|dynamic type is T| OK["value of type T, ok=true"]
+  A -->|other type| BAD["single form: PANIC / comma-ok: zero value, ok=false"]`} />
 
-## The type switch
-
-When a value could be one of several types, a **type switch** branches on the concrete type and binds a correctly-typed variable in each case:
-
-<Playground client:visible title="type-switch.go" code={`package main
+<Playground client:visible title="comma-ok.go" code={String.raw`package main
 
 import "fmt"
 
-// describe inspects the dynamic type inside each any value.
+// asInt safely extracts an int using the comma-ok form, never panicking.
+func asInt(x any) (int, bool) {
+	n, ok := x.(int) // ok=false and n=0 when x does not hold an int
+	return n, ok
+}
+
+func main() {
+	var x any = "hello"
+
+	// Single-result form: only safe when the type is GUARANTEED.
+	s := x.(string)
+	fmt.Println("string:", s)
+
+	// Comma-ok form: the safe default when the type is uncertain.
+	if n, ok := x.(int); ok {
+		fmt.Println("int:", n)
+	} else {
+		fmt.Println("not an int; n is the zero value:", n)
+	}
+
+	// The wrong single-result assertion x.(int) would PANIC here. We recover
+	// from a deliberate one to show what the safe form spares you.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Println("recovered from panic:", r)
+			}
+		}()
+		_ = x.(int) // panic: interface conversion: interface {} is string, not int
+	}()
+
+	for _, v := range []any{7, "nope", 99} {
+		if n, ok := asInt(v); ok {
+			fmt.Println("asInt ok:", n)
+		} else {
+			fmt.Println("asInt skip:", v)
+		}
+	}
+}`} />
+
+## The type switch
+
+When a value could be one of *several* types, a **type switch** branches on the concrete type and binds a correctly-typed variable in each case. It's a type assertion fanned out across many candidates, and it reads far better than a chain of comma-ok `if`s:
+
+<Playground client:visible title="type-switch.go" code={String.raw`package main
+
+import "fmt"
+
+// describe inspects the dynamic type inside each any value. v has the specific
+// type of whichever case matches, so it is usable directly in that case.
 func describe(x any) string {
 	switch v := x.(type) {
 	case nil:
@@ -91,29 +162,135 @@ func describe(x any) string {
 		return fmt.Sprintf("bool: %t", v)
 	case []int:
 		return fmt.Sprintf("[]int of length %d", len(v))
+	case error:
+		// An interface case: matches any value satisfying error.
+		return "error: " + v.Error()
 	default:
-		// %T prints the concrete type name
-		return fmt.Sprintf("other: %T", v)
+		return fmt.Sprintf("other: %T", v) // %T prints the concrete type
 	}
 }
 
 func main() {
-	values := []any{42, "go", true, []int{1, 2, 3}, 3.14, nil}
+	values := []any{
+		42, "go", true, []int{1, 2, 3}, 3.14,
+		fmt.Errorf("boom"), nil,
+	}
 	for _, val := range values {
 		fmt.Println(describe(val))
 	}
 }`} />
 
-In `switch v := x.(type)`, `v` has the specific type of each matched `case` — an `int` in the `int` case, a `string` in the `string` case — so you can use it directly.
+A few mechanics that pay to know:
 
-## Working with `any` and the road to reflection
+- In `switch v := x.(type)`, `v` has the **specific type** of each matched case — an `int` in the `int` case, a `string` in the `string` case — so you use it without a further cast. In `default` (and in a multi-type case like `case int, int64:`) `v` keeps the original interface type.
+- **`case nil`** matches the genuinely nil interface only (see the trap below).
+- **Interface cases** like `case error` or `case fmt.Stringer` match by satisfaction, not exact type. Order matters: the first matching case wins, so list more specific concrete cases *before* broad interface cases.
+- Cases are evaluated top to bottom; there's no fallthrough in a type switch.
 
-Type assertions are the natural companion to **`any`**: code that accepts `any` (a JSON decoder, a logger, a cache) stores values opaquely, then uses an assertion or switch to act on the real type. A real-world cousin is checking whether an error wraps a specific type — `errors.As` does exactly this kind of assertion under the hood (see [errors](/fundamentals/errors/)).
+| Form | Wrong type | Use when |
+|---|---|---|
+| `v := x.(T)` | **panics** | the type is guaranteed (you just checked it, or an invariant holds) |
+| `v, ok := x.(T)` | `ok=false`, `v` is zero | a single uncertain type |
+| `switch v := x.(type)` | falls to `default` | several candidate types |
 
-When the candidate types are **known**, prefer assertions and switches — they're fast and compile-time checked. When the types are genuinely **open-ended** (a serializer that walks any struct), step up to runtime inspection with the `reflect` package — see [reflection](/fundamentals/reflection/).
+## Asserting to an interface
 
-<Callout type="gotcha" title="🐹 Assert the type, not the value">
-Two traps. First, the single-result `x.(T)` **panics** on the wrong type — always use comma-ok unless you're certain. Second, you assert against the *dynamic* type, not method-by-method: `x.(io.Writer)` is also valid and asks "does the value satisfy `io.Writer`?", which is handy for optional behaviors. And remember a `nil` interface matches the `case nil` arm — but a non-nil interface holding a typed nil does not.
+A type assertion's target can itself be an **interface** — this asks "does the dynamic value *satisfy* this interface?" It's the idiomatic way to probe for **optional behavior**: maybe this value also knows how to `String()` itself, or also implements `io.Closer`:
+
+<Playground client:visible title="assert-interface.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Temp implements fmt.Stringer.
+type Temp float64
+
+func (t Temp) String() string {
+	return fmt.Sprintf("%.1f°C", float64(t))
+}
+
+// Plain has no String method.
+type Plain struct{ N int }
+
+// render asserts each value to the fmt.Stringer INTERFACE, not a concrete type.
+// The assertion succeeds for any value whose method set includes String().
+func render(x any) string {
+	if s, ok := x.(fmt.Stringer); ok {
+		return "Stringer -> " + s.String()
+	}
+	return fmt.Sprintf("plain -> %v", x)
+}
+
+func main() {
+	items := []any{Temp(19.5), Plain{N: 7}, Temp(21.0), "raw"}
+	var out []string
+	for _, it := range items {
+		out = append(out, render(it))
+	}
+	fmt.Println(strings.Join(out, "\n"))
+}`} />
+
+This pattern is everywhere in the standard library: `fmt` checks `x.(fmt.Stringer)` and `x.(error)` to decide how to print a value, and code that takes an `io.Reader` often does `if c, ok := r.(io.Closer); ok { defer c.Close() }` to clean up only when the underlying value supports it.
+
+## Working with `any`, and the road to reflection
+
+Type assertions are the natural companion to **`any`**: code that accepts `any` — a JSON decoder, a logger, a cache — stores values opaquely, then uses an assertion or switch to act on the real type when it must. A real-world cousin is checking whether an error wraps a specific type: `errors.As(err, &target)` does exactly this kind of assertion through the wrap chain (see [errors](/fundamentals/errors/)).
+
+When the candidate types are **known**, prefer assertions and switches — they're fast and compile-time checked at the assertion site. When the types are genuinely **open-ended** (a serializer that must walk *any* struct it's handed, reading fields and tags it can't name in advance), step up to runtime inspection with the `reflect` package — see [reflection](/fundamentals/reflection/). Reflection is strictly more powerful and strictly slower and less safe; reach for it only when a type switch can't enumerate the cases.
+
+## Relationship to generics
+
+A type switch and a generic function answer two different questions, and noticing which you're asking tells you which feature to use:
+
+- A **type switch** runs at *run time* and lets you behave *differently* per concrete type (`int` doubles, `string` measures length). It needs `any` and erases static type information at the boundary.
+- A **generic function** runs the *same* body for every type in a constraint and *preserves* the static type end to end. There is no per-type branching inside it.
+
+So if your switch does the *same thing* in every arm — just over different element types — that's a smell that a [generic](/fundamentals/generics/) with the right constraint would be cleaner and type-safe. But the moment the arms genuinely *differ* (a JSON encoder formatting numbers, strings, and slices each their own way), a type switch is exactly right and a generic cannot replace it.
+
+<Callout type="gotcha" title="🐹 The typed-nil arm and other traps">
+Three things bite here. **First**, the single-result `x.(T)` **panics** on the wrong type — always use comma-ok unless you're certain. **Second**, you assert against the *dynamic type*, so a non-nil interface holding a **typed nil** (a nil `*T`) does **not** match `case nil` — its type half is filled, so it matches a `*T` or interface case instead. This is the same trap that makes `err == nil` lie when a function returns a typed nil error. **Third**, asserting to an interface tests the *method set*, so a value with a pointer-receiver method satisfies the interface only when the interface holds the *pointer* — the [method-set rule from interfaces](/fundamentals/interfaces/) applies to assertions too.
 </Callout>
+
+<Playground client:visible title="typed-nil.go" code={String.raw`package main
+
+import "fmt"
+
+type myErr struct{}
+
+func (*myErr) Error() string { return "boom" }
+
+// classify shows the typed-nil trap: a non-nil interface holding a nil *myErr
+// does NOT match case nil, because its dynamic type is non-nil.
+func classify(x any) string {
+	switch v := x.(type) {
+	case nil:
+		return "case nil (both type and value are nil)"
+	case error:
+		return fmt.Sprintf("case error: dynamic type %T", v)
+	default:
+		return fmt.Sprintf("default: %T", v)
+	}
+}
+
+func main() {
+	var trueNil any      // (nil, nil)
+	var p *myErr         // p == nil
+	var typedNil any = p // (*myErr, nil) — type slot is filled
+
+	fmt.Println("trueNil  ->", classify(trueNil))
+	fmt.Println("typedNil ->", classify(typedNil))
+
+	// Even though p is nil, the interface is not nil:
+	fmt.Println("typedNil == nil ?", typedNil == nil)
+}`} />
+
+## See also
+
+- [Interfaces](/fundamentals/interfaces/) — the (type, value) pair an assertion reads, and the method-set rules that govern interface assertions.
+- [Generics](/fundamentals/generics/) — when a same-in-every-arm type switch should become a constrained type parameter instead.
+- [Reflection](/fundamentals/reflection/) — the heavier tool for genuinely open-ended types.
+- [Errors](/fundamentals/errors/) — `errors.As` is a type assertion through the wrap chain, and the typed-nil trap is most dangerous with errors.
 
 Next: turning failure into ordinary values — [errors](/fundamentals/errors/).

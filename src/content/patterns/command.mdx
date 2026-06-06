@@ -68,7 +68,7 @@ You want the object that **triggers** an action (a remote button, a menu item) t
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Command {
     <<interface>>
     +Execute()
@@ -98,7 +98,7 @@ The four roles: **Command** (interface), **Concrete command** (`LightOn`, holds 
 
 The invoker keeps an undo stack; each press records the command, each undo pops and reverses it. Edit and **Run**:
 
-<Playground client:visible title="command.go" code={`package main
+<Playground client:visible title="command.go" code={String.raw`package main
 
 import "fmt"
 

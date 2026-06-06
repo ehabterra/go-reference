@@ -67,7 +67,7 @@ s = append(s, 40)
 
 A slice value is a tiny three-field struct. It does **not** contain the elements — it points at them:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   subgraph SH["slice header (s := arr[1:4])"]
     direction TB
     P["ptr →"]
@@ -90,7 +90,7 @@ A slice value is a tiny three-field struct. It does **not** contain the elements
 
 `append` writes into spare capacity when there is some; otherwise it allocates a **bigger backing array**, copies, and returns a slice pointing at the new one. Watch the capacity jump:
 
-<Playground client:visible title="growth.go" code={`package main
+<Playground client:visible title="growth.go" code={String.raw`package main
 
 import "fmt"
 
@@ -113,7 +113,7 @@ If you know the final size, `make([]int, 0, n)` reserves capacity up front and a
 
 Because re-slicing shares the backing array, a write through one slice is visible through another — and `append` can write through too, if there's spare capacity:
 
-<Playground client:visible title="aliasing.go" code={`package main
+<Playground client:visible title="aliasing.go" code={String.raw`package main
 
 import "fmt"
 

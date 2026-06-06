@@ -5,7 +5,7 @@ kind: topic
 order: 7
 difficulty: "Beginner"
 status: ready
-intent: "Go's built-in hash table — make and literals, set/get, the comma-ok test, delete, ranging in random order, sets, and maps of slices."
+intent: "Go's built-in hash table — make and literals, set/get, the comma-ok presence test, delete, len, randomized ranging, sets and maps of slices, allowed key types, the nil-map write panic, concurrency safety, and the maps package."
 related:
   - slices
   - structs
@@ -44,18 +44,40 @@ quiz:
       - text: "It automatically removes duplicates from slices"
         correct: false
     explain: "A set only needs to record presence, not a value. `struct{}` occupies zero bytes, so `map[T]struct{}` stores keys with no per-entry value overhead. Check membership with the comma-ok form. (Using `map[T]bool` works too, just with a wasted byte per entry.)"
+  - q: "What happens when you WRITE to a nil map (`var m map[string]int; m[\"x\"] = 1`)?"
+    options:
+      - text: "It panics at runtime with \"assignment to entry in nil map\""
+        correct: true
+      - text: "It silently does nothing"
+        correct: false
+      - text: "It auto-initializes the map and stores the value"
+        correct: false
+      - text: "It's a compile error"
+        correct: false
+    explain: "A nil map has no backing storage. Reading it is fine (you get zero values and ok=false), but any write panics. You must `make` the map — or use a literal — before storing into it. This is why functions that return maps should return an initialized empty map, not nil, if the caller will write to it."
+  - q: "Which of these can NOT be used as a map key type?"
+    options:
+      - text: "[]string — slices are not comparable, so they can't be keys"
+        correct: true
+      - text: "string"
+        correct: false
+      - text: "A struct of comparable fields"
+        correct: false
+      - text: "int or a pointer"
+        correct: false
+    explain: "A map key type must be comparable with `==`. That rules out slices, maps, and functions (using one as a key is a compile error). Strings, numbers, booleans, pointers, channels, interfaces, and arrays/structs built only from comparable parts are all fine. An array of strings works as a key; a slice of strings does not."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📖 Analogy">
-A map is a dictionary: you look something up by its **key** (the headword) and instantly get its **value** (the definition) — no scanning page by page. The keys are unordered, each appears once, and finding one takes about the same time whether the book has ten entries or ten million.
+A map is a dictionary: you look something up by its **key** (the headword) and instantly get its **value** (the definition) — no scanning page by page. The keys are unordered, each appears once, and finding one takes about the same time whether the book has ten entries or ten million. That last property — near-constant lookup regardless of size — is the whole reason maps exist.
 </Callout>
 
-## Making a map and reading it safely
+## What a map is
 
-Create a map with `make` or a literal; index it with `[key]` to set and get:
+A map is Go's built-in **hash table**: an unordered collection of `key → value` pairs where every key is unique and lookup, insert, and delete are all *average* O(1). You declare one as `map[K]V` — `K` is the key type, `V` the value type. The mental model that keeps you out of trouble: a map is a **reference to a shared header**, not the data itself. Copying a map variable or passing it to a function copies only that header, so both copies point at the *same* underlying buckets — a write through one is visible through the other. (That makes maps feel like [slices](/fundamentals/slices/) and unlike arrays or structs, which copy wholesale.)
 
 ```go
 ages := make(map[string]int) // empty, ready to use
@@ -68,28 +90,36 @@ scores := map[string]int{    // literal with initial entries
 }
 ```
 
-Reading a **missing** key never panics — it returns the value type's zero value. To tell "absent" from "present but zero," use the two-result **comma-ok** form, and remove entries with `delete`:
+Reading a **missing** key never panics — it returns the value type's zero value (`0`, `""`, `nil`, …). To tell "absent" from "present but holding the zero value," use the two-result **comma-ok** form. Remove entries with the built-in `delete`, and ask for the entry count with `len`:
 
 ```go
 v, ok := scores["python"] // v == 0, ok == false
 if ok { /* key was present */ }
-delete(scores, "rust")    // safe even if the key is absent
+delete(scores, "rust")    // safe even if the key is absent — no-op
 n := len(scores)          // number of entries
 ```
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   K["key"] --> H["hash(key)"]
   H --> B["bucket"]
   B --> V["value"]
   M["m[missing]"] --> Z["zero value, ok = false"]`} />
 
-A map's value is found by hashing the key into a bucket. For how that hashing, bucketing, and resizing actually work — and the cost model — see the DSA track's [hash tables](/dsa/hash-tables/).
+## Under the hood: hashing into buckets
 
-## Ranging, sets, and maps of slices
+A map stores its entries in **buckets**. To find a key, the runtime hashes it, uses the low bits of the hash to pick a bucket, then scans that bucket's handful of slots comparing keys. When the table gets too full (a rising *load factor*) it allocates a bigger bucket array and **grows** incrementally, rehashing entries as you touch them. Three practical consequences:
 
-`range` over a map yields key and value in **randomized** order — never rely on it. For stable output, sort the keys first. A map whose values are zero-size `struct{}` is the idiomatic **set**, and a `map[K][]V` groups many values under one key:
+- **Cost is amortized, not guaranteed.** Lookups are O(1) *on average*; an unlucky operation that triggers growth is slower. For latency-sensitive code, pre-size with `make(map[K]V, hint)` so growth happens up front.
+- **Pointers into a map are forbidden.** Because growth moves entries to new memory, the value slot has no stable address — which is exactly why `&m[k]` is a compile error (see the gotcha below).
+- **Iteration order is randomized by design.** The runtime starts each `range` at a random bucket so you can never accidentally depend on order.
 
-<Playground client:visible title="wordcount.go" code={`package main
+For how hashing, bucketing, collisions, and resizing actually work — plus the full cost model — see the DSA track's [hash tables](/dsa/hash-tables/).
+
+## Word count: comma-ok and deterministic output
+
+`range` over a map yields key and value in **randomized** order — it changes between runs of the same program, on purpose. So whenever output must be stable (tests, golden files, anything a human reads), collect the keys, sort them, and iterate the sorted slice:
+
+<Playground client:visible title="wordcount.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -99,24 +129,38 @@ import (
 
 func main() {
 	text := "the cat sat on the mat the cat ran"
-	counts := map[string]int{}
+
+	// A missing key reads as the zero value, so counts[word]++ starts at 0.
+	counts := make(map[string]int)
 	for _, word := range strings.Fields(text) {
-		counts[word]++ // missing key reads as 0, then increments
+		counts[word]++
 	}
 
-	// Map order is random, so sort the keys for deterministic output.
+	// comma-ok distinguishes "absent" from "present but zero".
+	if n, ok := counts["the"]; ok {
+		fmt.Println("the appears", n, "times")
+	}
+	if _, ok := counts["dog"]; !ok {
+		fmt.Println("dog is absent")
+	}
+
+	// Iteration order is randomized — sort the keys for deterministic output.
 	keys := make([]string, 0, len(counts))
 	for k := range counts {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-
 	for _, k := range keys {
 		fmt.Printf("%s: %d\n", k, counts[k])
 	}
+	fmt.Println("distinct words:", len(counts))
 }`} />
 
-<Playground client:visible title="sets-and-groups.go" code={`package main
+## Sets and maps of slices
+
+Two patterns cover an enormous amount of real code. A map whose values are zero-size `struct{}` is the idiomatic **set** — it records *presence* and nothing else, so it costs only the keys. A `map[K][]V` is a **multimap**: it groups many values under one key, and `append` to a missing key Just Works because ranging/appending a nil slice is valid:
+
+<Playground client:visible title="sets-and-groups.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -125,8 +169,8 @@ import (
 
 func main() {
 	// A set: map[T]struct{} stores keys with zero-size values.
-	seen := map[string]struct{}{}
-	for _, w := range []string{"a", "b", "a", "c", "b"} {
+	seen := make(map[string]struct{})
+	for _, w := range []string{"a", "b", "a", "c", "b", "a"} {
 		seen[w] = struct{}{}
 	}
 	if _, ok := seen["a"]; ok {
@@ -134,9 +178,9 @@ func main() {
 	}
 	fmt.Println("unique count:", len(seen))
 
-	// A map of slices groups values under a shared key.
-	byLen := map[int][]string{}
-	for _, w := range []string{"go", "rust", "c", "ada", "java"} {
+	// A map of slices groups many values under one key.
+	byLen := make(map[int][]string)
+	for _, w := range []string{"go", "rust", "c", "ada", "java", "hi"} {
 		n := len(w)
 		byLen[n] = append(byLen[n], w) // append works even on a nil slice
 	}
@@ -151,8 +195,112 @@ func main() {
 	}
 }`} />
 
+## Which key types are allowed
+
+A map key must be **comparable** — usable with `==`. That single rule decides everything:
+
+| Key type | Allowed? | Why |
+|---|---|---|
+| `string`, `int`, `float64`, `bool` | ✅ | Built-in comparable types |
+| Pointers, channels, interfaces | ✅ | Compared by identity / dynamic value |
+| Arrays of comparable elements (`[3]int`) | ✅ | Compared element by element |
+| Structs of comparable fields | ✅ | Compared field by field |
+| **Slices** (`[]string`) | ❌ | Slices are not comparable — compile error |
+| **Maps** | ❌ | Not comparable |
+| **Functions** | ❌ | Not comparable |
+
+So an *array* of strings is a valid key but a *slice* of strings is not. If you genuinely need a slice-like key, convert it to a string (e.g. `strings.Join`) or to an array first. Two subtleties: a `float64` key works but `NaN != NaN`, so a `NaN` key can never be found or deleted; and an interface key panics at *runtime* if the dynamic value turns out to be non-comparable (like a slice).
+
+## The nil map and the write panic
+
+The zero value of a map type is `nil` — a map with no backing storage. You can **read** a nil map freely (every lookup returns the zero value, `len` is 0, ranging does nothing), but any **write panics**. This is a frequent source of "works in tests, panics in prod" bugs, so make the distinction muscle memory:
+
+<Playground client:visible title="nil-map.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// A nil map is fine to READ: lookups return the zero value, len is 0.
+	var m map[string]int // nil, no backing storage
+	fmt.Println("len of nil map:", len(m))
+	fmt.Println("read missing:", m["x"]) // 0, no panic
+	_, ok := m["x"]
+	fmt.Println("present?", ok) // false
+
+	// Writing to a nil map PANICS — recover to prove it, then make it.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Println("write panicked:", r)
+			}
+		}()
+		m["x"] = 1 // panic: assignment to entry in nil map
+	}()
+
+	// The fix: make the map (or use a literal) before writing.
+	m = make(map[string]int)
+	m["x"] = 1
+	fmt.Println("after make:", m["x"])
+}`} />
+
+The lesson for API design: if a function returns a map the caller will write into, return an initialized empty map, not `nil`.
+
+## Concurrency: a plain map is not safe to share
+
+A built-in map is **not** safe for concurrent use when at least one goroutine writes. Concurrent map writes (or a read racing a write) are detected by the runtime and **crash the program** with `fatal error: concurrent map writes` — this is deliberate and *cannot* be recovered. Two fixes:
+
+- **A mutex** (`sync.Mutex` / `sync.RWMutex`) guarding the map — the default choice. Wrap the map and its lock in a struct so every access goes through a locked method. See [the sync package](/concurrency/sync-package/).
+- **`sync.Map`** — a specialized concurrent map for two narrow workloads: keys written once and read many times, or disjoint key sets per goroutine. It trades the type safety of `map[K]V` (its API is `any`-typed) for lock-free reads. For general read-write sharing, a plain map plus an `RWMutex` is usually simpler and faster.
+
+Read-only sharing after construction needs no synchronization: once a map stops being written, any number of goroutines may read it concurrently. The trouble is only concurrent *writes* — see [race conditions](/concurrency/race-conditions/).
+
+## The `maps` package (Go 1.21+)
+
+The standard `maps` package adds the operations the language leaves out. Note that in Go 1.23+ `maps.Keys` and `maps.Values` return an **iterator** (`iter.Seq`), not a slice — collect with `slices.Collect` and `slices.Sort` it when you need order:
+
+<Playground client:visible title="maps-package.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"maps"
+	"slices"
+)
+
+func main() {
+	src := map[string]int{"go": 1, "rust": 2, "zig": 3}
+
+	// maps.Clone makes a shallow copy — edits to the copy don't touch src.
+	dst := maps.Clone(src)
+	dst["go"] = 99
+	fmt.Println("src unchanged:", src["go"]) // 1
+
+	// maps.Equal compares two maps by keys and values.
+	fmt.Println("equal to clone now?", maps.Equal(src, dst)) // false
+
+	// maps.Keys returns an ITERATOR (iter.Seq), not a slice.
+	// Collect it, then sort, for deterministic output.
+	keys := slices.Collect(maps.Keys(src))
+	slices.Sort(keys)
+	fmt.Println("sorted keys:", keys)
+
+	// maps.Values is also an iterator; sum without caring about order.
+	sum := 0
+	for v := range maps.Values(src) {
+		sum += v
+	}
+	fmt.Println("sum of values:", sum)
+}`} />
+
+Also handy: `maps.Copy(dst, src)` merges entries, and `maps.DeleteFunc(m, pred)` removes matching keys. `Clone` and `Copy` are **shallow** — if `V` is a slice or pointer, both maps share the pointed-to data.
+
+## When to reach for a map
+
+- **Use a map** for keyed lookup, deduplication (a set), counting/grouping, caches, and any "find by id" access where you don't care about order.
+- **Use a [slice](/fundamentals/slices/) instead** when order matters, when you'll iterate far more than you look up, or when the collection is tiny — a linear scan of a few elements beats a map's hashing overhead and uses less memory.
+- **Reach for a [struct](/fundamentals/structs/)** when the set of fields is fixed and known at compile time; a map with string keys for fixed fields throws away type checking.
+
 <Callout type="gotcha" title="⚠️ You can't take the address of a map element">
-A map value isn't addressable, so `&m[k]` is a compile error and `m[k].Field = x` won't compile when the value is a struct — the map hands back a *copy*. To update a struct in a map, read it out, change the copy, and write it back: `v := m[k]; v.Field = x; m[k] = v`. (Or store pointers: `map[K]*T`.) Also: a `nil` map can be *read* but **panics on write** — always `make` it first.
+A map value isn't addressable, so `&m[k]` is a compile error and `m[k].Field = x` won't compile when the value is a struct — the map hands back a *copy*. To update a struct in a map, read it out, change the copy, and write it back: `v := m[k]; v.Field = x; m[k] = v`. (Or store pointers: `map[K]*T`, then `m[k].Field = x` works because you're mutating through the pointer.) The root cause is the same one from the internals section: growth relocates entries, so an element has no stable address to point at.
 </Callout>
 
 Next: text up close, bytes and runes and UTF-8 — [strings & runes](/fundamentals/strings-and-runes/).

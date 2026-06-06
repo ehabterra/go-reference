@@ -57,7 +57,7 @@ If a `string` is a sealed, read-only ribbon of text, the `strings` package is th
 
 A flat set of functions over immutable strings — search, split, transform:
 
-<Playground client:visible title="strings.go" code={`package main
+<Playground client:visible title="strings.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -80,7 +80,7 @@ func main() {
 
 A `string` is **immutable**, so `s += more` allocates a whole new string every time — quadratic in a loop. `strings.Builder` writes into one growing buffer:
 
-<Playground client:visible title="builder.go" code={`package main
+<Playground client:visible title="builder.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -98,7 +98,7 @@ func main() {
 
 ## bytes and strconv
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   STR["string (immutable)"] <-->|"[]byte(s) / string(b)"| BYT["[]byte (mutable)"]
   STR -->|"strconv.Atoi / Itoa"| NUM["int, float, bool"]
   STR --- P1["strings.* funcs"]

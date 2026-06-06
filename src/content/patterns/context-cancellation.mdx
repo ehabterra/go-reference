@@ -68,7 +68,7 @@ A request spawns goroutines, which spawn more. When the request is cancelled —
 
 ## Structure
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   B["context.Background()"] --> T["WithTimeout(100ms)"]
   T --> W1["worker 1<br/>select ctx.Done()"]
   T --> W2["worker 2<br/>select ctx.Done()"]
@@ -79,7 +79,7 @@ A request spawns goroutines, which spawn more. When the request is cancelled —
 
 `ctx` is the first parameter; workers select on `ctx.Done()`. A timeout cancels the whole tree automatically. Edit and **Run**:
 
-<Playground client:visible title="context.go" code={`package main
+<Playground client:visible title="context.go" code={String.raw`package main
 
 import (
 	"context"

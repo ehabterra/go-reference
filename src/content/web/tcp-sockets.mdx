@@ -57,7 +57,7 @@ TCP is a phone call: you dial, a circuit opens, and everything you say arrives a
 
 Go's `net` package models a TCP connection as a `net.Conn` — which is just an `io.Reader` **and** an `io.Writer` with an address and deadlines. A server **listens** and **accepts**; a client **dials**:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   C["client<br/>net.Dial"] -->|"3-way handshake"| S["server<br/>net.Listen + Accept"]
   C -->|"Write bytes →"| S
   S -->|"← Write bytes"| C
@@ -85,7 +85,7 @@ fmt.Fprintln(conn, "hello")
 
 Real sockets need a network, but a `net.Conn` is an *interface* — so we can exercise the exact same Read/Write mechanics **in memory** with `net.Pipe()`, which returns two connected ends. This runs anywhere, no network involved:
 
-<Playground client:visible title="conn.go" code={`package main
+<Playground client:visible title="conn.go" code={String.raw`package main
 
 import (
 	"bufio"

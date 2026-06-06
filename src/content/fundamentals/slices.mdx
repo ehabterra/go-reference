@@ -5,7 +5,7 @@ kind: topic
 order: 6
 difficulty: "Beginner"
 status: ready
-intent: "Go's go-to list type — literals and make, len vs cap, append and growth, the s[a:b] window, nil vs empty, ranging, and 2-D slices."
+intent: "Go's go-to list type — the (ptr,len,cap) header, make, append and amortized growth, the s[a:b] window and the full three-index slice, the aliasing trap, copy, nil vs empty, ranging, 2-D slices, insert/delete idioms, and the slices package."
 related:
   - structs
   - maps
@@ -44,14 +44,56 @@ quiz:
       - text: "a and b are unrelated"
         correct: false
     explain: "Slicing creates a new window over the *same* backing array, not a copy. Mutating an element through one slice is visible through the other where they overlap. Use copy() or append to a fresh slice when you need independence."
+  - q: "What does the three-index slice expression `s[a:b:c]` control that `s[a:b]` does not?"
+    options:
+      - text: "The capacity of the result (c-a), which caps how far append can write before it must reallocate"
+        correct: true
+      - text: "The element type"
+        correct: false
+      - text: "Whether the slice is sorted"
+        correct: false
+      - text: "Nothing — it's the same as s[a:b]"
+        correct: false
+    explain: "`s[a:b:c]` sets len to b-a and cap to c-a. By capping capacity (often `s[a:b:b]`) you guarantee the next append reallocates instead of writing through into the shared backing array — the standard fix for the aliasing trap."
+  - q: "Why is appending N elements one at a time still amortized O(1) per append?"
+    options:
+      - text: "Capacity grows geometrically (roughly doubling), so reallocations get rarer as the slice grows; total copying is O(N) across all appends"
+        correct: true
+      - text: "append never copies"
+        correct: false
+      - text: "Each append copies the whole slice, so it's O(N) each"
+        correct: false
+      - text: "Go pre-allocates infinite capacity"
+        correct: false
+    explain: "Because cap grows by a multiplicative factor, the expensive copy-on-grow happens at exponentially spaced sizes. Summing the copies over N appends totals O(N), i.e. O(1) amortized each. Pre-sizing with make([]T, 0, N) avoids even those copies."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🪟 Analogy">
-A slice is a **window** onto a row of boxes (the backing array). The window knows where it starts, how many boxes it currently shows (`len`), and how many it *could* show before needing a bigger row (`cap`). Slide or resize the window and you're still looking at the same boxes — until you grow past the edge and Go quietly rents a longer row.
+A slice is a **window** onto a row of boxes (the backing array). The window knows where it starts, how many boxes it currently shows (`len`), and how many it *could* show before needing a bigger row (`cap`). Slide or resize the window and you're still looking at the same boxes — until you grow past the edge and Go quietly rents a longer row and moves your boxes into it.
 </Callout>
+
+## What a slice is
+
+A slice is Go's everyday list: a growable, ordered view over a contiguous block of elements. Unlike a fixed-size **array** (`[3]int`, whose length is part of its type), a slice's length is dynamic. You'll use slices for almost all sequence data; arrays are a low-level building block underneath.
+
+### The mental model: a three-word header
+
+The key to understanding *every* slice behavior — sharing, growth, the aliasing trap — is that a slice value is **not** the data. It's a small, three-word **header** that describes a window:
+
+<Mermaid code={String.raw`graph LR
+  HDR["slice header (3 words)"] --> P["ptr → element 0 of the window"]
+  HDR --> L["len → elements visible now"]
+  HDR --> C["cap → elements from ptr to end of backing array"]
+  P --> ARR["backing array: 10 20 30 40 50"]`} />
+
+- **ptr** points at the first element the window shows (not necessarily the start of the array).
+- **len** is how many elements you can index — `s[0]` through `s[len-1]`.
+- **cap** is how many elements exist from `ptr` to the end of the backing array — the room to grow before a reallocation is forced.
+
+Because the header is tiny and fixed-size, passing a slice to a function is cheap (it copies three words, not the data). But that copy still points at the **same backing array** — which is exactly why a function can mutate your elements through its own copy of the header.
 
 ## Making and growing slices
 
@@ -63,7 +105,7 @@ var empty []int              // nil slice: len 0, cap 0, ready to append
 buf := make([]int, 0, 8)     // len 0, but room for 8 before regrowing
 ```
 
-`len(s)` is how many elements you have; `cap(s)` is how many fit before the backing array must grow. `append` adds elements and **returns** the (possibly relocated) slice, so you always assign it back:
+`make([]T, len, cap)` is the tool for **pre-sizing**: if you know you'll add ~N elements, `make([]T, 0, N)` allocates once and skips every regrowth. `append` adds elements and **returns** the (possibly relocated) slice, so you always assign it back:
 
 ```go
 s := []int{1, 2}
@@ -72,52 +114,120 @@ s = append(s, 4, 5)     // append several at once
 s = append(s, other...) // spread another slice in
 ```
 
-## Slicing: a window over a backing array
+### Growth is amortized O(1)
 
-`s[a:b]` makes a new slice covering indices `a` up to **but not including** `b`. It's a view, not a copy — both slices share the same underlying array, so a write through one is seen by the other where they overlap:
+When an `append` exceeds `cap`, Go allocates a **bigger backing array** (growing by a multiplicative factor — roughly doubling for small slices, tapering toward ~1.25× for large ones) and copies the existing elements over. Because capacity grows geometrically, those copies happen at exponentially spaced sizes, so the *total* work to append N elements is O(N) — **amortized O(1) per append**. The visible cost is that `append` may **relocate** the slice, which is the entire reason it returns a new header you must keep.
 
-<Mermaid code={`graph LR
-  ARR["backing array: 10 20 30 40 50"] --> A["a = s[0:5]  len 5"]
-  ARR --> B["b = s[1:3]  len 2 (shares 20,30)"]`} />
-
-A slice is really a small three-word header — a **pointer** to the backing array plus `len` and `cap`. For the exact memory layout, the growth strategy (roughly doubling), and the aliasing pitfalls in depth, see the DSA track's [arrays & slices](/dsa/arrays-and-slices/). Here we stay at the language level.
-
-<Playground client:visible title="slices.go" code={`package main
+<Playground client:visible title="append-growth.go" code={String.raw`package main
 
 import "fmt"
 
 func main() {
+	// make([]T, len, cap): zero length, room for 2 before regrowing.
 	s := make([]int, 0, 2)
-	fmt.Printf("start: len=%d cap=%d %v\n", len(s), cap(s), s)
+	fmt.Printf("start:    len=%d cap=%d %v\\n", len(s), cap(s), s)
 
-	for i := 1; i <= 4; i++ {
-		s = append(s, i*10) // watch cap jump as it grows
-		fmt.Printf("after append %d: len=%d cap=%d %v\n", i, len(s), cap(s), s)
+	for i := 1; i <= 5; i++ {
+		s = append(s, i*10) // ALWAYS assign the result back
+		fmt.Printf("append %d: len=%d cap=%d %v\\n", i, len(s), cap(s), s)
 	}
 
-	// A slice of a slice shares the same backing array.
-	window := s[1:3]
-	fmt.Println("window:", window) // [20 30]
-	window[0] = 99                 // mutate through the window...
-	fmt.Println("s now:", s)       // ...visible in s: [10 99 30 40]
+	// Growth is amortized O(1): when cap is exceeded, Go allocates a bigger
+	// backing array (roughly doubling for small slices) and copies elements over.
+	// That is why append may RELOCATE the slice and must return a new header.
 }`} />
 
-## Ranging and 2-D slices
+The exact growth factors are an implementation detail — never write code that depends on a specific `cap` after `append`. For the precise memory layout and cost analysis, see the DSA track's [arrays & slices](/dsa/arrays-and-slices/).
 
-`range` gives you index and value; use the blank identifier `_` to drop either. A slice of slices builds a grid — each inner slice is independent and can have its own length (a "jagged" 2-D shape):
+## Slicing: a window over a backing array
 
-<Playground client:visible title="grid.go" code={`package main
+`s[a:b]` makes a new slice covering indices `a` up to **but not including** `b` (length `b-a`). It's a **view, not a copy** — both slices share the same backing array, so a write through one is seen by the other where they overlap. Importantly, the sub-slice's `cap` extends to the *end of the original array*, not to `b`:
+
+```go
+a := []int{10, 20, 30, 40, 50}
+b := a[1:3]   // [20 30], len 2, but cap 4 (reaches to the end of a)
+```
+
+The **three-index** form `s[a:b:c]` adds control over capacity: `len` is `b-a` and `cap` is `c-a`. Using `s[a:b:b]` caps the window so it has *no spare room*, which forces the next `append` to reallocate instead of writing into the shared array — the standard fix for the trap below.
+
+### The aliasing trap
+
+Because a sub-slice shares the parent's array, `append`ing to the sub-slice can **overwrite the parent's elements** if there's spare capacity — a silent, capacity-dependent bug. Capping capacity with the three-index form prevents it:
+
+<Playground client:visible title="aliasing-trap.go" code={String.raw`package main
 
 import "fmt"
 
 func main() {
-	names := []string{"Ada", "Linus", "Grace"}
-	for i, name := range names {
-		fmt.Printf("%d: %s\n", i, name)
-	}
+	// THE TRAP: a sub-slice shares the parent's backing array. If the sub-slice
+	// has spare capacity, append WRITES THROUGH into the parent.
+	parent := []int{1, 2, 3, 4, 5}
+	sub := parent[1:3] // [2 3], but cap reaches to the end of parent (cap 4)
+	fmt.Printf("sub: %v  len=%d cap=%d\\n", sub, len(sub), cap(sub))
 
-	// 2-D slice: a slice of []int rows.
-	grid := make([][]int, 3)
+	sub = append(sub, 99) // spare cap -> overwrites parent[3] in place!
+	fmt.Println("parent after append to sub:", parent)
+
+	// THE FIX: a full three-index slice s[a:b:c] caps the sub-slice's capacity
+	// at c-a, so the next append is forced to allocate a fresh array.
+	parent2 := []int{1, 2, 3, 4, 5}
+	safe := parent2[1:3:3] // len 2, cap 2 -> no spare room
+	fmt.Printf("safe: %v  len=%d cap=%d\\n", safe, len(safe), cap(safe))
+
+	safe = append(safe, 99) // must reallocate; parent2 is untouched
+	fmt.Println("parent2 stays:", parent2)
+	fmt.Println("safe now:     ", safe)
+}`} />
+
+## copy, nil vs empty, and ranging
+
+`copy(dst, src)` copies `min(len(dst), len(src))` elements between slices and returns the count — the explicit way to get an **independent** slice with no shared backing array.
+
+A **nil** slice (`var s []int`) and an **empty** slice (`[]int{}`) behave almost identically: both have `len 0`, both range over nothing, both accept `append`. The only observable differences are that a nil slice is `== nil` and marshals to JSON `null`, while `[]int{}` marshals to `[]`. Idiomatic Go prefers **nil as the empty default**.
+
+`range` yields index and value; use `_` to drop either. (Since Go 1.22, the loop variable is per-iteration, so capturing it in a closure or goroutine no longer shares one aliased variable.)
+
+<Playground client:visible title="copy-nil-range.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"slices"
+)
+
+func main() {
+	// nil vs empty: both have len 0 and accept append; only == nil and JSON differ.
+	var nilSlice []int
+	emptySlice := []int{}
+	fmt.Println("nil == nil:", nilSlice == nil, " empty == nil:", emptySlice == nil)
+
+	// range gives index + value; _ drops either.
+	letters := []string{"a", "b", "c"}
+	for i, v := range letters {
+		fmt.Printf("%d=%s ", i, v)
+	}
+	fmt.Println()
+
+	// DELETE index 2 from [10 20 30 40 50] by shifting the tail left with copy().
+	s := []int{10, 20, 30, 40, 50}
+	i := 2
+	s = append(s[:i], s[i+1:]...) // classic delete-from-middle idiom
+	fmt.Println("after delete:", s)
+	// The same, more readable, with the slices package (Go 1.21+):
+	s2 := slices.Delete([]int{10, 20, 30, 40, 50}, 2, 3)
+	fmt.Println("slices.Delete:", s2)
+
+	// INSERT 99 at index 1.
+	s3 := slices.Insert([]int{10, 20, 30}, 1, 99)
+	fmt.Println("after insert:", s3)
+
+	// copy() makes an independent slice (no shared backing array).
+	dst := make([]int, len(s3))
+	n := copy(dst, s3)
+	dst[0] = -1
+	fmt.Printf("copied %d elems; dst=%v src untouched=%v\\n", n, dst, s3)
+
+	// 2-D slice: a slice of rows. Rows can have different lengths (jagged).
+	grid := make([][]int, 2)
 	for r := range grid {
 		grid[r] = make([]int, 3)
 		for c := range grid[r] {
@@ -129,8 +239,87 @@ func main() {
 	}
 }`} />
 
+### Insert and delete idioms
+
+These are worth memorizing — and worth replacing with the `slices` package helpers where you can:
+
+| Operation | Hand-rolled idiom | `slices` helper (Go 1.21+) |
+|---|---|---|
+| Delete index `i` | `s = append(s[:i], s[i+1:]...)` | `slices.Delete(s, i, i+1)` |
+| Delete range `[i:j)` | `s = append(s[:i], s[j:]...)` | `slices.Delete(s, i, j)` |
+| Insert `x` at `i` | `s = append(s[:i], append([]T{x}, s[i:]...)...)` | `slices.Insert(s, i, x)` |
+| Pop last | `x, s = s[len(s)-1], s[:len(s)-1]` | — |
+| Copy out | `d := make([]T, len(s)); copy(d, s)` | `slices.Clone(s)` |
+
+The hand-rolled delete shifts the tail down and reuses the backing array. Watch out: it leaves a now-unused element at the old tail still referenced by the array — if elements are pointers, `slices.Delete` (which zeroes the freed slot) avoids a memory leak.
+
+## 2-D slices
+
+There's no built-in 2-D slice; you build a **slice of slices**. Each inner slice is independently allocated, so rows can have different lengths (a "jagged" grid) — and you must allocate each row before indexing into it:
+
+```go
+grid := make([][]int, rows)
+for r := range grid {
+	grid[r] = make([]int, cols) // each row is its own backing array
+}
+```
+
+The example above builds and fills one. For dense, rectangular numeric data where cache locality matters, a single flat `[]T` of size `rows*cols` indexed as `flat[r*cols+c]` is faster — but the slice-of-slices form is clearer and almost always fine.
+
+## The `slices` package
+
+Since **Go 1.21**, the standard library `slices` package provides generic helpers so you stop hand-rolling these. The essentials:
+
+| Function | Does |
+|---|---|
+| `slices.Contains(s, x)` | is `x` present? |
+| `slices.Index(s, x)` | first index of `x`, or `-1` |
+| `slices.Sort(s)` | sort ascending, in place |
+| `slices.Clone(s)` | independent shallow copy |
+| `slices.Equal(a, b)` | element-by-element equality |
+| `slices.Insert` / `slices.Delete` | insert/delete in place |
+| `slices.Reverse(s)` | reverse in place |
+| `slices.Max` / `slices.Min` | extremes of a non-empty slice |
+
+<Playground client:visible title="slices-package.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"slices"
+)
+
+func main() {
+	nums := []int{30, 10, 20, 10}
+
+	// Sort in place (ascending) with the generic slices.Sort.
+	slices.Sort(nums)
+	fmt.Println("sorted:", nums)
+
+	// Contains / Index work on any comparable element type.
+	fmt.Println("contains 20?", slices.Contains(nums, 20))
+	fmt.Println("index of 20:", slices.Index(nums, 20))
+
+	// Clone makes an independent shallow copy (its own backing array).
+	dup := slices.Clone(nums)
+	dup[0] = 999
+	fmt.Println("clone changed:", dup)
+	fmt.Println("original safe:", nums)
+
+	// Equal compares element-by-element (length + each value).
+	fmt.Println("equal to sorted self?", slices.Equal(nums, []int{10, 10, 20, 30}))
+}`} />
+
+`slices.Clone` is a **shallow** copy: it gives a fresh backing array but, if elements are slices/maps/pointers, those references are shared — the same aliasing caveat as everywhere else.
+
 <Callout type="gotcha" title="⚠️ append can alias — or surprise you">
-Because slices share a backing array, `append`ing to a sub-slice can overwrite elements of the parent **if there's spare capacity** — and once `append` reallocates, the two stop sharing. The result depends on capacity, which is easy to get wrong. When you need an independent copy, allocate and `copy()`, or append into a fresh `nil` slice. The full aliasing rules live in [arrays & slices](/dsa/arrays-and-slices/).
+Because slices share a backing array, `append`ing to a sub-slice can overwrite elements of the parent **if there's spare capacity** — and once `append` reallocates, the two silently stop sharing. The result depends on `cap`, which is easy to get wrong. When you need an independent copy, `slices.Clone` or `copy()` into a fresh slice; when you must keep appending to a sub-slice without touching the parent, cap it with the three-index expression `s[a:b:b]`. The full aliasing rules and cost analysis live in [arrays & slices](/dsa/arrays-and-slices/).
 </Callout>
+
+## See also
+
+- [Arrays & slices (DSA)](/dsa/arrays-and-slices/) — memory layout, growth strategy, and cost depth.
+- [Structs](/fundamentals/structs/) — the element type you'll most often store in a slice; note its shallow-copy semantics interact with slice fields.
+- [Maps](/fundamentals/maps/) — the other built-in collection, for key-value lookups.
+- [Strings & runes](/fundamentals/strings-and-runes/) — a string is an immutable byte slice; `[]byte(s)` and `[]rune(s)` convert.
 
 Next: key-value lookups in (amortized) constant time — [maps](/fundamentals/maps/).

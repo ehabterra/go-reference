@@ -165,7 +165,7 @@ gRPC runs over **HTTP/2**, whose multiplexed, long-lived streams unlock four cal
 
 In Go, streaming methods hand you a stream object: you loop calling `stream.Send(msg)` and `stream.Recv()` instead of returning a single value.
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant C as Client stub<br/>(generated)
   participant S as Server impl<br/>(your code)
   Note over C,S: single HTTP/2 connection, multiplexed

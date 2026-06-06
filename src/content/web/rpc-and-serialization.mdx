@@ -67,7 +67,7 @@ Every value lives in memory as pointers, headers, and layout the running program
 
 `gob` is the encoding Go reaches for when both sides are Go. Here's a complete round-trip with **no network at all** — encode a value into a `bytes.Buffer`, decode it straight back, and confirm the value survived. This runs anywhere:
 
-<Playground client:visible title="gob.go" code={`package main
+<Playground client:visible title="gob.go" code={String.raw`package main
 
 import (
 	"bytes"
@@ -113,7 +113,7 @@ Swap `gob` for `json` and the code is nearly identical — `json.NewEncoder(&buf
 
 Go ships an RPC framework in the standard library: `net/rpc`. You register a type whose methods follow one shape — `func (t *T) Method(args A, reply *B) error` — and the server exposes them over a connection. A client then calls `client.Call("T.Method", args, &reply)` and it feels like a local call. By default the wire format is **gob**; `net/rpc/jsonrpc` swaps in **JSON-RPC** so non-Go clients can talk to it.
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant C as Client
   participant E as Encoder (gob / json)
   participant S as Server (registered methods)

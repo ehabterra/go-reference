@@ -63,7 +63,7 @@ Any sort that works by **comparing pairs** of elements has a hard floor: there a
 
 Merge sort splits the slice in half, sorts each half recursively, then **merges** the two sorted halves by repeatedly taking the smaller front element. It's **stable** (equal elements keep their original order) and always O(n log n) — but it needs O(n) scratch space for the merge.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["[5, 2, 8, 1]"] --> B["[5, 2]"]
   A --> C["[8, 1]"]
   B --> D["[2, 5]"]
@@ -71,7 +71,7 @@ Merge sort splits the slice in half, sorts each half recursively, then **merges*
   D --> F["merge → [1, 2, 5, 8]"]
   E --> F`} />
 
-<Playground client:visible title="mergesort.go" code={`package main
+<Playground client:visible title="mergesort.go" code={String.raw`package main
 
 import "fmt"
 
@@ -146,7 +146,7 @@ You almost never write the loops above in production. The standard library's sor
 
 Neither is stable; use `slices.SortStableFunc` or `sort.SliceStable` when equal elements must keep their input order.
 
-<Playground client:visible title="sortstructs.go" code={`package main
+<Playground client:visible title="sortstructs.go" code={String.raw`package main
 
 import (
 	"fmt"

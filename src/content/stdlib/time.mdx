@@ -57,7 +57,7 @@ The `time` package gives you three instruments in one: a **calendar** (a `time.T
 
 A `time.Time` is an instant; a `time.Duration` is a span of nanoseconds with friendly constants:
 
-<Playground client:visible title="time.go" code={`package main
+<Playground client:visible title="time.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -83,7 +83,7 @@ func main() {
 
 ## The reference layout
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   REF["Mon Jan 2 15:04:05 MST 2006"] --> N["01 / 02   03:04:05 PM   2006   -0700"]
   N --> SEQ["the sequence 1 2 3 4 5 6 7 — memorize it"]`} />
 
@@ -91,7 +91,7 @@ Rather than `%Y-%m-%d` codes, Go uses **one reference instant** — `01/02 03:04
 
 ## Durations, timers and the stopwatch
 
-<Playground client:visible title="duration.go" code={`package main
+<Playground client:visible title="duration.go" code={String.raw`package main
 
 import (
 	"fmt"

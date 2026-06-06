@@ -5,7 +5,7 @@ kind: topic
 order: 8
 difficulty: "Beginner"
 status: ready
-intent: "Strings are immutable UTF-8 bytes — why len counts bytes not characters, why indexing gives a byte, and how runes, []byte, and strings.Builder fit together."
+intent: "Strings are immutable UTF-8 bytes — why len counts bytes not characters, why indexing gives a byte, how runes and []byte and []rune conversions copy, strings.Builder, the text packages, and where runes stop (grapheme clusters)."
 related:
   - slices
   - variables-and-types
@@ -44,6 +44,28 @@ quiz:
       - text: "i is the rune and r is its width"
         correct: false
     explain: "Ranging a string decodes UTF-8 for you: each step gives the starting *byte offset* of a character and the character itself as a rune (int32). That's why the index can jump by more than 1 across multi-byte characters."
+  - q: "What's the difference between `[]byte(s)` and `[]rune(s)`?"
+    options:
+      - text: "[]byte gives the raw UTF-8 bytes; []rune decodes into one int32 per character — both allocate a copy"
+        correct: true
+      - text: "They produce identical results"
+        correct: false
+      - text: "[]rune is a free view into the string's memory"
+        correct: false
+      - text: "[]byte decodes characters and []rune gives raw bytes"
+        correct: false
+    explain: "`[]byte(s)` is the exact UTF-8 byte sequence, so its length equals len(s). `[]rune(s)` decodes UTF-8 into code points, so its length is the character count. Both conversions allocate and COPY (a string is immutable, so the runtime can't hand out a mutable alias into it)."
+  - q: "Why prefer `strings.Builder` over `s += other` inside a loop?"
+    options:
+      - text: "+= allocates a brand-new string each iteration (O(n²) total); Builder writes into one growable buffer (O(n))"
+        correct: true
+      - text: "Builder is the only way to concatenate strings"
+        correct: false
+      - text: "+= doesn't compile inside a loop"
+        correct: false
+      - text: "Builder makes the result mutable afterward"
+        correct: false
+    explain: "Because strings are immutable, `s += other` must copy all of s plus other into a new string every time — repeated in a loop that's quadratic. strings.Builder appends into a reusable, growing byte buffer and produces the final string once, so building an n-character string is linear."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -53,33 +75,38 @@ import Playground from '../../components/islands/Playground.tsx';
 A string is a sealed strip of **bytes** — like film: the strip never changes (it's immutable), and what looks like one "picture" (a character) might span several frames (bytes). Reading frame-by-frame gives you raw bytes; reading picture-by-picture (with `range`) decodes UTF-8 and hands you whole characters, called **runes**.
 </Callout>
 
-## Bytes vs characters
+## What a string really is
 
-A Go string is an immutable sequence of bytes that, by convention, holds **UTF-8** text. Two consequences trip up newcomers:
+A Go string is two things in a trench coat: a **pointer to some bytes** and a **length**. Those bytes are, by convention, **UTF-8**-encoded text, and the whole thing is **immutable** — once created, the bytes never change. Immutability is what makes strings cheap to pass around (copying a string copies the pointer-and-length header, not the bytes) and safe to share across goroutines without locks. It's also why two ideas that beginners assume are the same one are actually different:
 
 - `len(s)` is the number of **bytes**, not characters.
 - `s[i]` is the **byte** at offset `i` (type `byte`, an alias for `uint8`) — for a multi-byte character it's just one fragment.
 
-For pure ASCII the two notions coincide, but the moment text contains accents or non-Latin scripts they diverge:
+For pure ASCII the two notions coincide, because every ASCII character is exactly one byte. The moment text contains accents or non-Latin scripts they diverge:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   S["string: He + world (世界)"] --> BY["bytes: len counts these"]
   S --> RU["runes: whole characters"]
   BY -. "ASCII = 1 byte" .-> RU
   BY -. "世 = 3 bytes" .-> RU`} />
 
-Because strings are immutable, you can't assign `s[i] = 'x'`. To edit text, convert to a `[]byte` or `[]rune`, change that, and convert back.
+Because strings are immutable, `s[i] = 'x'` is a compile error. To edit text, convert to a `[]byte` or `[]rune`, mutate that, and convert back.
 
-## Runes, conversions, and ranging
+## bytes, runes, and conversions that copy
 
-A **rune** is an `int32` holding one Unicode code point; a **byte** is a `uint8`. Two conversions matter:
+Two named integer types do the heavy lifting:
 
-- `[]byte(s)` — the raw UTF-8 bytes (cheap, exact bytes).
+- **`byte`** is an alias for `uint8` — one octet of UTF-8.
+- **`rune`** is an alias for `int32` — one Unicode **code point** (the number behind a character, like `U+4E16` for 世).
+
+And two conversions turn a string into something mutable:
+
+- `[]byte(s)` — the raw UTF-8 bytes; `len([]byte(s)) == len(s)`.
 - `[]rune(s)` — one element per character, so `len([]rune(s))` is the character count.
 
-Ranging a string decodes UTF-8 as it goes: each step yields the **byte offset** where a character starts and the character as a **rune**:
+**Both conversions allocate and copy.** A string is immutable, so the runtime cannot legally hand you a mutable slice aliasing its bytes — it must duplicate them. (The compiler optimizes a few special cases, like `[]byte(s)` used only as a `range` or map-key, but assume a copy.) Ranging a string is the cheap way to walk characters without that allocation — it decodes UTF-8 in place, yielding the **byte offset** where each character starts and the character as a **rune**:
 
-<Playground client:visible title="runes.go" code={`package main
+<Playground client:visible title="runes.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -89,26 +116,27 @@ import (
 func main() {
 	s := "Héllo, 世界"
 
-	// len is BYTES; rune count is CHARACTERS — they differ here.
-	fmt.Println("byte len:   ", len(s))
-	fmt.Println("rune count: ", utf8.RuneCountInString(s))
+	// len is BYTES; RuneCountInString is CHARACTERS — they differ here.
+	fmt.Println("byte len:   ", len(s))                    // 14
+	fmt.Println("rune count: ", utf8.RuneCountInString(s)) // 9
 
-	// Indexing gives a single byte, not a character.
-	fmt.Printf("s[0] = %d (%c)\n", s[0], s[0])
+	// Indexing yields a single byte (uint8), not a character.
+	fmt.Printf("s[0] = %d (%c)\n", s[0], s[0]) // 72 (H)
+	fmt.Printf("s[1] = %d\n", s[1])            // 195: first byte of é, not a char
 
-	// range decodes UTF-8: i is the byte offset, r is the rune.
+	// range decodes UTF-8: i is the starting byte offset, r is the rune.
 	for i, r := range s {
-		fmt.Printf("offset %d: %c (U+%04X)\n", i, r, r)
+		fmt.Printf("offset %2d: %c (U+%04X, %d bytes)\n", i, r, r, utf8.RuneLen(r))
 	}
 }`} />
 
-Notice the offset jumps by more than 1 across `é` (2 bytes) and the CJK characters (3 bytes each) — proof that one character is not one byte.
+Notice the offset jumps by more than 1 across `é` (2 bytes) and the CJK characters (3 bytes each) — proof that one character is not one byte. The byte length is **14**, the rune count is **9**.
 
 ## Building strings efficiently
 
-Strings are immutable, so `a + b` in a loop allocates a fresh string every time. For repeated concatenation use `strings.Builder`, which writes into a growable buffer and produces the final string once. The `strings`, `unicode`, and `unicode/utf8` packages cover most text work:
+Strings are immutable, so `s += other` in a loop must allocate a *fresh* string each iteration, copying everything so far — building an n-character string that way is **O(n²)**. `strings.Builder` writes into a single growable byte buffer and produces the final string once, so the same job is **O(n)**:
 
-<Playground client:visible title="builder.go" code={`package main
+<Playground client:visible title="builder.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -118,24 +146,107 @@ import (
 func main() {
 	words := []string{"go", "is", "fun"}
 
+	// += in a loop reallocates each time (quadratic). Builder writes into
+	// one growable buffer and produces the final string once.
 	var b strings.Builder
 	for i, w := range words {
 		if i > 0 {
-			b.WriteByte(' ') // write bytes/strings/runes into the buffer
+			b.WriteByte(' ') // bytes, strings, and runes can all be written
 		}
 		b.WriteString(strings.ToUpper(w))
 	}
 	sentence := b.String() // materialize the result once
 	fmt.Println(sentence)  // GO IS FUN
 
-	// A few handy strings helpers:
-	fmt.Println(strings.Contains(sentence, "FUN"))   // true
-	fmt.Println(strings.Split("a,b,c", ","))          // [a b c]
+	// A few everyday strings helpers.
+	fmt.Println(strings.Contains(sentence, "FUN"))     // true
+	fmt.Println(strings.Split("a,b,c", ","))           // [a b c]
 	fmt.Println(strings.ReplaceAll("ababa", "a", "_")) // _b_b_
+	fmt.Println(strings.Fields("  spaced   out  "))    // [spaced out]
 }`} />
 
+## The four text packages
+
+Most string work is covered by four standard packages — know which one owns what:
+
+| Package | Owns | Examples |
+|---|---|---|
+| `strings` | Searching, splitting, replacing, casing, the `Builder` | `Contains`, `Split`, `ToUpper`, `TrimSpace`, `Builder` |
+| `strconv` | Converting between strings and numbers/bools (with errors) | `Atoi`, `Itoa`, `ParseFloat`, `FormatInt`, `Quote` |
+| `unicode` | Classifying a single rune | `IsLetter`, `IsDigit`, `IsSpace`, `ToUpper(rune)` |
+| `unicode/utf8` | The encoding itself: rune ↔ byte | `RuneCountInString`, `DecodeRuneInString`, `RuneLen`, `ValidString` |
+
+A small tour of `strconv` and `unicode`:
+
+<Playground client:visible title="strconv-unicode.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"strconv"
+	"unicode"
+)
+
+func main() {
+	// strconv bridges strings and numbers — and reports errors.
+	n, err := strconv.Atoi("42")
+	fmt.Println(n, err) // 42 <nil>
+	_, err = strconv.Atoi("4x2")
+	fmt.Println("bad parse error?", err != nil)                // true
+	fmt.Println(strconv.Itoa(255), strconv.FormatInt(255, 16)) // 255 ff
+
+	// Quote shows the escaped, double-quoted form of a string.
+	fmt.Println(strconv.Quote("tab\there")) // "tab\there"
+
+	// unicode classifies runes by category.
+	for _, r := range "Aб9 #" {
+		fmt.Printf("%q letter=%t digit=%t space=%t\n",
+			r, unicode.IsLetter(r), unicode.IsDigit(r), unicode.IsSpace(r))
+	}
+}`} />
+
+## Reversing: by runes, never by bytes
+
+A classic exercise that exposes the byte-vs-rune split. Reverse a string by **runes** and multi-byte characters survive; reverse the raw **bytes** and you split those characters mid-encoding, producing invalid UTF-8 (you'll see `�` replacement characters):
+
+<Playground client:visible title="reverse.go" code={String.raw`package main
+
+import "fmt"
+
+// reverseRunes reverses by code point, so multi-byte characters survive.
+func reverseRunes(s string) string {
+	r := []rune(s) // decode UTF-8 into whole characters (this copies)
+	for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+		r[i], r[j] = r[j], r[i]
+	}
+	return string(r) // re-encode back to UTF-8 (also copies)
+}
+
+// reverseBytes naively reverses bytes — it CORRUPTS multi-byte characters.
+func reverseBytes(s string) string {
+	b := []byte(s)
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
+}
+
+func main() {
+	s := "Héllo, 世界"
+	fmt.Println("original:  ", s)
+	fmt.Println("by runes:  ", reverseRunes(s)) // valid UTF-8, reversed
+
+	// Byte reversal splits multi-byte runes — the result is invalid UTF-8.
+	fmt.Println("by bytes:  ", reverseBytes(s)) // mojibake / replacement chars
+}`} />
+
+## Where runes stop: grapheme clusters
+
+A rune is *not* always "what the user perceives as one character." Some user-visible characters are several code points glued together — a **grapheme cluster**. `é` can be one code point (`U+00E9`) *or* two (`e` + a combining accent `U+0301`); a flag emoji is two regional-indicator runes; many newer emoji are a base plus skin-tone or zero-width-joiner sequences. So `[]rune(s)` can still over-count what a human would call "characters," and the *same-looking* text can compare unequal if one side isn't **normalized**.
+
+The standard library deliberately stops at runes. For grapheme-cluster segmentation and Unicode normalization (NFC/NFD), reach for `golang.org/x/text` (`x/text/unicode/norm`). For 99% of programs — parsing, validating, counting words, building output — runes and the four packages above are exactly right; just don't equate "rune" with "what the user sees" when emoji or combining marks are in play.
+
 <Callout type="gotcha" title="⚠️ Slicing a string slices bytes, not characters">
-`s[a:b]` cuts on **byte** boundaries. If `a` or `b` lands in the middle of a multi-byte character, the substring is invalid UTF-8 (you'll see a replacement char `�`). When you need to slice by characters, convert to `[]rune` first, or use the `unicode/utf8` package to find safe boundaries. Also: a string slice still shares the original bytes — but since strings are immutable, that sharing is always safe to read. See [slices](/fundamentals/slices/) for the analogous (mutable) view semantics.
+`s[a:b]` cuts on **byte** boundaries. If `a` or `b` lands in the middle of a multi-byte character, the substring is invalid UTF-8 (you'll see a replacement char `�`). When you need to slice by characters, convert to `[]rune` first, or use `unicode/utf8` to find safe boundaries. Also: a string slice still shares the original bytes — but since strings are immutable, that sharing is always safe to read. See [slices](/fundamentals/slices/) for the analogous (mutable) view semantics.
 </Callout>
 
 Next: giving your types behavior — [methods](/fundamentals/methods/).

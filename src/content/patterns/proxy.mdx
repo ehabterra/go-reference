@@ -67,7 +67,7 @@ You want to put a layer in front of an object — to delay its expensive creatio
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Image {
     <<interface>>
     +Display() string
@@ -89,7 +89,7 @@ You want to put a layer in front of an object — to delay its expensive creatio
 
 A virtual proxy loads the expensive `RealImage` only on first use, then caches it. Callers depend only on the `Image` interface and never know. Edit and **Run**:
 
-<Playground client:visible title="proxy.go" code={`package main
+<Playground client:visible title="proxy.go" code={String.raw`package main
 
 import "fmt"
 

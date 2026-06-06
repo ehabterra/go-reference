@@ -57,7 +57,7 @@ A transaction is a bank transfer. Debiting one account and crediting another are
 
 A transaction turns several statements into one all-or-nothing unit. `db.BeginTx` checks out a connection and pins it; you run every statement through the returned `*sql.Tx`; then exactly one of `Commit` or `Rollback` ends it.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   B["BeginTx(ctx)"] --> S1["tx.Exec · debit"]
   S1 --> S2["tx.Exec · credit"]
   S2 --> Q{"all ok?"}

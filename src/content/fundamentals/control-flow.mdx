@@ -5,7 +5,7 @@ kind: topic
 order: 2
 difficulty: "Beginner"
 status: ready
-intent: "Branching and looping the Go way — if with an init statement, the single for loop in all its forms, and a switch with no fall-through."
+intent: "Branching and looping the Go way — if with an init statement and tight scope; the single for loop in all four forms plus range over slices, maps, strings, channels and integers; switch (expression, tagless, type, fallthrough, multi-value); labeled break/continue for nested loops; and defer in depth (LIFO order, argument evaluation timing, the loop pitfall)."
 related:
   - variables-and-types
   - functions
@@ -21,7 +21,7 @@ quiz:
         correct: false
       - text: "Four"
         correct: false
-    explain: "Go has exactly one loop keyword, `for`. Drop the clauses for a while-loop (`for cond {}`), drop everything for an infinite loop (`for {}`), or use `for range` to iterate."
+    explain: "Go has exactly one loop keyword, `for`. Drop the clauses for a while-loop (`for cond {}`), drop everything for an infinite loop (`for {}`), or use `for range` to iterate over collections and (since Go 1.22) integers."
   - q: "What happens after a matching `case` in a Go `switch`?"
     options:
       - text: "It stops — there's no automatic fall-through to the next case"
@@ -32,7 +32,18 @@ quiz:
         correct: false
       - text: "It panics unless you break"
         correct: false
-    explain: "Go switches break automatically after the matching case — no `break` needed. If you actually want to continue into the next case, use the explicit `fallthrough` keyword."
+    explain: "Go switches break automatically after the matching case — no `break` needed. If you actually want to continue into the next case, use the explicit `fallthrough` keyword, which jumps unconditionally (it does not re-test the next case's condition)."
+  - q: "When are a deferred call's arguments evaluated?"
+    options:
+      - text: "Immediately, when the `defer` statement runs — not when the call fires on return"
+        correct: true
+      - text: "When the function returns"
+        correct: false
+      - text: "Never — they're re-read at call time"
+        correct: false
+      - text: "Only if the function panics"
+        correct: false
+    explain: "Arguments to a deferred function are evaluated at the moment the defer statement executes; only the call itself is postponed. So `defer fmt.Println(i)` captures i's value now, even though the print happens later. Closures, by contrast, see the variable's final value."
   - q: "What's special about the variable in `if v := f(); v > 0 {`?"
     options:
       - text: "v is scoped to the if/else — it doesn't leak into the surrounding function"
@@ -43,19 +54,36 @@ quiz:
         correct: false
       - text: "It's a syntax error"
         correct: false
-    explain: "The optional init statement declares variables scoped to the if and its else branches — perfect for the `if err := do(); err != nil {` pattern, keeping err out of the wider scope."
+    explain: "The optional init statement declares variables scoped to the if and all its else branches — perfect for the `if err := do(); err != nil {` pattern, keeping err out of the wider scope. switch and for accept the same init clause."
+  - q: "In nested loops, how do you break out of the OUTER loop from inside the inner one?"
+    options:
+      - text: "Label the outer loop and use `break Label`"
+        correct: true
+      - text: "A plain `break` exits all loops"
+        correct: false
+      - text: "Use `return`"
+        correct: false
+      - text: "Use `goto`"
+        correct: false
+    explain: "A plain `break`/`continue` only affects the innermost loop. Attach a label to the outer loop (`outer:`) and write `break outer` or `continue outer` to target it. This is the idiomatic alternative to a flag variable."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🚦 Analogy">
-Most languages hand you a drawer full of looping tools — `while`, `do-while`, `for`, `foreach`. Go gives you one screwdriver, `for`, that fits every screw. Fewer keywords, fewer decisions, and code that always reads the same way.
+Most languages hand you a drawer full of looping tools — `while`, `do-while`, `for`, `foreach`. Go gives you one screwdriver, `for`, that fits every screw. Fewer keywords, fewer decisions, and code that always reads the same way. The same minimalism runs through the rest of Go's control flow: one loop, a `switch` that doesn't fall through, and `defer` to handle "do this on the way out."
 </Callout>
+
+## The philosophy: few constructs, no surprises
+
+Go deliberately keeps its control-flow vocabulary tiny. There is **one** loop keyword, a `switch` that breaks by default, branch conditions that need no parentheses, and a single mechanism — `defer` — for cleanup. The goal is that any Go programmer can read any other's control flow at a glance, with no clever syntax to decode. Everything below is a variation on a handful of forms.
+
+A thread running through all of them is **block scope**: `if`, `for`, and `switch` can each begin with a short *init statement* whose variables live only inside that construct. This keeps temporaries — especially `err` — from leaking into the surrounding function.
 
 ## if — with an optional init
 
-`if` needs no parentheses, and it can run a short statement first whose variables are scoped to the branch:
+`if` takes no parentheses around its condition, and it can run a short statement first. Any variables that statement declares are scoped to the `if` *and* its `else` branches, and nowhere else:
 
 ```go
 if score > 90 {
@@ -66,47 +94,44 @@ if score > 90 {
 
 // the idiomatic Go pattern: handle the error right where it happens
 if err := save(data); err != nil {
-	return err // err exists only inside this if/else
+	return err // err exists only inside this if/else chain
 }
 ```
 
+The init form is everywhere in Go. It pairs a call with the test of its result and confines the result to the smallest possible scope — so `err` from one operation can't accidentally be read (or shadowed) by the next.
+
 ## for — the only loop
 
-<Mermaid code={`graph LR
-  F["for"] --> A["for i := 0; i < n; i++  ·  C-style"]
-  F --> B["for cond  ·  while"]
-  F --> C["for  ·  infinite (break to exit)"]
-  F --> D["for i, v := range xs  ·  iterate"]`} />
+<Mermaid code={String.raw`graph LR
+  F["for"] --> A["for i := 0; i < n; i++  (three-clause)"]
+  F --> B["for cond  (while)"]
+  F --> C["for  (infinite, break to exit)"]
+  F --> D["for i, v := range xs  (range)"]`} />
 
-One keyword, four shapes:
+One keyword, four shapes. The first three are the C-style loop with clauses progressively dropped; the fourth is `range`:
 
-<Playground client:visible title="loops.go" code={`package main
+<Playground client:visible title="for-forms.go" code={String.raw`package main
 
 import "fmt"
 
 func main() {
-	// 1. classic three-clause
+	// 1. classic three-clause: init; condition; post
 	sum := 0
 	for i := 1; i <= 5; i++ {
 		sum += i
 	}
-	fmt.Println("sum 1..5 =", sum)
+	fmt.Println("sum 1..5 =", sum) // 15
 
-	// 2. condition-only (a "while")
+	// 2. condition-only — Go's "while"
 	n := 8
 	steps := 0
 	for n > 1 {
 		n /= 2
 		steps++
 	}
-	fmt.Println("halvings:", steps)
+	fmt.Println("halvings of 8:", steps) // 3
 
-	// 3. range over a slice — index and value
-	for i, name := range []string{"go", "rust", "zig"} {
-		fmt.Printf("%d: %s\n", i, name)
-	}
-
-	// 4. infinite loop with break
+	// 3. infinite loop with an explicit break
 	count := 0
 	for {
 		count++
@@ -114,21 +139,82 @@ func main() {
 			break
 		}
 	}
-	fmt.Println("broke at", count)
+	fmt.Println("broke at:", count) // 3
+
+	// 4. range — here over a slice, giving index and value
+	for i, name := range []string{"go", "rust", "zig"} {
+		fmt.Printf("%d: %s\n", i, name)
+	}
 }`} />
 
-Use `continue` to skip to the next iteration, and a **labeled** `break`/`continue` (`break outer`) to control nested loops.
+`continue` skips to the next iteration; `break` exits the loop. The post statement (`i++`) runs *after* the body and *before* the next condition test.
+
+## range over everything
+
+`range` adapts to what you iterate. The two loop variables mean different things per type, and you can drop the ones you don't need with `_` (or omit them entirely). Note that ranging over a **map** visits keys in *random* order by design — never rely on it.
+
+| You range over | First var | Second var |
+|---|---|---|
+| slice / array | index | element (a copy) |
+| string | byte offset | `rune` (decoded UTF-8) |
+| map | key | value |
+| channel | received value | — (one variable only) |
+| integer `n` (Go 1.22+) | `0 … n-1` | — |
+
+<Playground client:visible title="range-forms.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func main() {
+	// range over a string yields byte offset + rune (decoded UTF-8).
+	for i, r := range "Gö" { // ö is two bytes
+		fmt.Printf("offset %d: %c\n", i, r)
+	}
+
+	// range over a map — order is random, so sort keys for deterministic output.
+	ages := map[string]int{"ana": 30, "bo": 25}
+	keys := make([]string, 0, len(ages))
+	for k := range ages { // one variable = keys only
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("%s=%d\n", k, ages[k])
+	}
+
+	// range over a channel drains it until closed.
+	ch := make(chan int, 3)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+	total := 0
+	for v := range ch {
+		total += v
+	}
+	fmt.Println("channel total:", total) // 6
+
+	// Go 1.22+: range over an integer runs n times (0..n-1).
+	for i := range 3 {
+		fmt.Println("tick", i)
+	}
+}`} />
+
+Since **Go 1.23**, `range` also accepts an **iterator function** — a function of type `iter.Seq[V]` or `iter.Seq2[K, V]` (a "range-over-func"). This lets your own types and the `slices`/`maps` package helpers (`slices.All`, `maps.Keys`, …) drive a `for range` loop just like a built-in collection, without materializing a slice.
 
 ## switch — clean multi-way branching
 
-No `break`, no fall-through by default, and cases can be any expression:
+A Go `switch` breaks after each case automatically (no `break`), so it reads cleanly. It comes in several flavors, all on display here: an **expression switch** that compares a value, a **tagless switch** (no condition — a tidy `if/else if` chain), **multi-value cases** grouped with commas, an optional **init statement**, and the explicit **`fallthrough`** keyword for the rare case you want C-style continuation:
 
-<Playground client:visible title="switch.go" code={`package main
+<Playground client:visible title="switch-forms.go" code={String.raw`package main
 
 import "fmt"
 
 func classify(n int) string {
-	switch {
+	switch { // tagless switch = if/else-if chain
 	case n < 0:
 		return "negative"
 	case n == 0:
@@ -143,19 +229,138 @@ func main() {
 		fmt.Printf("%d is %s\n", n, classify(n))
 	}
 
-	// switch on a value, with multiple matches per case
+	// expression switch with an init statement and multi-value cases
 	switch day := "Sat"; day {
 	case "Sat", "Sun":
 		fmt.Println("weekend")
 	default:
 		fmt.Println("weekday")
 	}
+
+	// fallthrough continues into the NEXT case unconditionally
+	switch n := 1; n {
+	case 1:
+		fmt.Println("one")
+		fallthrough // jump into case 2's body without testing it
+	case 2:
+		fmt.Println("...and through to two")
+	case 3:
+		fmt.Println("not reached")
+	}
 }`} />
 
-A bare `switch {}` (no value) is just a cleaner `if/else if` chain. A `switch` on a value compares against each case; group several with commas.
+A **type switch** is a special form that branches on the *dynamic type* of an interface value — including pointer types — binding the value to a new variable of the matched type. It's covered in depth in [type assertions](/fundamentals/type-assertions/) and [interfaces](/fundamentals/interfaces/):
 
-<Callout type="gotcha" title="⚠️ defer runs on the way out">
-`defer` schedules a call to run when the **function returns**, no matter how — perfect for cleanup like `defer f.Close()` right after opening. Deferred calls run in **LIFO** order, and their arguments are evaluated *when the defer statement runs*, not when the call fires. You'll lean on it constantly with [errors](/fundamentals/errors/) and [panic/recover](/fundamentals/panic-recover/).
+```go
+switch v := x.(type) {
+case nil:        // x holds no value
+case *bytes.Buffer: // a pointer type is a valid case
+	v.WriteString("…") // v is *bytes.Buffer here
+case fmt.Stringer:  // interfaces work as cases too
+	_ = v.String()
+default:
+	// v has x's original type
+}
+```
+
+## Labeled break and continue
+
+A plain `break`/`continue` only affects the **innermost** loop. To jump out of (or restart) an *outer* loop from deep inside, attach a **label** to it and name the label. This replaces the flag-variable dance you'd otherwise need:
+
+<Playground client:visible title="labeled-break.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	grid := [][]int{
+		{2, 4, 6}, // contains evens
+		{1, 5, 9}, // all odd
+		{7, 5, 8}, // contains an even (8)
+	}
+
+	target := 5
+	var foundR, foundC int
+
+search: // label on the outer loop
+	for r, row := range grid {
+		for c, v := range row {
+			if v == target {
+				foundR, foundC = r, c
+				break search // exits BOTH loops at once
+			}
+		}
+	}
+	fmt.Printf("found %d at [%d][%d]\n", target, foundR, foundC) // [1][1]
+
+	// continue with a label restarts the OUTER loop's next iteration.
+rows:
+	for r, row := range grid {
+		for _, v := range row {
+			if v%2 == 0 { // any even value disqualifies the whole row
+				continue rows // skip to the next row immediately
+			}
+		}
+		fmt.Println("all-odd row index:", r) // only row 1 ({1,5,9}) qualifies
+	}
+}`} />
+
+Labels also work with `goto`, but `goto` is rare in idiomatic Go; labeled `break`/`continue` covers almost every real need.
+
+## defer — cleanup on the way out
+
+`defer` schedules a function call to run when the **surrounding function returns** — by any path, including a `panic`. It's how Go handles cleanup without `try/finally`: open a resource and immediately `defer` its close, so the two live side by side and the close can't be forgotten. Two rules are essential to get right:
+
+1. **Deferred calls run in LIFO order** — last deferred, first executed.
+2. **Arguments are evaluated when `defer` runs**, not when the call finally fires. The *call* is postponed; the *arguments* are snapshotted immediately.
+
+<Playground client:visible title="defer-semantics.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// LIFO order: deferred calls fire in reverse.
+	fmt.Println("start")
+	defer fmt.Println("deferred 1 (runs last)")
+	defer fmt.Println("deferred 2")
+	defer fmt.Println("deferred 3 (runs first)")
+	fmt.Println("end of body")
+
+	demoArgEval()
+}
+
+func demoArgEval() {
+	i := 0
+	// Argument evaluated NOW (i == 0), call deferred.
+	defer fmt.Println("deferred sees i =", i)
+	// A closure sees the variable LATER (its final value).
+	defer func() { fmt.Println("closure sees i =", i) }()
+	i = 99
+	fmt.Println("body sets i =", i)
+}`} />
+
+Output proves both rules: the `main` defers print 3, 2, 1; in `demoArgEval`, the direct `defer fmt.Println("…", i)` captured `i == 0`, while the closure printed the final `i == 99`.
+
+<Callout type="gotcha" title="⚠️ defer inside a loop">
+`defer` is tied to the **function**, not the block, so a `defer` inside a `for` loop does **not** run at the end of each iteration — every deferred call piles up and fires only when the *whole function* returns. Open a thousand files in a loop with `defer f.Close()` and you hold a thousand handles open at once, possibly exhausting the OS limit. Fixes: close at the end of each iteration explicitly, or move the loop body into its own function so each call's `defer` fires per iteration:
+
+```go
+for _, name := range files {
+	func() {
+		f, _ := os.Open(name)
+		defer f.Close() // now fires at the end of THIS call
+		// ... use f ...
+	}()
+}
+```
+Also beware combining `defer` with named return values: a deferred closure *can* modify a named result before it's returned — powerful for wrapping errors, surprising if unintended.
 </Callout>
+
+## See also
+
+- [Variables & types](/fundamentals/variables-and-types/) — the `:=` init statements and the shadowing that scope rules prevent.
+- [Functions](/fundamentals/functions/) — multiple returns, named results, and how `defer` interacts with them.
+- [Errors](/fundamentals/errors/) — the `if err != nil` pattern that the init form was built for.
+- [Panic & recover](/fundamentals/panic-recover/) — how a deferred call can intercept a panic.
+- [Type assertions](/fundamentals/type-assertions/) — the type-switch form in full.
 
 Next: packaging logic into reusable units — [functions](/fundamentals/functions/).

@@ -71,11 +71,11 @@ More specific patterns win over less specific ones, and a trailing `/` (`/static
 
 A middleware takes a `Handler` and returns a `Handler` — so they **compose** by nesting. Run it all in-process:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   REQ["request"] --> L["logging"] --> A["auth"] --> M["mux → handler"]
   M --> A2["auth (return)"] --> L2["logging (return)"] --> RES["response"]`} />
 
-<Playground client:visible title="middleware.go" code={`package main
+<Playground client:visible title="middleware.go" code={String.raw`package main
 
 import (
 	"fmt"

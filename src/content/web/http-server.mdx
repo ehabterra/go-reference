@@ -57,7 +57,7 @@ An HTTP server is a shop counter. A **handler** is the clerk who serves one cust
 
 The whole server is built on one interface — `http.Handler` — with a single method `ServeHTTP(w, r)`. `http.HandlerFunc` lets a plain function satisfy it:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   REQ["*http.Request"] --> MUX["ServeMux<br/>(route by path)"]
   MUX --> H["Handler.ServeHTTP(w, r)"]
   H --> W["http.ResponseWriter"]
@@ -85,7 +85,7 @@ func main() {
 
 You don't need a network to test handler logic — `httptest` drives a handler directly with a recorder. This is exactly how you'd unit-test it, and it runs anywhere:
 
-<Playground client:visible title="server.go" code={`package main
+<Playground client:visible title="server.go" code={String.raw`package main
 
 import (
 	"fmt"

@@ -67,7 +67,7 @@ When behavior depends on state, the naive code sprouts the same `switch state { 
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Turnstile {
     -state State
     +Coin()
@@ -86,7 +86,7 @@ When behavior depends on state, the naive code sprouts the same `switch state { 
 
 ## How it works
 
-<Mermaid code={`stateDiagram-v2
+<Mermaid code={String.raw`stateDiagram-v2
   [*] --> Locked
   Locked --> Unlocked : Coin
   Unlocked --> Locked : Push
@@ -97,7 +97,7 @@ When behavior depends on state, the naive code sprouts the same `switch state { 
 
 Each state is a small struct implementing `State`; transitions just reassign the turnstile's `state` field. Edit and **Run**:
 
-<Playground client:visible title="state.go" code={`package main
+<Playground client:visible title="state.go" code={String.raw`package main
 
 import "fmt"
 

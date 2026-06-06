@@ -68,7 +68,7 @@ case <-done:
 }
 ```
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   C1["c1 (data)"] --> SEL["select"]
   C2["c2 (data)"] --> SEL
   DONE["done (cancel)"] --> SEL
@@ -83,7 +83,7 @@ case <-done:
 
 ## Timeout and non-blocking, in one run
 
-<Playground client:visible title="select.go" code={`package main
+<Playground client:visible title="select.go" code={String.raw`package main
 
 import (
 	"fmt"

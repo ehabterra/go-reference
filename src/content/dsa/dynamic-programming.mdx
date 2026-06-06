@@ -62,7 +62,7 @@ Dynamic programming applies when a problem has two properties at once:
 
 When both hold, you get the classic progression: **naive recursion** re-solves subproblems and explodes (often `O(2ⁿ)`), then **memoization** (top-down) caches results, then **tabulation** (bottom-up) fills a table in dependency order. The last two are usually `O(n)` or `O(n·m)`.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   F5["fib(5)"] --> F4["fib(4)"]
   F5 --> F3a["fib(3)"]
   F4 --> F3b["fib(3)"]
@@ -80,7 +80,7 @@ The red nodes are recomputed work — `fib(3)` and `fib(2)` appear again and aga
 
 `fib(n) = fib(n-1) + fib(n-2)` is the canonical example because the naive version visibly re-solves the same calls. The playground below runs all three approaches and counts how many times each actually calls into `fib`, so you can see the `O(2ⁿ)` → `O(n)` collapse directly:
 
-<Playground client:visible title="fib_three_ways.go" code={`package main
+<Playground client:visible title="fib_three_ways.go" code={String.raw`package main
 
 import "fmt"
 
@@ -149,7 +149,7 @@ Fibonacci shows the mechanics; coin change shows the *power*. Given coin denomin
 
 Bottom-up, `dp[a]` = minimum coins to make amount `a`. Start with `dp[0] = 0` and build up: for each amount, try every coin and take the best.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   A0["dp[0]=0"] --> A1["dp[1]"]
   A1 --> A2["dp[2]"]
   A2 --> A3["dp[3]"]
@@ -157,7 +157,7 @@ Bottom-up, `dp[a]` = minimum coins to make amount `a`. Start with `dp[0] = 0` an
   A4 --> A5["dp[5]"]
   A5 --> A6["dp[6]=min over coins"]`} />
 
-<Playground client:visible title="coin_change.go" code={`package main
+<Playground client:visible title="coin_change.go" code={String.raw`package main
 
 import "fmt"
 

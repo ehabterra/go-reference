@@ -57,7 +57,7 @@ Graceful shutdown is closing a shop for the night. You **lock the front door** s
 
 A modern Go server turns an OS signal into a cancelled context with `signal.NotifyContext`. You wait on `ctx.Done()`, then begin an orderly shutdown:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   SIG["SIGINT / SIGTERM"] --> CTX["signal.NotifyContext<br/>cancels ctx"]
   CTX --> STOP["1. stop accepting<br/>(Server.Shutdown)"]
   STOP --> DRAIN["2. drain in-flight<br/>(wait, up to timeout)"]
@@ -120,7 +120,7 @@ The ordering is the whole point: closing `db` **before** `srv.Shutdown` returns 
 
 You can model this whole dance with a context and a worker that selects on `ctx.Done()` — no real server, no signals, fully deterministic. Quick requests drain; a slow one is aborted when the deadline hits:
 
-<Playground client:visible title="shutdown.go" code={`package main
+<Playground client:visible title="shutdown.go" code={String.raw`package main
 
 import (
 	"context"

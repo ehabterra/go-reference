@@ -64,7 +64,7 @@ A token bucket is an arcade with a coin machine that drips a new token every so 
 
 The standard algorithm: a bucket holds up to **burst** tokens and refills at **rate** `r` per second. Each unit of work removes one token; if the bucket is empty, work waits (or is rejected).
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   FILL["refill: r tokens/sec"] --> B(("bucket<br/>≤ burst"))
   B -->|spend 1| W["do work"]
   B -->|empty| WAIT["wait / reject"]`} />
@@ -73,7 +73,7 @@ The standard algorithm: a bucket holds up to **burst** tokens and refills at **r
 
 The idiomatic limiter. `Wait` blocks (honoring `context`) until a token is ready. With `burst = 2`, the first two go immediately, then it settles to 5/sec. **Run** it:
 
-<Playground client:visible title="rate.go" code={`package main
+<Playground client:visible title="rate.go" code={String.raw`package main
 
 import (
 	"context"

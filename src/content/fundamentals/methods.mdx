@@ -5,7 +5,7 @@ kind: topic
 order: 9
 difficulty: "Intermediate"
 status: ready
-intent: "Functions with a receiver — value vs pointer receivers, method sets and interface satisfaction, methods on any named type, and method values."
+intent: "Functions with a receiver — value vs pointer receivers in depth, the method-set rule and interface satisfaction, methods on any named type, method values and expressions, automatic addressing, and nil receivers."
 related:
   - interfaces
   - structs
@@ -13,7 +13,7 @@ related:
 quiz:
   - q: "When should the receiver be a pointer rather than a value?"
     options:
-      - text: "When the method must mutate the receiver, or the type is large and you want to avoid copying"
+      - text: "When the method must mutate the receiver, or the type is large and you want to avoid copying it on every call"
         correct: true
       - text: "Always — value receivers are deprecated"
         correct: false
@@ -21,7 +21,7 @@ quiz:
         correct: false
       - text: "Only when the method returns an error"
         correct: false
-    explain: "A value receiver gets a copy, so writes don't reach the original. Use a pointer receiver to mutate state, or to skip copying a big struct. Keep receiver kind consistent across a type's methods."
+    explain: "A value receiver gets a copy, so writes don't reach the original and a big struct is copied each call. Use a pointer receiver to mutate state or to skip the copy. Keep the receiver kind consistent across a type's methods."
   - q: "A type T has a method `func (t *T) M()`. Which value's method set includes M?"
     options:
       - text: "Only *T — the pointer. T's method set does not include pointer-receiver methods"
@@ -32,10 +32,10 @@ quiz:
         correct: false
       - text: "Neither, until you call it"
         correct: false
-    explain: "Pointer-receiver methods belong to the method set of *T only. So a *T can satisfy an interface needing M, but a plain T value cannot — this is the usual cause of \"does not implement\" errors."
+    explain: "Pointer-receiver methods belong to the method set of *T only. So a *T can satisfy an interface needing M, but a plain T value cannot — the usual cause of \"does not implement\" errors."
   - q: "Can you attach a method to `type Celsius float64`?"
     options:
-      - text: "Yes — methods can be defined on any named type whose definition is in the same package"
+      - text: "Yes — methods can be defined on any named type whose definition is in the same package, not just structs"
         correct: true
       - text: "No — methods only work on structs"
         correct: false
@@ -43,19 +43,41 @@ quiz:
         correct: false
       - text: "Only if Celsius wraps a struct"
         correct: false
-    explain: "Methods attach to named types, not just structs. `func (c Celsius) Fahrenheit() float64` is perfectly valid. You can't add methods to types from other packages, though — define a local named type first."
+    explain: "Methods attach to named types, including ones built on primitives or slices. `func (c Celsius) Fahrenheit() float64` is valid. You cannot add methods to types from other packages, though — define a local named type first."
+  - q: "What is the difference between a method value `v.M` and a method expression `T.M`?"
+    options:
+      - text: "v.M is bound to v and has type func(...); T.M is unbound and takes the receiver as its first explicit argument"
+        correct: true
+      - text: "They are two spellings of the same thing"
+        correct: false
+      - text: "v.M calls the method; T.M only declares it"
+        correct: false
+      - text: "Method expressions only work on pointer receivers"
+        correct: false
+    explain: "A method value captures the receiver now, producing a closure like func(string) string. A method expression leaves the receiver out, producing func(T, string) string where you pass the receiver explicitly."
+  - q: "Can a method run when its pointer receiver is nil?"
+    options:
+      - text: "Yes — a pointer-receiver method runs on a nil *T as long as its body doesn't dereference the nil pointer"
+        correct: true
+      - text: "No — calling any method on nil always panics"
+        correct: false
+      - text: "Only value-receiver methods can run on nil"
+        correct: false
+      - text: "Only if the type embeds an interface"
+        correct: false
+    explain: "The receiver is just an argument; passing nil is fine. The method only panics if it actually dereferences the nil pointer. Nil-tolerant methods power empty-list and tree base cases (e.g. (*List).Len returning 0 for nil)."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🔧 Analogy">
-A method is a function that already knows *which thing* it acts on. Instead of `area(rect)`, you write `rect.Area()` — the rectangle is handed in silently as the **receiver**. Same machine as a [function](/fundamentals/functions/), but bolted onto a type so the data and its behavior travel together.
+A method is a function that already knows *which thing* it acts on. Instead of `area(rect)`, you write `rect.Area()` — the rectangle is handed in silently as the **receiver**. Same machine as a [function](/fundamentals/functions/), but bolted onto a type so the data and its behavior travel together. The receiver isn't magic; it's just the first argument, written before the name instead of inside the parentheses.
 </Callout>
 
 ## A method is a function with a receiver
 
-The only syntactic difference between a function and a method is the receiver — the parameter in parentheses *before* the name:
+The only syntactic difference between a function and a method is the **receiver** — the parameter in parentheses *before* the name. That parameter binds the method to a type, so it becomes callable with dot syntax:
 
 ```go
 type User struct{ Name string }
@@ -66,29 +88,67 @@ func (u User) Greet() string {
 }
 ```
 
-Methods aren't limited to structs. They attach to **any named type** defined in your package — even one built on a primitive:
+`u.Greet()` is really shorthand: the compiler passes `u` in as the receiver argument. There is no per-object function pointer and no hidden vtable on a struct — a method is one function compiled once, and the receiver is passed like any other parameter. (Dynamic dispatch only appears when you call through an [interface](/fundamentals/interfaces/), not when you call a method on a concrete value.)
 
-```go
+A receiver must be a **named type defined in the same package**. You can't add methods to `int`, to `[]string`, or to a type from another package directly — but you can wrap it in a local named type and attach methods to that.
+
+## Methods on any named type
+
+Methods aren't limited to structs. They attach to **any named type** in your package — even one built on a primitive, a slice, or a string. This is how you give plain data a vocabulary:
+
+<Playground client:visible title="named-types.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// A named type over a primitive.
 type Celsius float64
 
-func (c Celsius) Fahrenheit() float64 {
-	return float64(c)*9/5 + 32
+func (c Celsius) Fahrenheit() float64 { return float64(c)*9/5 + 32 }
+
+func (c Celsius) String() string { return fmt.Sprintf("%.1f°C", float64(c)) }
+
+// A named type over a slice — its method can range over itself.
+type IntSlice []int
+
+func (s IntSlice) Sum() int {
+	total := 0
+	for _, n := range s {
+		total += n
+	}
+	return total
 }
-```
+
+// A named type over a string.
+type Loud string
+
+func (l Loud) Shout() string { return strings.ToUpper(string(l)) + "!" }
+
+func main() {
+	boiling := Celsius(100)
+	fmt.Printf("%s = %.1f°F\\n", boiling, boiling.Fahrenheit()) // 100.0°C = 212.0°F
+
+	nums := IntSlice{1, 2, 3, 4}
+	fmt.Println("sum:", nums.Sum()) // sum: 10
+
+	fmt.Println(Loud("hi there").Shout()) // HI THERE!
+}`} />
+
+This pattern is everywhere in the standard library: `time.Duration` is a named `int64` with `String()` and arithmetic helpers, and `sort.Interface` is satisfied by named slice types. Giving the underlying value a name and methods turns a bag of bits into a small domain type.
 
 ## Value vs pointer receivers
 
-A **value receiver** gets a copy, so it can't change the original. A **pointer receiver** gets the address, so it can mutate in place — and it avoids copying a large struct on every call.
+This is the decision you make on every method. A **value receiver** gets a *copy* of the receiver, so it can read but its writes never reach the original. A **pointer receiver** gets the *address*, so it mutates in place — and it avoids copying a large struct on every call.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   CALL["c.Method()"] --> VR["value receiver (c T)"]
   CALL --> PR["pointer receiver (c *T)"]
-  VR --> COPY["gets a COPY — mutations are lost"]
-  PR --> ORIG["gets the ADDRESS — mutations stick"]`} />
+  VR --> COPY["gets a COPY — mutations are lost, struct copied each call"]
+  PR --> ORIG["gets the ADDRESS — mutations stick, no copy"]`} />
 
-The rule of thumb: **pointer receiver to mutate or for big structs; value receiver for small, immutable-feeling types.** Pick one kind per type and stay consistent.
-
-<Playground client:visible title="methods.go" code={`package main
+<Playground client:visible title="receivers.go" code={String.raw`package main
 
 import "fmt"
 
@@ -96,16 +156,17 @@ type Counter struct {
 	count int
 }
 
-// value receiver: operates on a COPY — the original is untouched
+// Value receiver: operates on a COPY. The caller's Counter is untouched.
 func (c Counter) IncValue() {
-	c.count++
+	c.count++ // writes to the copy, then the copy is discarded
 }
 
-// pointer receiver: operates on the ORIGINAL — mutation sticks
+// Pointer receiver: operates on the ORIGINAL via its address.
 func (c *Counter) IncPointer() {
 	c.count++
 }
 
+// Value receiver is fine for a read-only method.
 func (c Counter) String() string {
 	return fmt.Sprintf("count=%d", c.count)
 }
@@ -114,33 +175,158 @@ func main() {
 	c := Counter{}
 
 	c.IncValue()
-	fmt.Println("after IncValue:  ", c) // count=0 — copy was thrown away
+	c.IncValue()
+	fmt.Println("after 2x IncValue:  ", c.String()) // count=0 — copies thrown away
 
-	c.IncPointer() // Go auto-takes &c here
+	c.IncPointer() // Go rewrites this to (&c).IncPointer()
 	c.IncPointer()
-	fmt.Println("after IncPointer:", c) // count=2 — real changes
+	c.IncPointer()
+	fmt.Println("after 3x IncPointer:", c.String()) // count=3 — real mutation
+
+	// A pointer variable works the same way; Go dereferences for the value method.
+	p := &Counter{count: 10}
+	p.IncPointer()
+	fmt.Println("through a pointer:  ", p.String()) // count=11
 }`} />
+
+### Automatic addressing
+
+You may have noticed `c.IncPointer()` works on a plain `Counter` variable even though the method needs `*Counter`. Go inserts the `&` for you when the value is **addressable** — a variable, a struct field, an array element. The reverse also happens: calling a value-receiver method through a pointer auto-dereferences (`p.String()` becomes `(*p).String()`). This convenience hides the receiver distinction in everyday code, which is exactly why it surprises people the first time an interface refuses a value (see below). A value that *isn't* addressable — a map element, the result of a function call, a literal — can't have its address taken, so a pointer method on it won't compile.
+
+### Choosing — and being consistent
+
+| Situation | Receiver | Why |
+|---|---|---|
+| Method mutates the receiver | pointer | writes must reach the original |
+| Large struct, called often | pointer | avoid copying it every call |
+| Type contains a `sync.Mutex`, slice header you grow, etc. | pointer | copying would split state / duplicate the lock |
+| Small, value-like type (`Celsius`, a `Point`) | value | cheap to copy, reads like a number |
+| Some methods already need a pointer | pointer for all | one consistent method set per type |
+
+The overriding rule: **pick one receiver kind per type and stay consistent.** Mixing them makes the method set of `T` differ awkwardly from `*T` and invites the interface trap below. When in doubt, especially for structs, default to pointer receivers.
 
 ## Method sets and interface satisfaction
 
-Each type has a **method set** — the methods you may call on it. This is what decides whether a type satisfies an [interface](/fundamentals/interfaces/):
+Each type has a **method set** — the methods you may call on a value of that type *for interface purposes*. This set is what decides whether a type satisfies an [interface](/fundamentals/interfaces/):
 
-- The method set of `T` contains only its **value-receiver** methods.
+- The method set of `T` contains **only its value-receiver** methods.
 - The method set of `*T` contains **both** value- and pointer-receiver methods.
 
-So if `M` has a pointer receiver, only `*T` satisfies an interface requiring `M` — a plain `T` value does not. (When you *call* a pointer method on an addressable variable, Go inserts the `&` for you, which hides this until an interface is involved.)
+So if `M` has a pointer receiver, only `*T` satisfies an interface requiring `M` — a plain `T` value does not. Automatic addressing does *not* rescue you here: storing a value in an interface makes a copy that isn't addressable, so the compiler can't synthesize the pointer.
 
-## Method values and expressions
-
-A method can be pulled out as a value. `c.IncPointer` is a **method value** — a `func()` bound to `c`. `Counter.String` is a **method expression** — a `func(Counter) string` that takes the receiver explicitly:
+<Mermaid code={String.raw`graph TD
+  T["method set of T"] --> VM["value-receiver methods only"]
+  PT["method set of *T"] --> VM2["value-receiver methods"]
+  PT --> PM["+ pointer-receiver methods"]
+  VM --> IFACE["satisfies interface needing those methods"]
+  PM --> IFACE2["only *T satisfies interfaces needing pointer methods"]`} />
 
 ```go
-greet := user.Greet      // method value, bound to user
-f := Counter.String      // method expression: f(c) == c.String()
+type Stringer interface{ String() string }
+
+type Big struct{ /* ... */ }
+func (b *Big) String() string { return "big" } // POINTER receiver
+
+var s Stringer = &Big{} // OK — *Big is in the method set
+// var s Stringer = Big{} // compile error: Big does not implement Stringer
+//                        //   (String has pointer receiver)
 ```
 
+This is the single most common "why won't this compile?" with interfaces. The fix is almost always to pass `*T` and to keep receivers consistent. See [interfaces](/fundamentals/interfaces/) for the dispatch side of this rule, and [pointers](/fundamentals/pointers/) for addressability.
+
+## Method values and method expressions
+
+A method can be pulled out as a first-class function value in two distinct ways:
+
+- A **method value** `v.M` is *bound* to a specific receiver. Taking it captures the receiver right then; the result is an ordinary `func(...)` you can store or pass as a callback.
+- A **method expression** `T.M` is *unbound*. The receiver becomes the first explicit parameter, so its type is `func(T, ...)`.
+
+<Playground client:visible title="method-values.go" code={String.raw`package main
+
+import "fmt"
+
+type Greeter struct{ Name string }
+
+func (g Greeter) Greet(greeting string) string {
+	return greeting + ", " + g.Name
+}
+
+func main() {
+	g := Greeter{Name: "Ada"}
+
+	// METHOD VALUE: bound to g. Its type is func(string) string.
+	// It captures the receiver now, so later changes to g are not seen.
+	bound := g.Greet
+	g.Name = "Grace"            // changed AFTER the method value was taken
+	fmt.Println(bound("Hello")) // Hello, Ada — the bound copy still says Ada
+
+	// A method value is an ordinary func — pass it as a callback.
+	apply := func(fn func(string) string) string { return fn("Hi") }
+	fmt.Println(apply(g.Greet)) // Hi, Grace — g.Greet taken fresh here
+
+	// METHOD EXPRESSION: unbound. Its type is func(Greeter, string) string;
+	// the receiver becomes the first explicit argument.
+	expr := Greeter.Greet
+	fmt.Println(expr(Greeter{Name: "Linus"}, "Hey")) // Hey, Linus
+}`} />
+
+The capture detail matters: a method value with a **value receiver** snapshots the receiver, so later mutations are invisible to it (above, `bound` still greets "Ada"). With a **pointer receiver**, the method value captures the pointer, so it sees later mutations. Method values are the idiomatic way to hand a bound behavior to `http.HandleFunc`, `sort.Slice`, or any callback-taking API.
+
+## Nil receivers
+
+The receiver is just an argument, so a method can be *called* on a `nil` pointer — it only panics if the body actually dereferences `nil`. Methods that check for `nil` first turn the nil pointer into a useful base case (the empty list, the empty tree):
+
+<Playground client:visible title="nil-receiver.go" code={String.raw`package main
+
+import "fmt"
+
+// A linked list whose methods are safe to call on a nil *List.
+type List struct {
+	val  int
+	next *List
+}
+
+// nil receiver: Len treats a nil *List as the empty list, never dereferencing nil.
+func (l *List) Len() int {
+	if l == nil {
+		return 0
+	}
+	return 1 + l.next.Len() // l.next may be nil — the recursion handles it
+}
+
+// Sum likewise tolerates a nil receiver.
+func (l *List) Sum() int {
+	if l == nil {
+		return 0
+	}
+	return l.val + l.next.Sum()
+}
+
+func main() {
+	var empty *List                       // nil pointer
+	fmt.Println("len(nil):", empty.Len()) // 0 — method runs on a nil receiver
+	fmt.Println("sum(nil):", empty.Sum()) // 0
+
+	list := &List{val: 1, next: &List{val: 2, next: &List{val: 3}}}
+	fmt.Println("len:", list.Len()) // 3
+	fmt.Println("sum:", list.Sum()) // 6
+}`} />
+
+## When to reach for a method (vs a plain function)
+
+- **Use a method** when the behavior is intrinsic to the type and you want it to satisfy an interface, travel with the value, and read as `x.Do()`. Methods are how a type advertises what it *is*.
+- **Use a plain function** when the operation spans several types equally, or doesn't belong to any one type's identity. Don't force a method just to use dot syntax.
+- **Methods enable interfaces.** A function can't satisfy an interface; only a type's method set can. If you need polymorphism, the behavior must be a method.
+
 <Callout type="gotcha" title="🐹 Mixing receiver kinds bites at interface time">
-Code like `c.IncPointer()` works on a normal variable because Go auto-takes its address. But the moment you store a *value* `T` in an interface that needs a pointer-receiver method, satisfaction fails — the value isn't addressable. Standard advice: **be consistent.** If any method needs a pointer receiver, give them all pointer receivers, and pass `*T` around.
+Code like `c.IncPointer()` works on a normal variable because Go auto-takes its address. But the moment you store a *value* `T` in an interface that needs a pointer-receiver method, satisfaction fails — the copy held by the interface isn't addressable, so Go can't synthesize the `&`. The standard advice: **be consistent.** If any method needs a pointer receiver, give them all pointer receivers and pass `*T` around. The error message — *"X does not implement Y (method M has pointer receiver)"* — is the tell.
 </Callout>
+
+## See also
+
+- [Interfaces](/fundamentals/interfaces/) — method sets decide who satisfies, and dynamic dispatch through the (type, value) pair.
+- [Pointers](/fundamentals/pointers/) — addressability, and why a pointer receiver can mutate.
+- [Structs](/fundamentals/structs/) — the most common method receivers.
+- [Embedding](/fundamentals/embedding/) — how a type can borrow another type's methods via promotion.
 
 Next: how method sets let unrelated types share behavior — [interfaces](/fundamentals/interfaces/).

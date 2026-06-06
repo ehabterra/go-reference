@@ -57,7 +57,7 @@ DNS is the phone book of the internet. You know a name — `example.com` — but
 
 Two very different things get lumped together as "addressing." **Parsing** an IP or a `host:port` string is pure, local, and instant. **Resolving** a hostname means a trip to a DNS server over the network — slow, fallible, and worth a timeout.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   N["name<br/>example.com:443"] -->|"SplitHostPort"| H["host: example.com<br/>port: 443"]
   H -->|"Resolver (DNS, network)"| IP["93.184.216.34<br/>2606:2800:..."]
   L["literal<br/>10.0.0.1"] -->|"ParseIP / ParseAddr (local)"| A["net.IP / netip.Addr"]`} />
@@ -68,7 +68,7 @@ Modern Go has two IP types. The classic `net.IP` is a `[]byte` slice — it allo
 
 All of this is pure string parsing — no DNS, no socket — so it runs anywhere and is fully deterministic:
 
-<Playground client:visible title="addr.go" code={`package main
+<Playground client:visible title="addr.go" code={String.raw`package main
 
 import (
 	"fmt"

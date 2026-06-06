@@ -67,7 +67,7 @@ The easy move — `go process(job)` for every job — is unbounded. With a flood
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   P["producer"] -->|"jobs chan"| Q(("jobs"))
   Q --> W1["worker 1"]
   Q --> W2["worker 2"]
@@ -80,7 +80,7 @@ The easy move — `go process(job)` for every job — is unbounded. With a flood
 
 A fixed set of workers `range` the jobs channel; a `WaitGroup` closes `results` once they've all finished. Edit and **Run**:
 
-<Playground client:visible title="worker_pool.go" code={`package main
+<Playground client:visible title="worker_pool.go" code={String.raw`package main
 
 import (
 	"fmt"

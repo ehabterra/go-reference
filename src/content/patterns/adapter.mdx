@@ -69,7 +69,7 @@ Your client code is written against a `Duck` (it calls `Fly` and `Quack`). You h
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Duck {
     <<interface>>
     +Fly()
@@ -93,7 +93,7 @@ Your client code is written against a `Duck` (it calls `Fly` and `Quack`). You h
 
 Because interfaces are implicit, the adapter just needs the right methods. Edit and **Run**:
 
-<Playground client:visible title="adapter.go" code={`package main
+<Playground client:visible title="adapter.go" code={String.raw`package main
 
 import "fmt"
 

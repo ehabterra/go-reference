@@ -57,7 +57,7 @@ A linked list is a train: each car holds cargo and a coupling to the next car. T
 
 Each node carries a value and a pointer to the next node; the last points to `nil`. The list keeps a `Head`:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   H["Head"] --> A["1 • "] --> B["2 • "] --> C["3 • "] --> N["nil"]`} />
 
 ```go
@@ -76,7 +76,7 @@ type List[T any] struct {
 
 Adding to the front is a single pointer rewrite — no shifting, no reallocation. Walking to a position is linear. Build one and print it:
 
-<Playground client:visible title="list.go" code={`package main
+<Playground client:visible title="list.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -121,7 +121,7 @@ func main() {
 
 Reversing a list in place is the interview staple — three pointers, one pass, O(1) extra space:
 
-<Playground client:visible title="reverse.go" code={`package main
+<Playground client:visible title="reverse.go" code={String.raw`package main
 
 import "fmt"
 

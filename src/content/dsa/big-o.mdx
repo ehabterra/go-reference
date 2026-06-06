@@ -64,7 +64,7 @@ So we care about the *shape* of the curve, not its exact height.
 
 ## The growth classes you'll meet
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   A["O(1)<br/>constant"] --> B["O(log n)<br/>logarithmic"] --> C["O(n)<br/>linear"] --> D["O(n log n)<br/>linearithmic"] --> E["O(n²)<br/>quadratic"] --> F["O(2ⁿ)<br/>exponential"]
   classDef good fill:#0f2a1a,stroke:#22c55e,color:#d7ffe9;
   classDef bad fill:#2a0f17,stroke:#f43f5e,color:#ffd7e0;
@@ -123,7 +123,7 @@ The same `hasDuplicate` becomes **O(n)** with a hash set — trading O(n) space 
 
 The same task — find `999` in a sorted slice of 1,000 — scanned linearly vs. halved. Run it:
 
-<Playground client:visible title="complexity.go" code={`package main
+<Playground client:visible title="complexity.go" code={String.raw`package main
 
 import "fmt"
 

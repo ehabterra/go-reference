@@ -71,7 +71,7 @@ You need two guarantees: **only one instance** is ever created, and everyone can
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Singleton {
     -instance Singleton
     +GetInstance() Singleton
@@ -83,7 +83,7 @@ Callers never construct the type directly — they go through a single accessor 
 
 ## How it works
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant G1 as Goroutine 1
   participant G2 as Goroutine 2
   participant S as GetInstance / sync.Once
@@ -124,7 +124,7 @@ func Get() *Config {
 
 Try it — this version spins up five goroutines that all race to initialize, then proves they got the same instance. Edit it and hit **Run**:
 
-<Playground client:visible title="singleton.go" code={`package main
+<Playground client:visible title="singleton.go" code={String.raw`package main
 
 import (
 	"fmt"

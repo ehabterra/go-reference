@@ -61,7 +61,7 @@ Launching `go doWork()` throws away whatever `doWork` returns, error included. Y
 
 Bundle the value and its error in one struct and send it on a channel. The consumer decides what to do with each. **Run** it:
 
-<Playground client:visible title="results.go" code={`package main
+<Playground client:visible title="results.go" code={String.raw`package main
 
 import (
 	"errors"
@@ -106,7 +106,7 @@ The key discipline: the goroutine **reports** the error and lets the main gorout
 
 When you fan work out and any task may fail, [`golang.org/x/sync/errgroup`](/patterns/errgroup/) is the tool: `g.Go(func() error {…})`, and `g.Wait()` returns the first error while a shared `context` cancels the siblings.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   G["errgroup.WithContext"] --> A["g.Go: task A"]
   G --> B["g.Go: task B (fails)"]
   G --> C["g.Go: task C"]

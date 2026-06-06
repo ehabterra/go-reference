@@ -67,7 +67,7 @@ You want undo, checkpoints, or rollback — which means capturing an object's st
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Editor {
     -text string
     +Save() memento
@@ -88,7 +88,7 @@ You want undo, checkpoints, or rollback — which means capturing an object's st
 
 `memento` has unexported fields, so `History` (the caretaker) can stack snapshots without reading them — only the `Editor` can. Edit and **Run**:
 
-<Playground client:visible title="memento.go" code={`package main
+<Playground client:visible title="memento.go" code={String.raw`package main
 
 import "fmt"
 

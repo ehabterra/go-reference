@@ -68,7 +68,7 @@ Different collections store their elements differently — a menu in a slice, a 
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Iterator {
     <<interface>>
     +HasNext() bool
@@ -86,7 +86,7 @@ Different collections store their elements differently — a menu in a slice, a 
 
 The classic GoF form is a small `Iterator` interface with `HasNext`/`Next`. (Returning a concrete type beats `interface{}` so callers skip type assertions.) Edit and **Run**:
 
-<Playground client:visible title="iterator.go" code={`package main
+<Playground client:visible title="iterator.go" code={String.raw`package main
 
 import "fmt"
 

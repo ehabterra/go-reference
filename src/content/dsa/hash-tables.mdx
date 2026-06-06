@@ -57,7 +57,7 @@ A coat check turns a coat into a small number: you hand over your coat, a functi
 
 A **hash function** turns a key into a number, and that number (mod the bucket count) picks a bucket. Equal keys always hash the same, so lookup recomputes the bucket and goes straight there — O(1) on average:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   K1["key: apple"] --> H["hash(key) % n"]
   K2["key: grape"] --> H
   H --> B0["bucket 0"]
@@ -71,7 +71,7 @@ When two keys land in the same bucket — a **collision** — they're chained to
 
 You almost never implement hashing yourself — `map[K]V` is built in. The key type must be **comparable** (no slices, maps, or functions as keys). A frequency count shows the everyday idioms:
 
-<Playground client:visible title="map.go" code={`package main
+<Playground client:visible title="map.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -107,7 +107,7 @@ func main() {
 
 Implementing a small map with **separate chaining** makes the mechanism concrete — hash to a bucket, then scan that bucket's short slice:
 
-<Playground client:visible title="hashmap.go" code={`package main
+<Playground client:visible title="hashmap.go" code={String.raw`package main
 
 import "fmt"
 

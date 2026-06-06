@@ -98,13 +98,13 @@ This is **structural typing** (often called *duck typing*, checked at compile ti
 
 Write a function that takes the interface, and every implementer flows through the same code — no `switch`, no inheritance hierarchy:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   SHAPE["Shape interface { Area() float64 }"]
   CIRCLE["Circle"] -->|satisfies| SHAPE
   RECT["Rectangle"] -->|satisfies| SHAPE
   SHAPE --> FN["totalArea(shapes []Shape)"]`} />
 
-<Playground client:visible title="polymorphism.go" code={`package main
+<Playground client:visible title="polymorphism.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -142,7 +142,7 @@ func main() {
 
 An interface value isn't magic — it's a two-word structure: a **dynamic type** (a pointer to the concrete type's *method table*) and a **value** (the data, or a pointer to it). Calling a method looks up the implementation in that table — **dynamic dispatch**:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   IV["interface value (Shape)"] --> T["type → *Circle's method table"]
   IV --> V["value → Circle{R:2}"]
   T --> M["Area() implementation"]`} />
@@ -157,7 +157,7 @@ Three consequences fall out of this model:
 
 Whether a type satisfies an interface depends on its **method set**, and that differs for `T` versus `*T`. The rule: the method set of `*T` includes **both** value- and pointer-receiver methods; the method set of `T` includes **only** value-receiver methods. So a pointer-receiver method means *only a pointer* satisfies the interface:
 
-<Playground client:visible title="method-sets.go" code={`package main
+<Playground client:visible title="method-sets.go" code={String.raw`package main
 
 import "fmt"
 
@@ -188,7 +188,7 @@ This is the single most common "why won't this compile?" with interfaces — see
 
 The empty interface `interface{}` — spelled **`any`** since Go 1.18 — has no methods, so *every* type satisfies it. It's the escape hatch for "a value whose type I don't know yet": JSON decoding, `fmt.Println`'s arguments, generic containers before generics. You recover the concrete type with a **type assertion** or a **type switch**:
 
-<Playground client:visible title="any.go" code={`package main
+<Playground client:visible title="any.go" code={String.raw`package main
 
 import "fmt"
 
@@ -234,7 +234,7 @@ A type satisfies the composed interface exactly when it satisfies each embedded 
 
 The real power of structural typing: implement a stdlib interface and instantly plug into stdlib machinery. Give a type `Len`, `Less`, and `Swap` and `sort.Sort` will sort it:
 
-<Playground client:visible title="sort-interface.go" code={`package main
+<Playground client:visible title="sort-interface.go" code={String.raw`package main
 
 import (
 	"fmt"

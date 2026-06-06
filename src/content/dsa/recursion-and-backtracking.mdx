@@ -62,7 +62,7 @@ A recursive function solves a problem by calling itself on a **smaller** version
 
 Factorial is the textbook shape: `0! = 1` (base), and `n! = n × (n-1)!` (recursive). Each call peels off one `n` until it bottoms out, then the answers multiply back up as the stack unwinds.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["factorial(4)"] --> B["4 * factorial(3)"]
   B --> C["3 * factorial(2)"]
   C --> D["2 * factorial(1)"]
@@ -73,7 +73,7 @@ Factorial is the textbook shape: `0! = 1` (base), and `n! = n × (n-1)!` (recurs
 
 Each pending call keeps a **stack frame** — its parameters and locals — alive until it returns. A recursion `n` deep stacks `n` frames, so it costs **O(n)** space even when it returns a single number. Go grows a goroutine's stack on demand, but not infinitely: run far enough (hundreds of thousands deep) and you hit `fatal error: stack overflow`. The fix is to bound the depth, switch to an iterative loop, or make the call a [tail-free shape](/dsa/stacks-and-queues/) you can drive with an explicit stack.
 
-<Playground client:visible title="recursion.go" code={`package main
+<Playground client:visible title="recursion.go" code={String.raw`package main
 
 import "fmt"
 
@@ -111,7 +111,7 @@ Backtracking is recursion that **builds a partial solution and undoes it**. At e
 
 The undo step is the whole trick: because all branches share one slice or one used-set, you must leave it exactly as you found it.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["perm of [1,2,3]"] --> B["pick 1"]
   A --> C["pick 2"]
   A --> D["pick 3"]
@@ -122,7 +122,7 @@ The undo step is the whole trick: because all branches share one slice or one us
   D --> D1["3,1,2"]
   D --> D2["3,2,1"]`} />
 
-<Playground client:visible title="permutations.go" code={`package main
+<Playground client:visible title="permutations.go" code={String.raw`package main
 
 import (
 	"fmt"

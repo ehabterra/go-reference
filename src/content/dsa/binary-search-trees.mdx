@@ -57,7 +57,7 @@ A binary search tree is a guessing game played on a sorted line. Ask "is your nu
 
 A BST is a binary tree with one extra rule that holds at **every** node: all keys in the **left** subtree are smaller, and all keys in the **right** subtree are larger. That single invariant is what makes searching fast — at each node you compare once and discard an entire subtree.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["8"] --> B["3"]
   A --> C["10"]
   B --> D["1"]
@@ -75,7 +75,7 @@ To **search**, start at the root and compare: equal means found, smaller means g
 - **Balanced** tree: `h ≈ log₂ n`, so search and insert are `O(log n)`.
 - **Degenerate** tree (keys inserted already sorted): `h = n − 1`, a one-sided chain, so both degrade to `O(n)` — no better than a linked list.
 
-<Playground client:visible title="bst.go" code={`package main
+<Playground client:visible title="bst.go" code={String.raw`package main
 
 import "fmt"
 

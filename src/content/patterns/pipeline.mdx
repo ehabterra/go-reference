@@ -68,7 +68,7 @@ You have a stream of data and several transformations to apply. Doing them in on
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   G["generator<br/>goroutine"] -->|chan int| S1["square<br/>goroutine"]
   S1 -->|chan int| S2["square<br/>goroutine"]
   S2 -->|chan int| M["main<br/>range loop"]
@@ -82,7 +82,7 @@ Each stage follows the same shape: take an inbound channel, return a new outboun
 
 A generator turns values into a stream; each stage reads one channel and writes the next; `main` ranges the final channel. The `done` channel lets everything cancel cleanly. Edit and **Run**:
 
-<Playground client:visible title="pipeline.go" code={`package main
+<Playground client:visible title="pipeline.go" code={String.raw`package main
 
 import "fmt"
 

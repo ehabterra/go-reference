@@ -106,7 +106,7 @@ PASS
 ok      example.com/app   1.402s
 ```
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   PROG["program / benchmark"] --> PROF["profile<br/>cpu.out · mem.out"]
   PROF --> TOOL["go tool pprof"]
   TOOL --> HOT["hot path<br/>top · list · web (flame graph)"]`} />

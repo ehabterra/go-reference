@@ -68,7 +68,7 @@ Several parts of your program each need to react to the same events, and which p
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   P["publisher"] -->|Publish| B["Broker<br/>map of subscriber chans"]
   B --> S1["subscriber 1"]
   B --> S2["subscriber 2"]
@@ -78,7 +78,7 @@ Several parts of your program each need to react to the same events, and which p
 
 A broker is a mutex-guarded map of subscriber channels. `Publish` does a non-blocking send to each, so a slow subscriber can't stall the rest. Edit and **Run**:
 
-<Playground client:visible title="pubsub.go" code={`package main
+<Playground client:visible title="pubsub.go" code={String.raw`package main
 
 import (
 	"fmt"

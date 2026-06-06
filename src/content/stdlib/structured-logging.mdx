@@ -57,7 +57,7 @@ import Playground from '../../components/islands/Playground.tsx';
 
 `log/slog` (Go 1.21+) logs a **message plus key-value attributes**. The package-level `slog.Info/Warn/Error` work out of the box, but in real code you build a logger with an explicit **handler** that decides the format and destination. A `TextHandler` writes readable `key=value` lines:
 
-<Playground client:visible title="slog.go" code={`package main
+<Playground client:visible title="slog.go" code={String.raw`package main
 
 import (
 	"log/slog"
@@ -93,7 +93,7 @@ Notice `reqLog` carries `request_id=abc-123` on **both** of its lines without re
 
 slog has four built-in levels — **Debug, Info, Warn, Error** — and the handler filters by a configurable threshold, so you can silence `Debug` in production without touching call sites:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   CALL["logger.Info/Warn/Error<br/>(msg + attrs)"] --> H{"Handler"}
   H -->|"TextHandler"| TXT["level=INFO msg=... key=val"]
   H -->|"JSONHandler"| JSON["{level:INFO, msg:..., key:val}"]

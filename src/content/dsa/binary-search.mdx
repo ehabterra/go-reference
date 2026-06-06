@@ -57,13 +57,13 @@ Guessing a number between 1 and 100: a friend says "higher" or "lower" after eac
 
 Binary search keeps a window `[lo, hi]` of indices that could still hold the target. Look at the middle; if it's too small, the answer must be to the right, so move `lo` past `mid`; if it's too big, move `hi` before `mid`. Each step discards half the window, so n elements take about log₂(n) steps — 20 for a million.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["lo=0  hi=15  mid=7<br/>a[7] < target → go right"] --> B["lo=8  hi=15  mid=11<br/>a[11] > target → go left"]
   B --> C["lo=8  hi=10  mid=9<br/>a[9] == target → found"]`} />
 
 The whole algorithm is one loop. The details that trip people up are all about boundaries: the loop condition and how you move `lo` and `hi`.
 
-<Playground client:visible title="binarysearch.go" code={`package main
+<Playground client:visible title="binarysearch.go" code={String.raw`package main
 
 import "fmt"
 
@@ -110,7 +110,7 @@ You rarely hand-roll this in production. The stdlib has two ready-made tools:
 
 This second form is the key idea: binary search isn't only about slices. Any time you have a **monotonic predicate** — something that flips from false to true exactly once as a parameter grows — you can binary-search the smallest input that satisfies it. That's "binary search on the answer": instead of an index, you halve a numeric range (a speed, a capacity, a time) and probe the predicate at the midpoint.
 
-<Playground client:visible title="stdlib.go" code={`package main
+<Playground client:visible title="stdlib.go" code={String.raw`package main
 
 import (
 	"fmt"

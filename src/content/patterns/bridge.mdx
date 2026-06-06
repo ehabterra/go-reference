@@ -67,7 +67,7 @@ Two things vary at once: *what* you're drawing (circle, square) and *how* it's r
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Circle {
     -renderer Renderer
     -radius float64
@@ -88,7 +88,7 @@ Two things vary at once: *what* you're drawing (circle, square) and *how* it's r
 
 In Go, Bridge is just composition: the abstraction holds the implementation as an **interface field**. Any shape pairs with any renderer — no combinatorial types. Edit and **Run**:
 
-<Playground client:visible title="bridge.go" code={`package main
+<Playground client:visible title="bridge.go" code={String.raw`package main
 
 import "fmt"
 

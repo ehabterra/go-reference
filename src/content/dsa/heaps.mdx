@@ -63,7 +63,7 @@ A **binary heap** is a *complete* binary tree — every level is full except pos
 
 The one rule (the **heap property**) is local: every parent is `≤` both children (a **min-heap**) or `≥` both children (a **max-heap**). That guarantees the extreme value sits at the root, index `0` — readable in O(1).
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["1 (i=0)"] --> B["3 (i=1)"]
   A --> C["2 (i=2)"]
   B --> D["7 (i=3)"]
@@ -85,7 +85,7 @@ Constant work per level, height `log n`, so **push and pop are both O(log n)**, 
 
 You rarely hand-roll the sifting: the standard library's [`container/heap`](https://pkg.go.dev/container/heap) does it for you. You supply a type implementing `heap.Interface` — that's `sort.Interface` (`Len`, `Less`, `Swap`) plus `Push` and `Pop` for growing and shrinking the backing slice. `Less` alone decides min vs max. Here's a complete priority queue of tasks:
 
-<Playground client:visible title="priority_queue.go" code={`package main
+<Playground client:visible title="priority_queue.go" code={String.raw`package main
 
 import (
 	"container/heap"
@@ -143,7 +143,7 @@ func main() {
 
 A classic heap win: find the **k largest** of a stream in O(n log k) using a *min-heap of size k*. Keep only k elements; if a new value beats the smallest (the root), evict the root and insert the newcomer. You never sort the whole input — and the same shape powers Dijkstra's shortest paths and merging k sorted lists.
 
-<Playground client:visible title="top_k.go" code={`package main
+<Playground client:visible title="top_k.go" code={String.raw`package main
 
 import (
 	"container/heap"

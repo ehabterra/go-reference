@@ -5,7 +5,7 @@ kind: topic
 order: 17
 difficulty: "Advanced"
 status: ready
-intent: "Inspecting and modifying types and values at runtime with reflect — Type vs Kind, reading struct fields and tags, and the pointer/Elem rule for setting."
+intent: "Inspecting and modifying types and values at runtime with reflect — TypeOf / ValueOf, Type vs Kind, iterating struct fields and reading tags, the three laws of reflection, Interface() to box back to any, the pointer/Elem settability rule, and why reflection is powerful but slow."
 related:
   - interfaces
   - type-assertions
@@ -21,7 +21,18 @@ quiz:
         correct: false
       - text: "Type only exists for pointers"
         correct: false
-    explain: "`Type` is the concrete, possibly named type — `main.Point`. `Kind` is its fundamental category — `reflect.Struct`. Two distinct named types can share one Kind, which is why generic reflection code switches on Kind."
+    explain: "`Type` is the concrete, possibly named type — `main.Point`. `Kind` is its fundamental category — `reflect.Struct`. Two distinct named types can share one Kind (every `type X int` has Kind `Int`), which is why generic reflection code switches on Kind, not Type."
+  - q: "What are the first two of the \"three laws of reflection\"?"
+    options:
+      - text: "Reflection goes from an interface value to a reflect object, and from a reflect object back to an interface value"
+        correct: true
+      - text: "Reflection is fast, and reflection is type-safe"
+        correct: false
+      - text: "Every type is reflectable, and every field is settable"
+        correct: false
+      - text: "TypeOf returns a Value, and ValueOf returns a Type"
+        correct: false
+    explain: "Law 1: reflection goes from interface → reflect.Value/Type (you reflect over what an `any` holds). Law 2: it goes back, reflect.Value → interface, via `.Interface()`. Law 3: to modify a reflect.Value it must be settable (addressable). The first two are a round trip; the third is the constraint on writing."
   - q: "Why must you pass a pointer to reflect when you want to set a value?"
     options:
       - text: "Reflection can only modify values that are addressable, and you reach the addressable target via the pointer's Elem()"
@@ -32,7 +43,18 @@ quiz:
         correct: false
       - text: "It avoids importing unsafe"
         correct: false
-    explain: "A plain `reflect.ValueOf(x)` holds a copy, which is not addressable — `Set` would panic. Pass `&x`, then `.Elem()` dereferences to the addressable, settable value the pointer refers to."
+    explain: "A plain `reflect.ValueOf(x)` holds a copy, which is not addressable — `Set` would panic, and `CanSet()` reports false. Pass `&x`, then `.Elem()` dereferences to the addressable, settable value the pointer refers to. Unexported struct fields stay unsettable even via a pointer."
+  - q: "What does the `.Interface()` method on a reflect.Value do?"
+    options:
+      - text: "Boxes the value back into an `any`, so you can type-assert or pass it to ordinary code"
+        correct: true
+      - text: "Reports whether the value implements any interface"
+        correct: false
+      - text: "Returns the value's method set"
+        correct: false
+      - text: "Converts the value to the empty struct"
+        correct: false
+    explain: "`.Interface()` is Law 2 in action: it takes the reflect.Value and returns an `any` holding the same concrete value, the bridge back from the reflection world to normal statically-typed code (e.g. `v.Interface().(int)`). It panics if the value was obtained from an unexported field."
   - q: "Which statement about reflection's cost is accurate?"
     options:
       - text: "It's powerful but slow and bypasses compile-time type safety — use it sparingly"
@@ -43,35 +65,45 @@ quiz:
         correct: false
       - text: "It only works on the standard library's own types"
         correct: false
-    explain: "Reflection defers checks to runtime, costs allocations and indirection, and can panic on misuse. It's the right tool for generic encoders (encoding/json, fmt) but the wrong default for ordinary, statically-typed code."
+    explain: "Reflection defers checks to runtime, costs allocations and indirection, and can panic on misuse. It's the right tool for generic encoders (encoding/json, fmt, text/template), but the wrong default for ordinary code — prefer concrete types, interfaces, or generics, which keep compile-time safety and speed."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🔍 Analogy">
-Normally the Go compiler knows every type ahead of time, like a builder reading a blueprint. **Reflection** is an X-ray you point at a value *while the program runs* — it reveals the type, its fields, and their tags even when your code was written without knowing them. Hugely powerful for tools like JSON encoders, but X-rays are slow and you can hurt yourself, so you don't use one to hang a picture frame.
+Normally the Go compiler knows every type ahead of time, like a builder reading a blueprint before laying a brick. **Reflection** is an X-ray you point at a value *while the program runs* — it reveals the type, its fields, and their tags even when your code was written without knowing them. Hugely powerful for tools like JSON encoders that must work on types they've never seen. But X-rays are slow, they bypass the compiler's safety checks, and you can hurt yourself — so you don't use one to hang a picture frame.
 </Callout>
+
+## Mental model: the bridge in and out of `any`
+
+The whole `reflect` package hangs on one idea. An `any` value secretly carries a **(type, value) pair** (the same pair an [interface](/fundamentals/interfaces/) holds). The compiler hides that pair from you; reflection *unwraps it* so you can read the type and walk the value at runtime — then *re-wraps it* so you can hand the result back to ordinary code.
+
+So reflection is a round trip:
+
+- **Going in:** `reflect.TypeOf(x)` and `reflect.ValueOf(x)` take an `any` and hand you a `reflect.Type` and a `reflect.Value` — first-class objects you can inspect.
+- **Coming back:** `value.Interface()` returns an `any` again, which you can type-assert into a concrete type.
+
+Everything else — Kinds, fields, tags, setting — is operations *on* the `reflect.Value` while you're inside that round trip. Robert Griesemer's "three laws of reflection" are just those two directions plus one constraint, and we'll meet all three below.
 
 ## TypeOf, ValueOf, Type vs Kind
 
-The `reflect` package gives you two entry points: `reflect.TypeOf(x)` returns a `reflect.Type` (what type is this?), and `reflect.ValueOf(x)` returns a `reflect.Value` (the data itself, inspectable at runtime).
+The two entry points: `reflect.TypeOf(x)` returns a `reflect.Type` (*what type is this?*), and `reflect.ValueOf(x)` returns a `reflect.Value` (*the data itself, inspectable at runtime*). The single most important distinction they expose is **Type vs Kind**:
 
-The key distinction is **Type vs Kind**:
+- **Type** — the specific, possibly named type, like `main.Celsius`.
+- **Kind** — the underlying category from a fixed set: `reflect.Struct`, `reflect.Int`, `reflect.Slice`, `reflect.Ptr`, and so on.
 
-- **Type** — the specific, possibly named type, like `main.Point`.
-- **Kind** — the underlying category, like `reflect.Struct`, `reflect.Int`, or `reflect.Slice`.
-
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   V["any value (interface)"] --> T["reflect.TypeOf -> Type"]
   V --> R["reflect.ValueOf -> Value"]
-  T --> N["Type: main.Point  (named)"]
-  T --> K["Kind: Struct  (category)"]
-  R --> D["read fields, call methods, set (if addressable)"]`} />
+  T --> N["Type: main.Celsius  (named)"]
+  T --> K["Kind: Float64  (category)"]
+  R --> D["read fields, call methods, set (if addressable)"]
+  R --> B["Interface() -> back to any"]`} />
 
-Generic code switches on **Kind** because many distinct types share one kind:
+Generic code branches on **Kind**, because many distinct named types share one kind — every `type X int` has Kind `Int`, so a switch on Kind handles all of them at once:
 
-<Playground client:visible title="kind.go" code={`package main
+<Playground client:visible title="kind.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -91,16 +123,36 @@ func main() {
 
 	// Kind is what generic code branches on.
 	switch v.Kind() {
-	case reflect.Float64:
-		fmt.Println("it's some kind of float64")
+	case reflect.Int, reflect.Int64:
+		fmt.Println("an integer:", v.Int())
+	case reflect.Float32, reflect.Float64:
+		fmt.Println("a float:", v.Float())
+	case reflect.String:
+		fmt.Println("a string:", v.String())
 	default:
 		fmt.Println("something else")
 	}
 }`} />
 
+The first output line is `Type: main.Celsius`. Note the type is the *named* `main.Celsius`, but the kind is the *underlying* `float64` — that gap is the entire point of Kind.
+
+## The three laws of reflection
+
+The package was designed around three rules. They sound abstract but each maps to one method you'll call:
+
+1. **Interface → reflection object.** `reflect.ValueOf`/`TypeOf` go *from* an interface value *to* a `reflect.Value`/`Type`. You can only reflect over something stored in an `any`.
+2. **Reflection object → interface.** `value.Interface()` goes back, returning an `any` holding the same concrete value. The two directions are inverses.
+3. **To modify a reflection object, the value must be settable.** Settability requires *addressability*, which a copy never has — hence the pointer/`Elem` dance below.
+
+| Law | Direction | The method |
+|---|---|---|
+| 1 | `any` → reflect | `reflect.ValueOf(x)`, `reflect.TypeOf(x)` |
+| 2 | reflect → `any` | `v.Interface()` |
+| 3 | modify (only if settable) | `v.Elem().Set...()` after `CanSet()` |
+
 ## Reading struct fields and tags
 
-Reflection shines on structs: you can iterate fields, read their names and types, and pull out **struct tags** (the metadata `encoding/json` uses). In normal source, a tag is written with backticks:
+Reflection shines on structs: you can iterate fields, read each name and type, and pull out **struct tags** — the metadata `encoding/json`, `gorm`, and validators key off. In ordinary source a tag is written with backticks:
 
 ```go
 type User struct {
@@ -109,9 +161,9 @@ type User struct {
 }
 ```
 
-To inspect fields you call `Type.NumField()` and `Type.Field(i)`, then read `.Tag.Get("json")`. In the runnable example below the tag is supplied as a `reflect.StructTag` built from an ordinary double-quoted string, so it behaves exactly like the backtick form:
+You walk fields with `Type.NumField()` and `Type.Field(i)`, and read a tag with `field.Tag.Get("json")`. In the runnable example below the tags are supplied as `reflect.StructTag` values built from ordinary double-quoted strings — they behave *exactly* like the backtick form, and `.Get` parses the `key:"value"` syntax the same way:
 
-<Playground client:visible title="tags.go" code={`package main
+<Playground client:visible title="tags.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -128,9 +180,10 @@ func main() {
 	t := reflect.TypeOf(u)
 	v := reflect.ValueOf(u)
 
-	// A StructTag built from a normal string behaves like a backtick tag.
+	// A StructTag built from a normal string behaves like a backtick tag;
+	// .Get parses the key:"value" form just the same.
 	tags := []reflect.StructTag{
-		reflect.StructTag("json:\"name\""),
+		reflect.StructTag("json:\"name\" validate:\"required\""),
 		reflect.StructTag("json:\"age\""),
 	}
 
@@ -142,11 +195,13 @@ func main() {
 	}
 }`} />
 
-## Setting values: the pointer / Elem rule
+The first output line is `type: User with 2 fields`. This loop — read each field, consult its tag, act on the value — is essentially what `json.Marshal` does internally for every struct you hand it.
 
-To **change** a value through reflection it must be *addressable*, and a copy never is. The fix is to reflect over a **pointer** and call `.Elem()` to reach the settable value it points to:
+## Setting values: the pointer / Elem rule (Law 3)
 
-<Playground client:visible title="set.go" code={`package main
+To **change** a value through reflection it must be *settable*, and settability requires *addressability* — which a copy never has. `reflect.ValueOf(x)` only ever sees a copy of `x`, so it can't write back. The fix is to reflect over a **pointer** and call `.Elem()` to reach the addressable value it points at:
+
+<Playground client:visible title="set.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -156,7 +211,7 @@ import (
 func main() {
 	x := 10
 
-	// reflect.ValueOf(x) is a copy -> not addressable, can't Set.
+	// reflect.ValueOf(x) holds a COPY -> not addressable, can't Set.
 	// Reflect over &x, then Elem() to reach the addressable target.
 	p := reflect.ValueOf(&x)
 	elem := p.Elem()
@@ -168,8 +223,67 @@ func main() {
 	fmt.Println("x is now:", x) // 99 — mutated through reflection
 }`} />
 
+The first output line is `CanSet on copy: false`. `Elem()` is the inverse of taking a pointer: on a `reflect.Value` of Kind `Ptr` it dereferences to the pointed-at value, which (because the pointer makes it addressable) is settable.
+
+### What is and isn't settable
+
+| `reflect.Value` from… | `CanSet()` | Why |
+|---|---|---|
+| `reflect.ValueOf(x)` | false | it's a copy — not addressable |
+| `reflect.ValueOf(&x).Elem()` | true | the pointer makes the target addressable |
+| an **exported** field of an addressable struct | true | reachable and visible |
+| an **unexported** field | false | reflection respects export rules — cannot Set |
+
+A useful invariant: even with a pointer, reflection will **not** let you set an *unexported* field. The case-based export boundary from [packages](/fundamentals/packages-and-modules/) is enforced at runtime too — `Set` on an unexported field panics, and `.Interface()` on one panics as well.
+
+## Boxing back to `any` with Interface() (Law 2)
+
+Once you've inspected or built a `reflect.Value`, `.Interface()` returns it to the normal world as an `any`, which you then type-assert. This is the bridge that lets reflection-based code feed results into ordinary statically-typed functions:
+
+<Playground client:visible title="interface.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"reflect"
+)
+
+func main() {
+	// Start in normal code, go INTO reflection, then come BACK.
+	var original any = 7
+
+	v := reflect.ValueOf(original) // Law 1: any -> reflect.Value
+	doubled := int(v.Int()) * 2    // v.Int() returns int64; convert to int
+
+	// Build a new reflect.Value and box it back to any (Law 2).
+	boxed := reflect.ValueOf(doubled).Interface()
+
+	// boxed is an any holding int(14); recover it with an assertion.
+	n := boxed.(int)
+	fmt.Println("type of boxed:", reflect.TypeOf(boxed)) // int
+	fmt.Println("doubled value:", n)                     // 14
+}`} />
+
+The first output line is `type of boxed: int`. `Interface()` completes the round trip: `any` → `reflect.Value` → operate → `.Interface()` → `any` → type-assert → concrete value.
+
+## When to reach for reflection — and what to use instead
+
+Reflection is the correct tool in a narrow band: when you genuinely *cannot* know the type at compile time and must work generically over arbitrary structs. The standard library leans on it for exactly this — `encoding/json`, `fmt`, `text/template`, `database/sql` scanning — and so do ORMs and validators. Outside that band, prefer:
+
+- **Concrete types** when you know the type — always fastest and safest.
+- **[Interfaces](/fundamentals/interfaces/)** when you need polymorphism over a *behavior*. A `Stringer` beats reflecting to find a `String` method.
+- **[Generics](/fundamentals/generics/)** (Go 1.18+) when you need the same algorithm across many types with compile-time safety. Most pre-generics uses of reflection for containers and utilities are now better as type parameters.
+- **[Type assertions / switches](/fundamentals/type-assertions/)** when you have an `any` and a *known, small* set of possible types.
+
 <Callout type="gotcha" title="⚠️ Powerful, but slow and unsafe — use sparingly">
-Reflection trades the compiler's guarantees for runtime flexibility: it allocates, it's much slower than direct code, and misuse (setting an unaddressable value, calling `.Float()` on a string) **panics**. It's the right tool for generic machinery — `encoding/json`, `fmt`, ORMs, and validators all use it under the hood — but for ordinary code prefer concrete types, [interfaces](/fundamentals/interfaces/), or generics. Reach for the X-ray only when you truly can't know the type ahead of time.
+Reflection trades the compiler's guarantees for runtime flexibility, and the bill comes due three ways: it **allocates** (boxing into `any`, building tags, copying values), it's **much slower** than direct field access and can't be inlined, and **misuse panics** — calling `.Float()` on a string, `Set` on an unaddressable or unexported value, `Field(i)` out of range. None of these are caught at compile time. It's the right machinery for generic encoders — `encoding/json`, `fmt`, ORMs, validators all use it under the hood — but for ordinary code prefer concrete types, [interfaces](/fundamentals/interfaces/), or generics. Reach for the X-ray only when you truly can't know the type ahead of time.
 </Callout>
+
+## See also
+
+- [Interfaces](/fundamentals/interfaces/) — the (type, value) pair reflection unwraps; where the `any` you reflect over comes from.
+- [Type assertions](/fundamentals/type-assertions/) — the lighter, compile-checked alternative when the type set is known.
+- [Structs](/fundamentals/structs/) — fields and tags, the main thing reflection walks.
+- [Generics](/fundamentals/generics/) — the modern, type-safe replacement for many old reflection use cases.
+- [/stdlib/encoding-json/](/stdlib/encoding-json/) — reflection in production: how struct tags drive marshaling.
 
 Next: put these fundamentals to work — explore [concurrency](/concurrency/) or browse the rest of the [Go Fundamentals](/fundamentals/) track.

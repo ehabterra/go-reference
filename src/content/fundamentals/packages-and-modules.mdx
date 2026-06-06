@@ -5,10 +5,10 @@ kind: topic
 order: 16
 difficulty: "Beginner"
 status: ready
-intent: "How Go code is organized — packages per directory, Capitalized exports, init order, and modules (go.mod / go.sum) that pin versioned dependencies."
+intent: "How Go code is organized — the package clause, Capitalized exports as encapsulation, the import forms (alias, blank, dot), init() ordering and package-variable init, doc comments; then modules: go.mod / go.sum, go get / mod tidy, semantic versioning and the v2+ rule, minimal version selection, internal/ packages, and replace / workspaces."
 related:
   - variables-and-types
-  - errors
+  - interfaces
   - reflection
 quiz:
   - q: "How does Go decide whether an identifier is exported from its package?"
@@ -21,18 +21,40 @@ quiz:
         correct: false
       - text: "Whatever is listed in go.mod"
         correct: false
-    explain: "Visibility is purely lexical: an identifier starting with an uppercase letter is exported (visible to importers); lowercase is unexported and only reachable within the same package. No keywords involved."
-  - q: "What is the role of `go.mod`?"
+    explain: "Visibility is purely lexical: an identifier whose first letter is uppercase is exported (visible to importers); lowercase is unexported and only reachable within the same package. No keywords involved — and it applies to every identifier, including struct fields, methods, and even individual struct fields independent of the struct's own visibility."
+  - q: "In what order does a package initialize?"
     options:
-      - text: "It declares the module path, the Go version, and the required dependencies with their versions"
+      - text: "Imported packages first, then package-level variables in dependency order, then each init() in file/declaration order, then main"
         correct: true
-      - text: "It lists every source file in the project"
+      - text: "init() always runs before package-level variables"
         correct: false
-      - text: "It stores compiled binaries"
+      - text: "main runs first and calls init() explicitly"
         correct: false
-      - text: "It is optional and ignored by the toolchain"
+      - text: "Alphabetically by identifier name"
         correct: false
-    explain: "`go.mod` defines the module: its import path, the language version, and `require` lines pinning each dependency. `go.sum` then records cryptographic checksums so builds are verifiable and reproducible."
+    explain: "Go fully initializes every imported package first (depth-first, each once). Within a package, variable initializers run in dependency order — a var that depends on another waits for it — then all init() functions run in the order the files are given to the compiler (then declaration order within a file), and finally main."
+  - q: "What does a blank import — `import _ \"net/http/pprof\"` — do?"
+    options:
+      - text: "Imports the package solely for its side effects (its init() functions) without binding a name you reference"
+        correct: true
+      - text: "Imports it but makes its symbols private"
+        correct: false
+      - text: "Is a syntax error — you must use what you import"
+        correct: false
+      - text: "Imports only the exported types, not functions"
+        correct: false
+    explain: "Normally an unused import is a compile error. The blank identifier `_` says \"run this package's init() for its registration side effects, but I won't reference any of its names\" — the classic pattern for database drivers and pprof handlers that register themselves."
+  - q: "You release a backward-incompatible v2 of a module. What must its import path become?"
+    options:
+      - text: "It must end in /v2 — e.g. example.com/lib/v2 — so v1 and v2 are distinct, co-installable modules"
+        correct: true
+      - text: "Nothing changes; the version in go.mod is enough"
+        correct: false
+      - text: "You append @v2 to every import statement"
+        correct: false
+      - text: "You must rename the module path entirely"
+        correct: false
+    explain: "Semantic Import Versioning: for v2 and beyond the major version is part of the module path (`/v2`, `/v3`). This lets a build graph contain both v1 and v2 of the same library at once, since they're different import paths — the mechanism that makes major-version upgrades non-breaking for the ecosystem."
   - q: "What can import a package under an `internal/` directory?"
     options:
       - text: "Only code rooted at internal/'s parent directory — it's private to that subtree"
@@ -43,81 +65,126 @@ quiz:
         correct: false
       - text: "Nothing; internal/ packages can't be imported at all"
         correct: false
-    explain: "The `internal/` rule is enforced by the toolchain: packages inside `.../internal/...` are importable only by code rooted at the directory that contains `internal/`. It's how you keep APIs private across packages."
+    explain: "The `internal/` rule is enforced by the toolchain: a package whose path contains `.../internal/...` is importable only by code rooted at the directory that contains that `internal/`. It's how you keep packages shareable across your own subtree while invisible to outside importers."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🏢 Analogy">
-A **package** is a room: everything inside shares the space freely, but only what you put by the door (a Capitalized name) is visible from the hallway. A **module** is the whole building — it has an address (the module path), a blueprint listing which other buildings it depends on (`go.mod`), and a signed inventory proving nothing was tampered with (`go.sum`).
+A **package** is a room: everything inside shares the space freely, but only what you set by the door — a Capitalized name — is visible from the hallway. A **module** is the whole building: it has an address (the module path), a blueprint listing which other buildings it depends on and at which versions (`go.mod`), and a signed, tamper-evident inventory of those buildings (`go.sum`). Packages give you *encapsulation*; modules give you *versioned dependency management*. They're different layers, and you'll use both in every project.
 </Callout>
 
-## Packages: one directory, two visibilities
+## Mental model: two layers
 
-Every `.go` file opens with a `package` clause, and **all files in one directory belong to the same package**. Visibility is decided by the *case* of an identifier — there is no `public`/`private` keyword:
+Go's code organization has exactly two units, and keeping them separate untangles most confusion:
+
+- A **package** is a unit of *compilation and encapsulation*. It's one directory of `.go` files that share a namespace. Visibility (export vs not) is per-package.
+- A **module** is a unit of *versioning and distribution*. It's a tree of packages released together under one path, with one `go.mod` at its root.
+
+A tiny program is one module containing one package (`main`). A large system is one module containing dozens of packages. A library you depend on is *another* module, pinned to a specific version in your `go.mod`. Compile-time wiring (imports, exports, `init`) is the package layer; the supply chain (`go get`, `go.sum`, version selection) is the module layer.
+
+## The package clause and one-directory rule
+
+Every `.go` file opens with a `package` clause, and **all files in one directory belong to the same package** — the compiler enforces it. The directory name and the package name are usually the same, but the `package` clause is authoritative; the import path is built from the directory, while the name you *type* to use the package comes from the clause.
+
+```go
+// file: store/item.go
+package store
+
+// file: store/query.go  — same directory, same package
+package store
+```
+
+The one exception: a directory may also hold a `package store_test` (an *external test package*) alongside `package store`, used to test only the exported API. Beyond that, two different package names in one directory is a compile error.
+
+## Exported vs unexported: encapsulation by case
+
+Visibility is decided by the **case of the first letter** — there is no `public`/`private` keyword:
 
 ```go
 package store
 
-// Exported: Capitalized, visible to importers.
-func Get(id int) (Item, error) { /* ... */ }
+// Exported: Capitalized first letter, visible to importers.
+type Item struct {
+	ID    int    // exported field
+	name  string // unexported field — invisible outside store
+}
 
-// Unexported: lowercase, private to package store.
-func validate(id int) error { /* ... */ }
+func Get(id int) (Item, error) { /* ... */ } // exported
+func validate(id int) error    { /* ... */ } // unexported
 ```
 
-You bring in other packages by their **import path**, then use them via the package name:
+The rule applies to **every** identifier independently — types, functions, methods, constants, and *individual struct fields*. An exported struct can have unexported fields (very common: a `Buffer` you can pass around but whose internals you can't poke at), and an unexported type can have exported methods. This per-field control is the whole of Go's encapsulation: keep a small Capitalized surface, keep helpers and invariants lowercase. There's no friend, no protected, no module-private-but-package-public — just "same package sees everything; importers see Capitals."
+
+| Identifier | Visible within its package | Visible to importers |
+|---|---|---|
+| `Capitalized` | yes | yes (exported) |
+| `lowercase` | yes | no (unexported) |
+| `_` (blank) | n/a — discards | n/a |
+
+## Imports: paths and the four forms
+
+You bring in another package by its **import path** (a string), then refer to its exported names through the package's *name*:
 
 ```go
 import (
-	"fmt"          // standard library
+	"fmt"                     // standard library — short path
 	"strings"
-	"example.com/app/store" // a package within your module
+	"example.com/app/store"   // a package in some module
 )
+
+func main() {
+	fmt.Println(strings.ToUpper("go"))
+	_, _ = store.Get(1) // referenced by package name "store", not the full path
+}
 ```
 
-This case rule is the whole of Go's encapsulation: expose a small Capitalized surface, keep helpers lowercase.
+The import path identifies *where* the code lives; the package name (from its `package` clause) is *what you type*. They usually match the last path element, but not always (`gopkg.in/yaml.v3` is imported but used as `yaml`). Go has four import forms:
 
-## Modules: go.mod, go.sum, and versions
+| Form | Syntax | Meaning |
+|---|---|---|
+| Normal | `import "io"` | bind the package under its declared name |
+| Alias | `import json2 "encoding/json"` | bind it under a name you choose (resolve clashes, shorten) |
+| Blank | `import _ "image/png"` | run its `init()` for side effects only; bind no name |
+| Dot | `import . "fmt"` | dump its exported names into your file scope |
 
-A **module** is a tree of packages versioned together, rooted at a `go.mod` file. The module path is the import prefix for every package it contains:
-
-<Mermaid code={`graph TD
-  M["module example.com/app  ·  go.mod"] --> P1["package main  ·  /"]
-  M --> P2["package store  ·  /store"]
-  M --> P3["package store (internal)  ·  /internal/auth"]
-  P2 --> F1["item.go"]
-  P2 --> F2["query.go"]`} />
-
-A minimal `go.mod` declares the path, the Go version, and dependencies:
+The **alias** form resolves two packages with the same name (`crypto/rand` and `math/rand`) or just shortens a long name. The **blank import** is essential and idiomatic: normally an unused import is a *compile error*, so `_` tells the compiler "run this package's `init()` for its registration side effects — I won't name anything in it." That's how `database/sql` drivers, image format decoders, and `net/http/pprof` register themselves:
 
 ```go
-module example.com/app
-
-go 1.25
-
-require (
-	github.com/google/uuid v1.6.0
+import (
+	"database/sql"
+	_ "github.com/lib/pq" // registers the "postgres" driver via its init()
 )
 ```
 
-Dependencies use **semantic versioning** (`vMAJOR.MINOR.PATCH`). Day to day you run:
+The **dot import** copies a package's exported identifiers into your file's scope so you can write `Println` instead of `fmt.Println`. It's **discouraged** — it hides where names come from and can collide — and survives mostly in some test DSLs. Avoid it in ordinary code.
 
-- `go get example.com/lib@v1.2.3` — add or upgrade a dependency.
-- `go mod tidy` — add missing requirements and drop unused ones.
+## init() and initialization order
 
-`go.sum` records a checksum for every module version, so a build either matches what you verified or fails — reproducible and tamper-evident.
+A package may define **one or more** `init()` functions (across any of its files). They take no arguments, return nothing, can't be called or referenced by your code, and run **automatically** at startup. The full order is precise and worth memorizing:
 
-## init() and a runnable taste
+1. Every **imported package** is initialized first, depth-first, each exactly once (so all your dependencies are ready before you run).
+2. **Package-level variables** initialize next, in *dependency order*: if `var a = b + 1` and `b` is another package var, `b` initializes first regardless of source order. Independent vars follow declaration order.
+3. All **`init()`** functions run, in the order the files are presented to the compiler (effectively alphabetical by filename for `go build`), and in declaration order within a file.
+4. Finally **`main`** (only in `package main`).
 
-A package may define one or more `init()` functions; they run **automatically** after package-level variables are initialized and **before** `main`, in the order shown below. Here exported vs unexported and `init` ordering all live inside `package main` so it runs as-is:
+<Mermaid code={String.raw`graph LR
+  IMP["imported packages init (each once)"] --> VARS["package-level vars (dependency order)"]
+  VARS --> INIT["init() funcs (file, then decl order)"]
+  INIT --> MAIN["main()"]`} />
 
-<Playground client:visible title="packages.go" code={`package main
+Use `init()` sparingly — for registration (the blank-import pattern) or validating config that must hold before anything runs. Overusing it creates hidden, order-dependent startup magic that's hard to test. Prefer explicit constructors you call from `main` when you can.
+
+## A runnable taste: init ordering
+
+This single `package main` makes the order visible. A package-level variable's initializer runs first (printing `1`), then `init()` (`2`), then `main` (`3`, `4`), deterministically:
+
+<Playground client:visible title="init-order.go" code={String.raw`package main
 
 import "fmt"
 
-// Package-level variable, initialized before any init().
+// Package-level variable: its initializer runs before any init().
 var stage = step("var init")
 
 func step(s string) string {
@@ -125,7 +192,7 @@ func step(s string) string {
 	return s
 }
 
-// init runs automatically after vars, before main.
+// init runs automatically after package vars, before main.
 func init() {
 	fmt.Println("2: init() runs")
 }
@@ -140,10 +207,143 @@ func main() {
 	_ = stage
 }`} />
 
-The output is ordered `1 → 2 → 3 → 4`: variable initializers, then `init()`, then `main`. Within `package main`, `Greeting` (exported style) and `shout` (unexported) are both reachable; across packages, only `Greeting` would be.
+The output is ordered `1 → 2 → 3 → 4`: the variable initializer, then `init()`, then `main`. Inside `package main`, `Greeting` (exported style) and `shout` (unexported) are both reachable; *across* packages, only `Greeting` would be.
 
-<Callout type="gotcha" title="🐹 internal/ is a real boundary">
-A directory named `internal/` is enforced by the compiler: packages under `.../internal/...` can be imported **only** by code rooted at `internal/`'s parent. Use it to share helpers across your own packages without exposing them as public API. And remember: one package per directory, and the directory name usually (not always) matches the package name — but it's the `package` clause, not the folder, that's authoritative.
+## Doc comments and go doc
+
+A comment immediately above a declaration — with no blank line between — is its **doc comment**, surfaced by the `go doc` tool and on pkg.go.dev. By convention it starts with the identifier's name so it reads as a sentence:
+
+```go
+// Package store persists and retrieves catalog items.
+package store
+
+// Get returns the Item with the given id, or an error if none exists.
+func Get(id int) (Item, error) { /* ... */ }
+```
+
+Then anyone can read your API without opening the source:
+
+```bash
+go doc example.com/app/store           # package summary + exported symbols
+go doc example.com/app/store.Get       # one symbol's doc
+go doc -all example.com/app/store      # everything, including details
+```
+
+Only **exported** identifiers appear in the rendered docs, which is another reason the export boundary matters: it's also your documentation boundary.
+
+## Modules: go.mod, go.sum, and versions
+
+A **module** is a tree of packages versioned together, rooted at a `go.mod` file. The module path is the import prefix for every package the module contains:
+
+<Mermaid code={String.raw`graph TD
+  M["module example.com/app  ·  go.mod"] --> P1["package main  ·  /"]
+  M --> P2["package store  ·  /store"]
+  M --> P3["package auth  ·  /internal/auth"]
+  P2 --> F1["item.go"]
+  P2 --> F2["query.go"]`} />
+
+A `go.mod` declares the module path, the language version, and the dependencies:
+
+```go
+module example.com/app
+
+go 1.25
+
+require (
+	github.com/google/uuid v1.6.0
+	golang.org/x/text v0.14.0 // indirect
+)
+```
+
+- **`module`** sets the import path prefix. A package in `./store` is imported as `example.com/app/store`.
+- **`go`** declares the minimum language version — it gates which language and stdlib features you may use and how the toolchain behaves.
+- **`require`** pins each dependency to an exact version. `// indirect` marks a dependency you don't import directly but that something you require needs.
+
+You create and maintain it with the toolchain rather than by hand:
+
+```bash
+go mod init example.com/app          # create go.mod for a new module
+go get example.com/lib@v1.2.3        # add or upgrade a dependency to a version
+go get example.com/lib@latest        # move to the newest release
+go mod tidy                          # add missing requires, drop unused ones
+```
+
+## go.sum: commit it
+
+Alongside `go.mod` sits **`go.sum`** — a list of cryptographic checksums for every module version (and every `go.mod`) in your build graph:
+
+```
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+```
+
+On every build the toolchain re-hashes each downloaded module and **fails if a hash doesn't match** — so a tampered or swapped dependency can't slip in. **Commit `go.sum` to version control** (it's not a lockfile of versions — that's `go.mod`'s job — it's an integrity guarantee). Together they make builds reproducible *and* verifiable.
+
+## Semantic versioning and the v2+ rule
+
+Dependencies use **semantic versioning**: `vMAJOR.MINOR.PATCH`. A bump in MAJOR signals a breaking change, MINOR adds features compatibly, PATCH fixes bugs. Go builds an unusual but powerful rule on top of this — **Semantic Import Versioning**:
+
+> For **v2 and above**, the major version becomes part of the module path: `example.com/lib/v2`, `example.com/lib/v3`.
+
+```go
+// go.mod of a v3 library
+module example.com/lib/v3
+
+// importing it
+import "example.com/lib/v3"
+```
+
+Because v1 and v2 then have *different import paths*, a single build can contain **both at once** — a deep dependency on `lib/v1` and your own use of `lib/v3` coexist without conflict. (v0 and v1 share the bare path, since v0 carries no compatibility promise.) This is the mechanism that makes major upgrades non-catastrophic for the whole ecosystem.
+
+## Minimal version selection (briefly)
+
+When several modules in your graph each require a different version of the same dependency, Go doesn't grab the newest available — it uses **Minimal Version Selection (MVS)**: it picks the *highest version that any requirement explicitly asks for*, and no higher. If A needs `lib v1.2.0` and B needs `lib v1.4.0`, you get `v1.4.0` — the minimum that satisfies everyone. Builds are therefore reproducible without a lockfile: nothing silently floats to a newer release just because one appeared. You upgrade only when you explicitly `go get` a higher version. See [/stdlib/modules/](/stdlib/modules/) for the full algorithm and tooling.
+
+## internal/ packages
+
+A directory named **`internal/`** is a compiler-enforced privacy boundary at the *package* level (the export rule is privacy *within* a package; `internal/` is privacy *across* packages of your module):
+
+<Mermaid code={String.raw`graph TD
+  ROOT["example.com/app"] --> SVC["/service  (may import internal/auth)"]
+  ROOT --> INT["/internal/auth"]
+  ROOT --> CMD["/cmd/server  (may import internal/auth)"]
+  OUT["another-module.com/x"] -.->|BLOCKED| INT`} />
+
+A package whose path contains `.../internal/...` is importable **only** by code rooted at the directory that *contains* that `internal/`. So `example.com/app/internal/auth` is usable by anything under `example.com/app/`, but no other module can import it — even though the source is public on GitHub. It's how you share code across your own packages while keeping it out of your public API, free to refactor without breaking anyone.
+
+## replace and workspaces (briefly)
+
+Two tools let you point at code other than the published version:
+
+- **`replace`** in `go.mod` swaps a module for a local path or a fork — invaluable while developing two modules together or testing a patch before it's released:
+
+```go
+replace example.com/lib => ../lib            // use the local checkout
+replace example.com/lib => example.com/fork v1.0.0
+```
+
+- **Workspaces** (`go.work`, Go 1.18+) do the same across *several* modules at once without editing any module's `go.mod` — ideal for a multi-module repo you develop together:
+
+```bash
+go work init ./app ./lib   # one workspace spanning both modules
+```
+
+Both are development conveniences; production builds resolve from the published, checksummed versions. See [/stdlib/modules/](/stdlib/modules/) for depth on `replace`, workspaces, and vendoring.
+
+<Callout type="tip" title="🧭 When to split into a new package vs a new module">
+Split into a **new package** when a group of types has a clear responsibility and you want an encapsulation boundary — cheap, internal, no versioning. Split into a **new module** only when code needs an *independent release cadence and version* — a library others import, or a tool with its own lifecycle. Most projects are *one module, many packages*. Reaching for a second module too early buys you `go.mod` bookkeeping and cross-module version skew with little payoff; prefer packages (and `internal/`) until a true independent-versioning need appears.
 </Callout>
+
+<Callout type="gotcha" title="🐹 import path ≠ package name ≠ directory name (usually they match)">
+Three things are easy to conflate. The **import path** is what you write in quotes (`"gopkg.in/yaml.v3"`); the **package name** is what you type to use it (`yaml`, from its `package` clause); the **directory** determines the path but not the name. They usually coincide with the last path element — but not always, which is exactly when imports get confusing. When a package name surprises you, read its `package` clause, not the URL. And remember: **one package per directory** (the lone exception being `_test` external test packages), and `internal/` is a hard wall even for public repos.
+</Callout>
+
+## See also
+
+- [Variables & Types](/fundamentals/variables-and-types/) — what package-level vars are and when their initializers run.
+- [Interfaces](/fundamentals/interfaces/) — the other half of encapsulation: exposing behavior, not structure.
+- [Reflection](/fundamentals/reflection/) — reads the exported/unexported boundary at runtime via struct fields and tags.
+- [/stdlib/modules/](/stdlib/modules/) — modules in depth: MVS, replace, workspaces, vendoring, proxies.
+- [/stdlib/go-toolchain/](/stdlib/go-toolchain/) — `go build`/`run`/`test`/`doc` and the rest of the one-tool workflow.
 
 Next: inspecting types and values at runtime — [reflection](/fundamentals/reflection/).

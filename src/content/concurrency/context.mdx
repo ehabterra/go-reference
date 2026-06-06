@@ -72,7 +72,7 @@ You start from a root and **derive** child contexts; cancelling a parent cancels
 | `context.WithDeadline(parent, t)` | cancels automatically at time `t` |
 | `context.WithValue(parent, k, v)` | attaches a request-scoped value |
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   B["context.Background()"] --> R["WithTimeout(40ms)"]
   R --> G1["fetch()"]
   R --> G2["another call"]
@@ -83,7 +83,7 @@ You start from a root and **derive** child contexts; cancelling a parent cancels
 
 `fetch` races its work against `ctx.Done()`; the 40 ms timeout fires before the 80 ms work finishes. **Run** it:
 
-<Playground client:visible title="context.go" code={`package main
+<Playground client:visible title="context.go" code={String.raw`package main
 
 import (
 	"context"

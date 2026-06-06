@@ -64,7 +64,7 @@ If channels are conveyor belts moving parts between workers, the `sync` package 
 
 A `sync.Mutex` makes a critical section exclusive. Wrap shared state in a type and lock around access — the same counter that raced [earlier](/concurrency/race-conditions/) is now correct. **Run** it:
 
-<Playground client:visible title="sync.go" code={`package main
+<Playground client:visible title="sync.go" code={String.raw`package main
 
 import (
 	"fmt"
@@ -120,7 +120,7 @@ c.L.Unlock()
 
 ## Mutex or channel?
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   Q{"What are you doing?"}
   Q -->|"Guarding a struct's<br/>internal state"| M["Mutex / RWMutex"]
   Q -->|"Transferring ownership<br/>or coordinating goroutines"| C["Channel"]

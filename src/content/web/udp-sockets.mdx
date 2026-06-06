@@ -57,7 +57,7 @@ If TCP is a phone call, UDP is a stack of postcards. You write an address on eac
 
 UDP has no handshake and no connection state. You just send a self-contained **datagram** to an address, and the kernel ships it off. There's no ACK, no retransmit, no ordering — if a packet is dropped on the way, neither side is told. In exchange you get the lowest possible latency and **message boundaries for free**: one `WriteTo` is exactly one datagram, received as exactly one `ReadFrom`.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   C["client<br/>WriteTo(addr)"] -->|"datagram 1"| S["server<br/>ReadFrom"]
   C -->|"datagram 2 (may be lost)"| S
   C -->|"datagram 3 (may arrive first)"| S`} />
@@ -110,7 +110,7 @@ Because there's no connection, a UDP `Read` can block forever waiting for a repl
 
 Resolving a numeric address into a `*net.UDPAddr` is pure parsing — no DNS, no socket — so it's safe to run anywhere. This is the same `*net.UDPAddr` you'd hand to `DialUDP` or get back from `ReadFromUDP`:
 
-<Playground client:visible title="udpaddr.go" code={`package main
+<Playground client:visible title="udpaddr.go" code={String.raw`package main
 
 import (
 	"fmt"

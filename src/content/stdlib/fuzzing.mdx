@@ -111,7 +111,7 @@ $ go test -fuzz=FuzzReverse
 
 The fuzzer takes your seeds, **mutates** them, and runs the body on each result — guided by code coverage, so it steers toward inputs that reach new branches:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   S["f.Add seeds"] --> C["seed corpus"]
   C --> M["mutate / generate input"]
   M --> R["run f.Fuzz body"]
@@ -122,7 +122,7 @@ The fuzzer takes your seeds, **mutates** them, and runs the body on each result 
 
 Here's the property running over sample inputs in `main`, so you can see *why* `Reverse(Reverse(s)) == s` should always hold — and edit `Reverse` to watch it break:
 
-<Playground client:visible title="reverse-property.go" code={`package main
+<Playground client:visible title="reverse-property.go" code={String.raw`package main
 
 import "fmt"
 

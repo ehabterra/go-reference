@@ -57,7 +57,7 @@ A trie is a dictionary's thumb index taken to the extreme. To find "category" yo
 
 A **trie** (from re*trie*val, usually said "try") is a tree where each edge is labelled with a character. A word is not stored in any single node — it's spelled out by the **path** from the root. Nodes that share a prefix share the path that spells it, so "cat", "car" and "card" all branch off a common "ca" stem:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   R["root"] -->|c| C["c"]
   C -->|a| CA["ca"]
   CA -->|t| CAT["cat ✓"]
@@ -88,7 +88,7 @@ Every operation walks one node per character of the key, so each costs **O(L)** 
 - **Search:** walk the key; return true only if the path exists *and* the final node's `isEnd` is set.
 - **StartsWith:** walk the prefix; return true if the path merely exists — `isEnd` is irrelevant.
 
-<Playground client:visible title="trie.go" code={`package main
+<Playground client:visible title="trie.go" code={String.raw`package main
 
 import "fmt"
 
@@ -164,7 +164,7 @@ Notice `Search("ca")` is `false` while `StartsWith("ca")` is `true` — that's t
 
 `StartsWith` only answers yes/no. Real autocomplete walks to the prefix node, then does a depth-first traversal of the subtree beneath it, gathering every path that ends in a word:
 
-<Playground client:visible title="autocomplete.go" code={`package main
+<Playground client:visible title="autocomplete.go" code={String.raw`package main
 
 import (
 	"fmt"

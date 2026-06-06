@@ -107,7 +107,7 @@ Read each line as: name (with `-8` = GOMAXPROCS), iterations run, then the metri
 - **B/op** — bytes allocated per operation. `+=` allocates a new string every step.
 - **allocs/op** — number of heap allocations per operation. Fewer is steadier under GC.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   A["go test -bench=. -benchmem"] --> B["run body b.N times"]
   B --> C["b.N too low?"]
   C -->|"yes, scale up"| B
@@ -131,7 +131,7 @@ func BenchmarkLookup(b *testing.B) {
 
 You can run the *same two approaches* here in `main` to confirm they produce the identical string — the benchmark above just measures how much each one costs to get there:
 
-<Playground client:visible title="concat.go" code={`package main
+<Playground client:visible title="concat.go" code={String.raw`package main
 
 import (
 	"fmt"

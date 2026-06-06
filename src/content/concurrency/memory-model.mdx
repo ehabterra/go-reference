@@ -75,7 +75,7 @@ These are the operations that establish happens-before *between* goroutines:
 | **`go` statement** | it happens-before the new goroutine starts |
 | **`atomic`** | a synchronizing atomic write happens-before the read that observes it |
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   W["G1: write msg"] --> C["G1: close(done)"]
   C -.happens-before.-> R["G2: <-done"]
   R --> U["G2: read msg → sees the write"]`} />
@@ -84,7 +84,7 @@ These are the operations that establish happens-before *between* goroutines:
 
 Here the close-before-receive edge guarantees the receiver sees the write to `msg`. It is **always** "hello", never the empty string. **Run** it:
 
-<Playground client:visible title="memory_model.go" code={`package main
+<Playground client:visible title="memory_model.go" code={String.raw`package main
 
 import "fmt"
 

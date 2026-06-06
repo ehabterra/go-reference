@@ -86,7 +86,7 @@ func TestAbs(t *testing.T) {
 
 The `got` / `want` naming is a strong Go convention — it makes failure messages read like a sentence: *got 5, want 3*. You can run the real logic here in `main` to see it execute:
 
-<Playground client:visible title="abs.go" code={`package main
+<Playground client:visible title="abs.go" code={String.raw`package main
 
 import "fmt"
 
@@ -131,7 +131,7 @@ func assertEqual(t *testing.T, got, want int) {
 }
 ```
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["go test ./..."] --> B["compile *_test.go with package"]
   B --> C["find every TestXxx(t *testing.T)"]
   C --> D["run each test"]

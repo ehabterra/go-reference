@@ -69,7 +69,7 @@ A furniture company sells matching sets. Pick the *Victorian* line and the chair
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class IngredientFactory {
     <<interface>>
     +Dough() Dough
@@ -94,7 +94,7 @@ A furniture company sells matching sets. Pick the *Victorian* line and the chair
 
 The client works only with the `IngredientFactory` interface, so swapping `NYFactory` for `ChicagoFactory` swaps the **entire** ingredient set — and they always match. Edit and **Run**:
 
-<Playground client:visible title="abstract_factory.go" code={`package main
+<Playground client:visible title="abstract_factory.go" code={String.raw`package main
 
 import "fmt"
 

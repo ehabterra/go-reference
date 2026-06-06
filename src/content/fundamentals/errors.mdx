@@ -5,7 +5,7 @@ kind: topic
 order: 14
 difficulty: "Intermediate"
 status: ready
-intent: "Errors are ordinary values you return and check — sentinels, wrapping with %w, and matching them through the chain with errors.Is, As, and Join."
+intent: "Errors are ordinary values you return last and check — the error interface, sentinels, wrapping with %w to build a chain, matching through it with errors.Is / As / Join, custom error types with Unwrap, and when to wrap vs annotate vs handle vs return as-is."
 related:
   - functions
   - panic-recover
@@ -21,7 +21,7 @@ quiz:
         correct: false
       - text: "Always a `*string`"
         correct: false
-    explain: "`error` is just an interface: `interface { Error() string }`. Errors are ordinary values returned (by convention) last, and the caller checks `if err != nil`. No exceptions involved."
+    explain: "`error` is just an interface: `interface { Error() string }`. Errors are ordinary values, returned by convention last, and the caller checks `if err != nil`. No exceptions, no stack unwinding — an error is a value like any other."
   - q: "What does `fmt.Errorf(\"load: %w\", err)` do that `%v` would not?"
     options:
       - text: "It wraps `err` so `errors.Is` / `errors.As` can still find it through the chain"
@@ -32,7 +32,7 @@ quiz:
         correct: false
       - text: "Nothing — `%w` and `%v` are identical"
         correct: false
-    explain: "The `%w` verb wraps the original error, preserving it in the chain. `errors.Is` and `errors.As` then unwrap and inspect each layer. `%v` only formats the text, losing the original value."
+    explain: "The `%w` verb wraps the original error, keeping it reachable via Unwrap. `errors.Is` and `errors.As` then walk each layer of the chain. `%v` only formats the text, severing the link to the original value."
   - q: "When do you use `errors.As` instead of `errors.Is`?"
     options:
       - text: "When you need the concrete error value itself (to read its fields), not just to match identity"
@@ -43,19 +43,41 @@ quiz:
         correct: false
       - text: "Only inside a deferred function"
         correct: false
-    explain: "`errors.Is(err, target)` asks 'is this sentinel anywhere in the chain?'. `errors.As(err, &target)` finds the first error matching a *type* and assigns it, so you can read its fields."
+    explain: "`errors.Is(err, target)` asks 'is this sentinel value anywhere in the chain?'. `errors.As(err, &target)` finds the first error matching a *type*, assigns it to target, and lets you read its fields."
+  - q: "After `err := fmt.Errorf(\"open: %w\", ErrNotFound)`, what is `err == ErrNotFound`?"
+    options:
+      - text: "false — wrapping produces a new, different error value; you must use errors.Is"
+        correct: true
+      - text: "true — %w keeps it the same value"
+        correct: false
+      - text: "It panics"
+        correct: false
+      - text: "true only if the message matches"
+        correct: false
+    explain: "Once wrapped, `err` is a distinct `*fmt.wrapError` holding ErrNotFound inside. `==` compares the outer values and is false. `errors.Is(err, ErrNotFound)` unwraps the chain and returns true."
+  - q: "What must a custom error type provide so that `errors.Is` can see the error it wraps?"
+    options:
+      - text: "An `Unwrap() error` method returning the wrapped cause"
+        correct: true
+      - text: "Nothing — Is reads private fields automatically"
+        correct: false
+      - text: "An `Is(error) bool` field"
+        correct: false
+      - text: "A call to errors.Join in its constructor"
+        correct: false
+    explain: "`errors.Is`/`As` walk the chain by repeatedly calling `Unwrap`. A custom type that holds an inner error must expose `Unwrap() error` (or `Unwrap() []error` for multiple) for the matchers to reach beneath it. `fmt.Errorf(\"...: %w\", err)` adds that method for you automatically."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📦 Analogy">
-Other languages throw an error like a fire alarm — it interrupts everything and someone up the call stack has to catch it. Go hands the error back like a package receipt: an ordinary value returned alongside the result. You look at the receipt right away (`if err != nil`) and decide what to do. No surprises flying past you.
+Other languages throw an error like a fire alarm — it interrupts everything and someone up the call stack has to catch it. Go hands the error back like a package receipt: an ordinary value returned alongside the result. You look at the receipt right away (`if err != nil`) and decide what to do — fix it, add a note and pass it on, or file it away. Nothing flies past you unseen, and the path an error takes is just the ordinary path your code already reads.
 </Callout>
 
 ## error is just a value
 
-`error` is a one-method interface from the standard library:
+`error` is a one-method interface from the standard library — that is the entire definition:
 
 ```go
 type error interface {
@@ -63,49 +85,68 @@ type error interface {
 }
 ```
 
-Any type with an `Error() string` method *is* an error. By convention a function returns its error **last**, and the caller checks it immediately:
+Any type with an `Error() string` method *is* an error; satisfaction is [implicit](/fundamentals/interfaces/), like every other interface. There is no exception type, no `throw`, no stack unwinding. An error is a value you can store in a variable, put in a slice, compare, wrap, and — above all — **return**. By convention a function returns its error **last**, and the caller checks it immediately, before using any other result:
 
 ```go
 f, err := os.Open("config.toml")
 if err != nil {
-	return err // handle, wrap, or return — but don't ignore
+	return err // handle, wrap, or return — but never silently ignore
 }
 defer f.Close()
 ```
 
-Create simple errors with `errors.New` or `fmt.Errorf`. A package-level error value used as a known, comparable signal is called a **sentinel**:
+This is the **errors-are-values** philosophy. Because an error is data, you can do data things with it: branch on it, collect it, transform it, attach it to a struct. The cost is the famous verbosity — the `if err != nil` block repeated down a function — but the payoff is that every failure path is visible in the source. There is no invisible second control flow, the way exceptions create one.
+
+### The mental model
+
+Think of every fallible call as returning a small two-slot tuple: `(result, err)`. Exactly one slot is meaningful. The contract is *check `err` first* — if it is non-nil, treat `result` as garbage (it is usually the zero value). The whole discipline of Go error handling is just making that check, and choosing, at each level, one of four responses:
+
+| Response | What you do | When |
+|---|---|---|
+| **Handle** | Inspect the error and recover (retry, fall back, log) | You are the right layer to *decide* — you have the context to fix or absorb it. |
+| **Annotate (wrap)** | `return fmt.Errorf("doing X: %w", err)` | You are passing it up but can add useful context (an id, a filename, an operation). |
+| **Return as-is** | `return err` | You have nothing meaningful to add; the caller's context is enough. |
+| **Produce** | `return ErrFoo` / `return &MyError{...}` | You are the origin of the failure. |
+
+Most of error handling is picking the right row.
+
+## Sentinels: errors you can recognize
+
+Create simple errors with `errors.New` or `fmt.Errorf`. A package-level error value meant to be a known, comparable signal is called a **sentinel**:
 
 ```go
 var ErrNotFound = errors.New("not found")
 ```
 
+Callers test for it by identity. Sentinels are how the standard library exposes "expected" outcomes you might branch on — `io.EOF`, `sql.ErrNoRows`, `os.ErrNotExist`. The catch: a sentinel is matched by *value*, so the moment you wrap it (next section) a plain `==` no longer works — you need `errors.Is`.
+
 ## Wrapping and the error chain
 
-When you pass an error up, you usually want to add context *without* throwing away the original. The `%w` verb in `fmt.Errorf` **wraps** it, building a chain you can inspect later:
+When you pass an error up, you usually want to add context *without* discarding the original. The `%w` verb in `fmt.Errorf` **wraps** it, producing a new error whose message reads as an annotation and whose `Unwrap()` returns the original. Wrap at each level and you build a **chain** — a singly linked list of errors, newest at the head — that you can inspect later:
 
-<Mermaid code={`graph LR
-  A["ErrNotFound"] -->|"%w wrap"| B["lookup: not found"]
-  B -->|"%w wrap"| C["handleRequest: lookup: not found"]
-  C -.->|"errors.Is(err, ErrNotFound)"| A`} />
+<Mermaid code={String.raw`graph LR
+  A["ErrNotFound"] -->|"%w wrap"| B["lookup id=42: not found"]
+  B -->|"%w wrap"| C["handle request: lookup id=42: not found"]
+  C -.->|"errors.Is walks down"| A`} />
 
-Two helpers walk that chain for you:
+Two helpers walk that chain so you never have to unwrap by hand:
 
 - `errors.Is(err, target)` — is the sentinel `target` anywhere in the chain? (identity match)
-- `errors.As(err, &target)` — find the first error of a given **type** and assign it, so you can read its fields.
+- `errors.As(err, &target)` — find the first error of a given **type**, assign it to `target`, so you can read its fields.
 
-<Playground client:visible title="wrap.go" code={`package main
+<Playground client:visible title="wrap.go" code={String.raw`package main
 
 import (
 	"errors"
 	"fmt"
 )
 
-// A sentinel: a known error value callers can match on.
+// A sentinel: a known error value callers can compare against.
 var ErrNotFound = errors.New("not found")
 
 func lookup(id int) error {
 	if id != 1 {
-		// wrap the sentinel with context using %w
+		// Wrap the sentinel with context using %w.
 		return fmt.Errorf("lookup id=%d: %w", id, ErrNotFound)
 	}
 	return nil
@@ -113,7 +154,7 @@ func lookup(id int) error {
 
 func handle(id int) error {
 	if err := lookup(id); err != nil {
-		// wrap again — the chain keeps growing
+		// Wrap again — the chain keeps growing, context accretes.
 		return fmt.Errorf("handle request: %w", err)
 	}
 	return nil
@@ -121,38 +162,53 @@ func handle(id int) error {
 
 func main() {
 	err := handle(42)
-	fmt.Println("got:", err)
+	fmt.Println("message:", err)
 
-	// errors.Is matches the sentinel through TWO layers of wrapping
+	// errors.Is walks the chain and matches the sentinel through BOTH wraps.
 	if errors.Is(err, ErrNotFound) {
-		fmt.Println("matched ErrNotFound through the chain")
+		fmt.Println("errors.Is found ErrNotFound through the chain")
 	}
+
+	// A plain == comparison FAILS once wrapped — the value is now different.
+	fmt.Println("err == ErrNotFound:", err == ErrNotFound)
+
+	// errors.Unwrap peels exactly one layer at a time.
+	fmt.Println("one layer down:", errors.Unwrap(err))
 }`} />
 
-## Custom error types and errors.Join
+### Under the hood: what %w actually builds
 
-When an error needs to carry **data** (a field, a code, a path), define a type with an `Error()` method. Then `errors.As` can pull the concrete value back out so callers read its fields:
+`fmt.Errorf` with a `%w` verb returns a private `*fmt.wrapError` — a struct holding the formatted message *and* the wrapped error, with an `Unwrap() error` method that returns it. `errors.Is` and `errors.As` are tiny loops: start at `err`, check it, then call `Unwrap` to step down, repeating until they match or reach an error with no `Unwrap` (the bottom of the chain). So "the chain" is nothing more than a linked list reached through `Unwrap`. Two refinements make matching smarter than naive `==`:
 
-<Playground client:visible title="as.go" code={`package main
+- If an error in the chain implements `Is(target error) bool`, `errors.Is` calls it — letting a type declare itself "equal" to a sentinel under custom rules.
+- If it implements `As(any) bool`, `errors.As` defers to that. You rarely need either, but they explain why `Is`/`As` are more capable than the comparisons they replace.
+
+## Custom error types: errors that carry data
+
+When an error needs to carry **structured data** — a field name, a status code, a path, the offending value — define a type with an `Error()` method. Then `errors.As` can pull the concrete value back out so callers read its fields, something a sentinel can never do:
+
+<Playground client:visible title="as.go" code={String.raw`package main
 
 import (
 	"errors"
 	"fmt"
 )
 
-// A custom error type that carries structured data.
+// A custom error type carries structured data, not just text.
 type ValidationError struct {
 	Field string
-	Msg   string
+	Min   int
 }
 
+// Implementing Error() makes *ValidationError satisfy the error interface.
 func (e *ValidationError) Error() string {
-	return fmt.Sprintf("field %q: %s", e.Field, e.Msg)
+	return fmt.Sprintf("field %q must be >= %d", e.Field, e.Min)
 }
 
 func validate(age int) error {
 	if age < 0 {
-		err := &ValidationError{Field: "age", Msg: "must be >= 0"}
+		err := &ValidationError{Field: "age", Min: 0}
+		// Wrap it so the chain has context but the type is still reachable.
 		return fmt.Errorf("validate user: %w", err)
 	}
 	return nil
@@ -160,26 +216,158 @@ func validate(age int) error {
 
 func main() {
 	err := validate(-5)
-	fmt.Println("got:", err)
+	fmt.Println("message:", err)
 
-	// errors.As extracts the concrete *ValidationError from the chain
+	// errors.As finds the first *ValidationError in the chain and binds it,
+	// so we can read its TYPED fields — not possible with errors.Is.
 	var ve *ValidationError
 	if errors.As(err, &ve) {
-		fmt.Println("bad field:", ve.Field)
+		fmt.Println("field:", ve.Field)
+		fmt.Println("min:", ve.Min)
 	}
-
-	// errors.Join (Go 1.20+) bundles multiple errors into one.
-	combined := errors.Join(
-		errors.New("disk full"),
-		errors.New("timeout"),
-	)
-	fmt.Println("joined:", combined)
 }`} />
 
-`errors.Join` (added in Go 1.20) collects several errors into one value; `errors.Is` / `errors.As` still match against *any* of the joined errors, which is perfect for accumulating validation failures.
-
-<Callout type="gotcha" title="🐹 Wrap with %w, compare with Is — never ==">
-Once you wrap an error, `err == ErrNotFound` is **false** — the value is now a different, wrapping error. Always use `errors.Is(err, ErrNotFound)` to match a sentinel and `errors.As` to extract a typed error. And add context as you go up the stack (`%w`), so the final message reads like a trail: `handle request: lookup id=42: not found`.
+<Callout type="go" title="🐹 Pointer or value receiver for Error()?">
+Convention is a **pointer receiver** (`func (e *MyError) Error() string`), so you compare and match by identity and match the target type in `errors.As` with `var t *MyError`. A value receiver works too, but then `*MyError` *and* `MyError` both satisfy `error`, which is an easy way to confuse `errors.As`. Pick the pointer form and stay consistent. See [methods](/fundamentals/methods/) for the receiver rules behind this.
 </Callout>
 
-Next: what to do when an error *isn't* recoverable — [panic, recover & defer](/fundamentals/panic-recover/).
+### Wrapping inside a custom type with Unwrap
+
+A custom type can *itself* wrap a cause — useful when you want both structured fields *and* a chain. Give it an `Unwrap() error` method and it slots straight into `errors.Is`/`As`:
+
+<Playground client:visible title="unwrap.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// A custom error type that wraps another error needs an Unwrap() method
+// so errors.Is / errors.As can see THROUGH it to the cause.
+type QueryError struct {
+	Query string
+	Err   error // the wrapped cause
+}
+
+func (e *QueryError) Error() string {
+	return fmt.Sprintf("query %q: %v", e.Query, e.Err)
+}
+
+// This single method plugs the custom type into the unwrap chain.
+func (e *QueryError) Unwrap() error { return e.Err }
+
+var ErrPermission = errors.New("permission denied")
+
+func runQuery(q string) error {
+	return &QueryError{Query: q, Err: ErrPermission}
+}
+
+func main() {
+	err := runQuery("SELECT *")
+	fmt.Println("message:", err)
+
+	// Because QueryError has Unwrap(), Is reaches the sentinel underneath.
+	fmt.Println("is ErrPermission:", errors.Is(err, ErrPermission))
+
+	// And As pulls the typed wrapper out to read its fields.
+	var qe *QueryError
+	if errors.As(err, &qe) {
+		fmt.Println("failing query:", qe.Query)
+	}
+}`} />
+
+## Joining multiple errors
+
+`errors.Join` (added in Go 1.20) bundles several errors into one value whose `Error()` lists each on its own line. Its `Unwrap() []error` returns the slice, so `errors.Is` / `errors.As` still match against *any* of the joined errors. This is the idiomatic way to **accumulate** failures — validate every field and report them all at once, rather than stopping at the first:
+
+<Playground client:visible title="join.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+var (
+	ErrEmpty = errors.New("value is empty")
+	ErrLong  = errors.New("value too long")
+)
+
+// validateAll keeps checking and accumulates every failure, instead of
+// stopping at the first. errors.Join bundles them into one error value.
+func validateAll(name string) error {
+	var errs []error
+	if name == "" {
+		errs = append(errs, ErrEmpty)
+	}
+	if len(name) > 3 {
+		errs = append(errs, ErrLong)
+	}
+	// Join(nil, nil) returns nil, so an all-valid input yields no error.
+	return errors.Join(errs...)
+}
+
+func main() {
+	err := validateAll("abcdef") // too long, but not empty
+	fmt.Println("message:", err)
+
+	// errors.Is still matches ANY of the joined errors.
+	fmt.Println("is ErrLong:", errors.Is(err, ErrLong))
+	fmt.Println("is ErrEmpty:", errors.Is(err, ErrEmpty))
+
+	// Multiple failures join into a multi-line error.
+	both := validateAll("")
+	fmt.Println("both empty+? :", errors.Is(both, ErrEmpty))
+
+	// A clean input joins nothing — the result is a nil error.
+	fmt.Println("clean is nil:", validateAll("ok") == nil)
+}`} />
+
+`errors.Join` skips nil arguments and returns `nil` if every argument is nil — so the "collect into a slice, then Join" pattern naturally yields no error on success. You can also wrap several errors at once with multiple `%w` verbs in a single `fmt.Errorf` (`fmt.Errorf("a: %w, b: %w", e1, e2)`), which builds a multi-error chain the same way.
+
+## The standard error helpers at a glance
+
+| Helper | Signature | Use it to |
+|---|---|---|
+| `errors.New` | `(string) error` | make a plain, message-only error (often a sentinel) |
+| `fmt.Errorf` + `%w` | `(string, ...any) error` | wrap an error with context, preserving the chain |
+| `errors.Is` | `(err, target) bool` | test whether a **sentinel** is in the chain (identity) |
+| `errors.As` | `(err, *T) bool` | extract a **typed** error from the chain to read its fields |
+| `errors.Join` | `(...error) error` | combine multiple errors into one (Go 1.20+) |
+| `errors.Unwrap` | `(err) error` | peel exactly one layer (rarely needed directly) |
+
+Rule of thumb: **`Is` for a known value, `As` for a known type, `Join` for many, `%w` to feed them all.**
+
+## Designing with errors
+
+- **Wrap to add context, not to decorate.** A good wrap names the operation and any identifier: `fmt.Errorf("fetch user %d: %w", id, err)`. Bad wraps just repeat ("error: %w") and bloat the message.
+- **Don't over-wrap.** Adding a layer at *every* function produces messages like `a: b: c: d: e: not found`. Wrap where you cross a meaningful boundary (a package edge, an external call), and return as-is in between.
+- **Export sentinels and document them.** If callers are expected to branch on a condition, give them a `var ErrFoo` to match with `errors.Is` — that is part of your API.
+- **Decide who handles.** Library code should usually *return* errors (wrapped) and let the caller decide; only top-level code (a request handler, `main`) should log or exit. Handling an error and *also* returning it tends to double-log.
+- **Only wrap with `%w` when callers should match through it.** If an error is purely informational and you do not want it to be part of any caller's `errors.Is` matching, use `%v` to flatten it to text. `%w` makes the wrapped value part of your API surface.
+
+<Callout type="tip" title="🧪 Errors are a test seam too">
+Because `errors.Is`/`As` match on values and types, tests assert on *outcomes*, not message strings: `if !errors.Is(err, ErrNotFound) { t.Fatal(...) }`. That survives reworded messages and added wrap layers, where `strings.Contains(err.Error(), "...")` would be brittle. Match by sentinel or type, never by substring.
+</Callout>
+
+## The gotcha: wrap with %w, compare with Is
+
+<Callout type="gotcha" title="⚠️ Once wrapped, == is false — and a typed nil is not a nil error">
+Two traps catch nearly everyone:
+
+```go
+err := fmt.Errorf("open: %w", ErrNotFound)
+err == ErrNotFound          // false — wrapping made a new value
+errors.Is(err, ErrNotFound) // true  — use this instead
+```
+
+And the [typed-nil trap](/fundamentals/interfaces/#the-nil-interface-trap): a function that declares `var e *MyError`, leaves it nil, and `return e` as `error` returns a **non-nil** interface, because the interface holds a type even with a nil value. Callers then see a failure on the success path. **Fix:** declare the return as the `error` interface and `return nil` explicitly on success — never return a concrete pointer type for the error.
+</Callout>
+
+## See also
+
+- [Interfaces](/fundamentals/interfaces/) — `error` is just a one-method interface; the typed-nil trap lives here too.
+- [Type assertions](/fundamentals/type-assertions/) — what `errors.As` does under the hood when it matches a type.
+- [Functions](/fundamentals/functions/) — multiple return values and the `(result, err)` convention.
+- [Concurrency: error handling](/concurrency/error-handling/) — collecting and propagating errors across goroutines.
+
+Next: what to do when an error *isn't* a recoverable value — [panic, recover & defer](/fundamentals/panic-recover/).

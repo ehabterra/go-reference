@@ -67,7 +67,7 @@ Placing an order really means: check inventory, then charge the customer, then (
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class OrderService {
     -pay Payment
     -stock Inventory
@@ -87,7 +87,7 @@ Placing an order really means: check inventory, then charge the customer, then (
 
 ## How it works
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant C as Client
   participant F as OrderService (facade)
   participant I as Inventory
@@ -103,7 +103,7 @@ Placing an order really means: check inventory, then charge the customer, then (
 
 The facade is a struct holding its subsystems as **small interfaces** — which keeps it decoupled and trivially testable with fakes. Edit and **Run**:
 
-<Playground client:visible title="facade.go" code={`package main
+<Playground client:visible title="facade.go" code={String.raw`package main
 
 import "fmt"
 

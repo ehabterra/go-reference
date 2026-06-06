@@ -5,7 +5,7 @@ kind: topic
 order: 3
 difficulty: "Beginner"
 status: ready
-intent: "Functions as first-class values — multiple and named return values, variadic parameters, closures that capture state, and the (result, error) convention."
+intent: "Functions as first-class values — multiple and named returns (and the naked-return caveat), variadic params and slice spread, closures and exactly what they capture, higher-order functions and function types, defer/recover, recursion, and method values."
 related:
   - control-flow
   - pointers
@@ -13,7 +13,7 @@ related:
 quiz:
   - q: "What is Go's idiomatic way to report whether a function succeeded?"
     options:
-      - text: "Return an extra error value: `func f() (T, error)`"
+      - text: "Return an extra error value: func f() (T, error)"
         correct: true
       - text: "Throw an exception"
         correct: false
@@ -21,7 +21,7 @@ quiz:
         correct: false
       - text: "Set a global error variable"
         correct: false
-    explain: "Go functions return errors as ordinary values, conventionally the last return value. The caller checks `if err != nil`. There are no exceptions for normal error handling."
+    explain: "Go functions return errors as ordinary values, conventionally the last return value. The caller checks if err != nil. There are no exceptions for normal error handling; panic/recover is reserved for truly exceptional conditions."
   - q: "What does a closure capture?"
     options:
       - text: "The variables from its surrounding scope — by reference, so it sees later changes"
@@ -32,8 +32,8 @@ quiz:
         correct: false
       - text: "Only constants"
         correct: false
-    explain: "A closure is a function value that captures variables from where it was defined, by reference. It keeps them alive and sees their updates — the basis of stateful function values."
-  - q: "What does `...int` mean in `func sum(nums ...int)`?"
+    explain: "A closure is a function value that captures variables from where it was defined, by reference. It keeps them alive and sees their updates, which is the basis of stateful function values like counters."
+  - q: "What does ...int mean in func sum(nums ...int)?"
     options:
       - text: "Variadic — sum accepts any number of int arguments, received as a slice"
         correct: true
@@ -43,7 +43,29 @@ quiz:
         correct: false
       - text: "An optional single int"
         correct: false
-    explain: "A trailing `...T` parameter is variadic: callers pass zero or more T values, and inside the function `nums` is a `[]int`. Spread an existing slice with `sum(xs...)`."
+    explain: "A trailing ...T parameter is variadic: callers pass zero or more T values, and inside the function nums is a []int. Spread an existing slice with sum(xs...)."
+  - q: "In Go 1.22+, what happens to the loop variable on each iteration of a for loop?"
+    options:
+      - text: "Each iteration gets its own fresh copy, so closures capture distinct values"
+        correct: true
+      - text: "It is shared across all iterations, as in earlier Go"
+        correct: false
+      - text: "It becomes a constant"
+        correct: false
+      - text: "It is heap-allocated and shared via a pointer"
+        correct: false
+    explain: "Go 1.22 changed for-loop semantics so the loop variable is per-iteration. This fixes the classic bug where every closure created in a loop captured the same variable and all saw its final value."
+  - q: "When does a deferred call run, and in what order for multiple defers?"
+    options:
+      - text: "When the surrounding function returns (or panics), in last-in-first-out order"
+        correct: true
+      - text: "Immediately, at the point of the defer statement"
+        correct: false
+      - text: "At program exit only"
+        correct: false
+      - text: "In the order they were written (first-in-first-out)"
+        correct: false
+    explain: "Deferred calls run as the enclosing function unwinds — on a normal return or a panic — in LIFO order. Their arguments are evaluated when defer executes, but the call itself is delayed."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -52,6 +74,12 @@ import Playground from '../../components/islands/Playground.tsx';
 <Callout type="analogy" title="🔧 Analogy">
 A function is a labeled machine: inputs go in, outputs come out. In Go that machine is also a **value** — you can store it in a variable, pass it to another function, and return it. That one idea (functions as first-class values) quietly powers callbacks, middleware, and most of the [Strategy](/patterns/strategy/) pattern.
 </Callout>
+
+## The mental model: a function is a value
+
+Most languages treat functions as a special syntactic category. Go treats them as ordinary **values** that happen to be callable. A function has a **type** (`func(int) int`, `func(string) (int, error)`), you can put one in a variable, store it in a slice or map, pass it as an argument, and return it from another function. Everything in this page follows from that single fact.
+
+A declaration like `func add(a, b int) int` does two things: it creates a value of type `func(int, int) int` and binds the name `add` to it. The signature is the contract — the parameter types, the result types, and whether the last parameter is variadic. Two functions have the same type when their parameter and result types match; names don't matter to the type.
 
 ## Multiple and named returns
 
@@ -68,28 +96,110 @@ func divide(a, b float64) (float64, error) {
 
 Returns can be **named**, which documents them and enables a bare `return`:
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   IN["a, b float64"] --> FN["divide"]
   FN --> OUT1["float64 (quotient)"]
   FN --> OUT2["error (nil on success)"]`} />
 
-## Variadic parameters and first-class values
+Named results are pre-declared as zero-valued variables at the top of the function. A **bare `return`** (no values listed) ships whatever those variables currently hold. They have one genuinely useful role: a deferred closure can read and *rewrite* a named result after the `return` statement runs but before the function actually exits — the standard way to wrap or annotate an error on the way out.
 
-<Playground client:visible title="functions.go" code={`package main
+<Callout type="gotcha" title="⚠️ The naked-return caveat">
+Named returns plus bare `return` read nicely on a three-line function and become a liability on a thirty-line one: the reader has to scroll up to learn what the bare `return` actually sends back, and an early `return` can ship a half-set result by accident. The idiom is: name results when a `defer` needs to touch them or when the names genuinely document the signature; otherwise return explicit values. Never mix a long body with naked returns.
+</Callout>
+
+<Playground client:visible title="named-returns.go" code={String.raw`package main
 
 import "fmt"
 
-// variadic: zero or more ints, received as a []int
-func sum(nums ...int) int {
-	total := 0
-	for _, n := range nums {
-		total += n
-	}
-	return total
+// divmod returns NAMED results. Named returns document the signature
+// and allow a bare "return" that ships the current values of q and r.
+func divmod(a, b int) (q, r int) {
+	q = a / b
+	r = a % b
+	return // bare return: returns q and r as they stand now
 }
 
-// functions are values: apply takes one as a parameter
-func apply(xs []int, f func(int) int) []int {
+// safeDiv shows the naked-return CAVEAT mixed with defer:
+// a deferred closure can read and rewrite a named result before
+// it leaves the function.
+func safeDiv(a, b int) (result int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered: %v", r)
+		}
+	}()
+	result = a / b // panics if b == 0
+	return
+}
+
+func main() {
+	q, r := divmod(17, 5)
+	fmt.Println("17 / 5 =", q, "remainder", r) // 3 remainder 2
+
+	if res, err := safeDiv(10, 2); err == nil {
+		fmt.Println("10 / 2 =", res) // 5
+	}
+
+	if _, err := safeDiv(10, 0); err != nil {
+		fmt.Println("error:", err) // recovered: integer divide by zero
+	}
+}`} />
+
+## Variadic parameters and slice spread
+
+A trailing `...T` parameter is **variadic**: callers pass zero or more `T` values, and inside the function the parameter is a `[]T`. Only the last parameter may be variadic, and a fixed parameter can precede it. To pass an existing slice, **spread** it with `xs...` — that hands the slice straight through (no copy of the elements into a new slice). You cannot mix spread with extra positional arguments: it's `f(xs...)` or `f(a, b, c)`, never `f(a, xs...)`.
+
+<Playground client:visible title="variadic.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+// largest returns the biggest of its arguments, or 0 for none.
+// Variadic: callers pass any number of ints, received as a []int.
+func largest(nums ...int) int {
+	best := 0
+	for _, n := range nums {
+		if n > best {
+			best = n
+		}
+	}
+	return best
+}
+
+// join mixes a fixed parameter with a variadic one:
+// the variadic part must come last.
+func join(sep string, parts ...string) string {
+	return strings.Join(parts, sep)
+}
+
+func main() {
+	fmt.Println(largest(3, 7, 2)) // 7
+	fmt.Println(largest())        // 0 — zero args is fine; nums is nil
+
+	xs := []int{4, 9, 1}
+	fmt.Println(largest(xs...)) // 9 — spread a slice with xs...
+
+	fmt.Println(join("-", "a", "b", "c")) // a-b-c
+
+	words := []string{"go", "is", "fun"}
+	fmt.Println(join(" ", words...)) // go is fun
+}`} />
+
+Inside a variadic function, passing no arguments yields a **nil** slice (not an empty non-nil one), which ranges zero times — so guard with `len(nums)` if you need to tell "none" from "all zero." This is exactly how `fmt.Println(a ...any)` and `append(s, elems...)` work.
+
+## First-class and higher-order functions
+
+Because a function is a value, you can take one as a parameter (a **higher-order function**), store it, and return a brand-new function built from others. This is the engine behind callbacks, middleware, comparators (`sort.Slice`), and the [Strategy](/patterns/strategy/) pattern. A `func(int) int` in a `map[string]func(int) int` is just a dispatch table.
+
+<Playground client:visible title="higher-order.go" code={String.raw`package main
+
+import "fmt"
+
+// mapInts is a higher-order function: it takes a function as data and
+// applies it to every element, returning a new slice.
+func mapInts(xs []int, f func(int) int) []int {
 	out := make([]int, len(xs))
 	for i, x := range xs {
 		out[i] = f(x)
@@ -97,42 +207,173 @@ func apply(xs []int, f func(int) int) []int {
 	return out
 }
 
-func main() {
-	fmt.Println(sum(1, 2, 3))      // 6
-	nums := []int{4, 5, 6}
-	fmt.Println(sum(nums...))      // spread a slice -> 15
+// compose returns a NEW function built from two others — functions as
+// both input and output.
+func compose(f, g func(int) int) func(int) int {
+	return func(x int) int { return f(g(x)) }
+}
 
-	double := func(x int) int { return x * 2 } // a function literal
-	fmt.Println(apply(nums, double))           // [8 10 12]
+func main() {
+	nums := []int{1, 2, 3, 4}
+
+	double := func(x int) int { return x * 2 }
+	square := func(x int) int { return x * x }
+
+	fmt.Println(mapInts(nums, double)) // [2 4 6 8]
+	fmt.Println(mapInts(nums, square)) // [1 4 9 16]
+
+	// Build "double then square" without naming the result.
+	dsq := compose(square, double)
+	fmt.Println(dsq(3)) // square(double(3)) = square(6) = 36
+
+	// A function type as a value stored in a map (a tiny dispatch table).
+	ops := map[string]func(int) int{
+		"double": double,
+		"square": square,
+	}
+	fmt.Println(ops["double"](5)) // 10
 }`} />
 
-## Closures capture state
+You can name a function type to make signatures readable: `type IntOp func(int) int` lets you write `func compose(f, g IntOp) IntOp`. Named function types are also where you hang methods on functions — that's how `http.HandlerFunc` turns a plain function into something that satisfies the `http.Handler` [interface](/fundamentals/interfaces/).
 
-A function literal can close over variables from its surrounding scope and keep them alive between calls — a tiny, private piece of state:
+## Closures and exactly what they capture
 
-<Playground client:visible title="closure.go" code={`package main
+A function literal can refer to variables declared in its surrounding scope; doing so makes it a **closure**. The crucial detail: a closure captures variables **by reference**, not by value. It does not snapshot the variable's current contents — it captures the variable *itself*, keeps it alive as long as the closure exists, and sees every later change. Two closures that close over the same variable share it and see each other's writes.
+
+<Playground client:visible title="closure.go" code={String.raw`package main
 
 import "fmt"
 
-// counter returns a function that remembers its own count.
-func counter() func() int {
-	n := 0          // captured by the returned closure
+// counter returns a closure that owns its own n.
+// The variable n is captured BY REFERENCE: the closure keeps it alive
+// and every call mutates the same n.
+func counter(start int) func() int {
+	n := start
 	return func() int {
-		n++         // mutates the captured variable
+		n++
 		return n
 	}
 }
 
 func main() {
-	next := counter()
-	fmt.Println(next(), next(), next()) // 1 2 3
+	c := counter(10)
+	fmt.Println(c(), c(), c()) // 11 12 13
 
-	other := counter() // independent state
-	fmt.Println(other())                // 1
+	// A second counter has its OWN independent n.
+	d := counter(100)
+	fmt.Println(d()) // 101
+	fmt.Println(c()) // 14 — c's n is unaffected
+
+	// Two closures can share ONE variable — they see each other's writes.
+	total := 0
+	add := func(x int) { total += x }
+	get := func() int { return total }
+	add(3)
+	add(4)
+	fmt.Println(get()) // 7
 }`} />
 
-<Callout type="gotcha" title="🐹 Methods are functions with a receiver">
-A **method** is just a function with a special *receiver* argument — `func (u User) Name() string`. That's how Go does behavior on types without classes. Functions also pair with `defer` (schedule cleanup), and any function can return early as soon as it hits an error. Next stop: [methods](/fundamentals/methods/) and [interfaces](/fundamentals/interfaces/).
+Under the hood, when a captured variable outlives the function that declared it (as `n` does — it's returned inside a closure), the compiler's **escape analysis** moves it from the stack to the heap so it stays valid. You don't manage that; it just works. The cost is one small allocation per closure that captures escaping state.
+
+### The classic loop-variable capture bug
+
+By reference is exactly what you want for a counter and exactly what bit everyone in loops before Go 1.22. The trap: a loop created closures, each capturing the loop variable, and because *all* iterations shared *one* variable, every closure ended up reading its final value.
+
+**Go 1.22 fixed this**: the loop variable is now a fresh copy per iteration, so each closure captures a distinct value. The example below reproduces the old trap on purpose (using a deliberately shared variable) and then shows the per-iteration fix.
+
+<Playground client:visible title="loop-capture.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// THE CLASSIC LOOP-CAPTURE BUG (pre-Go 1.22 behavior).
+	// Here we DELIBERATELY share one variable to reproduce the old trap:
+	// every closure captures the SAME variable, so all see its final value.
+	funcs := make([]func() int, 0, 3)
+	shared := 0
+	for shared = 0; shared < 3; shared++ {
+		funcs = append(funcs, func() int { return shared })
+	}
+	for _, f := range funcs {
+		fmt.Print(f(), " ") // 3 3 3 — all read the final shared value
+	}
+	fmt.Println()
+
+	// THE FIX (and the Go 1.22+ default for loop variables):
+	// give each iteration its OWN variable, so each closure captures a
+	// distinct value.
+	fixed := make([]func() int, 0, 3)
+	for i := 0; i < 3; i++ {
+		i := i // shadow: a fresh i per iteration (1.22 does this for you)
+		fixed = append(fixed, func() int { return i })
+	}
+	for _, f := range fixed {
+		fmt.Print(f(), " ") // 0 1 2 — each closure has its own i
+	}
+	fmt.Println()
+}`} />
+
+On Go 1.22+ a normal `for i := 0; i < 3; i++ { funcs = append(funcs, func() int { return i }) }` already prints `0 1 2` without the manual `i := i` shadow — the per-iteration copy is automatic. The `shared` variable above is the only way to still demonstrate the old behavior.
+
+## defer, panic, and recover
+
+A **`defer`** statement schedules a call to run when the surrounding function returns — whether it returns normally or unwinds through a panic. This is Go's answer to `try/finally`: pair an acquire with its release right next to it (`f, _ := os.Open(...)`, then `defer f.Close()`) so cleanup can't be forgotten. Key rules:
+
+- Deferred calls run in **LIFO** order (last deferred, first run).
+- A deferred call's **arguments are evaluated when `defer` runs**, not when the call fires — so `defer fmt.Println(i)` captures `i`'s value now, but `defer func() { fmt.Println(i) }()` reads `i` at exit.
+- A deferred closure can read and modify **named return values** — the basis of recover-and-wrap.
+
+A **`panic`** unwinds the stack, running deferreds as it goes; **`recover`**, called inside a deferred function, stops that unwinding and returns the panic value. Reserve this for truly exceptional situations (or for turning a library's panic into an error at a boundary). For ordinary failure, return an `error` — see [errors](/fundamentals/errors/) and the deeper [panic & recover](/fundamentals/panic-recover/) page. The `safeDiv` example above is a complete recover-to-error pattern.
+
+## Recursion and stack depth
+
+A function may call itself. Go gives each goroutine a small **growable stack** (it starts around a few kilobytes and the runtime grows it on demand), so reasonable recursion is fine — but Go does **not** guarantee tail-call optimization, so deeply or infinitely recursive code grows the stack until it hits the limit and the program panics with a stack-overflow error. For data of unbounded depth, prefer an explicit stack/loop, or ensure the recursion depth is bounded by your input size.
+
+```go
+func factorial(n int) int {
+	if n <= 1 { // base case stops the recursion
+		return 1
+	}
+	return n * factorial(n-1)
+}
+```
+
+## Methods, method values, and method expressions
+
+A **method** is a function with a special *receiver* parameter — `func (u User) Name() string`. That's how Go attaches behavior to types without classes; the full story lives in [methods](/fundamentals/methods/). Two function-flavored forms are worth knowing here:
+
+- A **method value** binds a method to a specific receiver, producing a plain function value: `greet := user.Name` captures `user`, so `greet()` calls `user.Name()`. Great for passing as a callback.
+- A **method expression** leaves the receiver unbound: `f := User.Name` has type `func(User) string`, and you call `f(user)`.
+
+Both turn methods into ordinary function values you can store and pass — closing the loop back to "a function is a value."
+
+## When to use what
+
+| You want… | Reach for |
+|---|---|
+| Report success/failure | a trailing `error` return — `(T, error)` |
+| Document or `defer`-mutate results | named return values |
+| Accept any number of args | a variadic `...T` parameter |
+| Forward a slice to a variadic | spread it: `f(xs...)` |
+| Private state between calls | a closure over a local variable |
+| Pluggable behavior / callbacks | a function parameter (higher-order) |
+| Guaranteed cleanup | `defer` next to the acquire |
+| Turn a method into a callback | a method value (`x.M`) |
+
+<Callout type="gotcha" title="🐹 Common function pitfalls">
+- **Closures capture variables, not values.** A closure created in a loop sees the variable's *final* value unless each iteration has its own copy (automatic since Go 1.22; use `x := x` on older Go).
+- **`defer` arguments are evaluated immediately.** `defer log(time.Now())` records the time of the `defer`, not of the function's exit. Wrap in `func(){ ... }()` to defer the evaluation too.
+- **Naked returns in long functions** hide what comes back; name results only when short or when a `defer` rewrites them.
+- **No tail-call optimization** — unbounded recursion overflows the stack; loop or bound the depth.
+- **A nil func value panics when called** — its zero value is `nil`; check before invoking an optional callback.
 </Callout>
+
+## See also
+
+- [Pointers](/fundamentals/pointers/) — value vs reference semantics, and why a pointer lets a function mutate its caller's data.
+- [Methods](/fundamentals/methods/) — functions with receivers, value vs pointer receivers, method values and expressions.
+- [Errors](/fundamentals/errors/) — the `(result, error)` convention these functions return.
+- [Panic & recover](/fundamentals/panic-recover/) — the full mechanics behind `defer`/`recover`.
+- [Closures in the Strategy pattern](/patterns/strategy/) — first-class functions as pluggable behavior.
 
 Next: values, addresses, and the difference between them — [pointers](/fundamentals/pointers/).

@@ -67,7 +67,7 @@ An object with many fields — half of them optional — makes constructors mise
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   D["defaults<br/>port:8080, timeout:30s"] --> O1["WithPort(443)"]
   O1 --> O2["WithTLS()"]
   O2 --> F["final Server"]`} />
@@ -76,7 +76,7 @@ An object with many fields — half of them optional — makes constructors mise
 
 This is the Go community's standard answer. `NewServer` applies defaults, then each `Option` closure tweaks the result. Edit and **Run**:
 
-<Playground client:visible title="builder.go" code={`package main
+<Playground client:visible title="builder.go" code={String.raw`package main
 
 import (
 	"fmt"

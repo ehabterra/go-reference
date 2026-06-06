@@ -67,7 +67,7 @@ You have a fixed family of types — shapes, or the nodes of a syntax tree — a
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Shape {
     <<interface>>
     +Accept(Visitor)
@@ -90,7 +90,7 @@ You have a fixed family of types — shapes, or the nodes of a syntax tree — a
 
 Adding a new operation means writing a new `Visitor` — the shapes never change. Edit and **Run**:
 
-<Playground client:visible title="visitor.go" code={`package main
+<Playground client:visible title="visitor.go" code={String.raw`package main
 
 import (
 	"fmt"

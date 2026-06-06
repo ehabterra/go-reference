@@ -57,7 +57,7 @@ import Playground from '../../components/islands/Playground.tsx';
 
 `database/sql` is the standard library's SQL **interface** — it knows about pools, statements, rows, and transactions, but it does **not** know how to talk to any specific database. That job belongs to a third-party **driver** you import for its side effects (`_ "github.com/jackc/pgx/v5/stdlib"`), which registers itself by name. Your application code only ever touches `database/sql` types, so switching databases is mostly a one-line change.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   APP["your code<br/>Query · Exec · Scan"] --> SQL["database/sql<br/>(pool, rows, tx)"]
   SQL --> DRV["driver<br/>(pgx, mysql, sqlite)"]
   DRV --> POOL["connection pool"]

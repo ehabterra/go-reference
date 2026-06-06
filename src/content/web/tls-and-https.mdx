@@ -57,7 +57,7 @@ TLS is showing your passport at a border. The server hands over a **certificate*
 
 A TLS handshake does three jobs before any HTTP flows: **authenticate** the server (and optionally the client), **agree** on keys, and **encrypt** the rest of the connection. The server presents a certificate signed by a CA; the client verifies that signature chain up to a trusted root and confirms the hostname matches.
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant C as Client
   participant S as Server
   C->>S: ClientHello (versions, cipher suites)
@@ -143,7 +143,7 @@ log.Fatal(srv.ListenAndServeTLS("", "")) // certs come from the manager
 
 You can generate a key and a self-signed certificate entirely in memory — no files, no network — and inspect it. This is the same DER the `tls` package parses on the wire:
 
-<Playground client:visible title="cert.go" code={`package main
+<Playground client:visible title="cert.go" code={String.raw`package main
 
 import (
 	"crypto/ecdsa"

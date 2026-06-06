@@ -71,7 +71,7 @@ Statements that *look* indivisible usually aren't. `counter++` is really three o
 
 Two goroutines can both perform step 1 before either reaches step 3 — and one increment is lost.
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant A as Goroutine A
   participant M as counter (=100)
   participant B as Goroutine B
@@ -85,7 +85,7 @@ Two goroutines can both perform step 1 before either reaches step 3 — and one 
 
 A thousand goroutines each increment an **unguarded** counter. It almost never reaches 1000. Edit and **Run** it a few times:
 
-<Playground client:visible title="race.go" code={`package main
+<Playground client:visible title="race.go" code={String.raw`package main
 
 import (
 	"fmt"

@@ -63,12 +63,12 @@ Three conditions, all at the same time, make a **data race**:
 
 The Go memory model declares the result **undefined behavior** — not just a surprising order, but possibly a torn or garbage value. Here is the canonical offender: a counter incremented from many goroutines without a lock.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   G1["goroutine A<br/>reads counter, +1, writes"] --> MEM["shared counter"]
   G2["goroutine B<br/>reads counter, +1, writes"] --> MEM
   MEM --> BAD["no mutex / channel<br/>= data race<br/>lost updates, undefined value"]`} />
 
-<Playground client:visible title="race.go" code={`package main
+<Playground client:visible title="race.go" code={String.raw`package main
 
 import (
 	"fmt"

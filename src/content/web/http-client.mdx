@@ -57,7 +57,7 @@ An HTTP client is you mailing a letter and waiting for the reply. You write the 
 
 The client sends a `*http.Request`, the server returns a `*http.Response`. Your job: set a timeout, check the status, read the body, and **close it**.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   REQ["build *http.Request<br/>method + URL + headers"] --> CL["http.Client.Do"]
   CL -->|"over the network"| SRV["server"]
   SRV --> RES["*http.Response<br/>StatusCode + Header + Body"]
@@ -117,7 +117,7 @@ json.NewDecoder(resp.Body).Decode(&created)
 
 You can construct and inspect a request entirely in memory — no network — which is exactly how you'd unit-test request building. Note how `net/url`'s `url.Values` escapes query parameters for you:
 
-<Playground client:visible title="request.go" code={`package main
+<Playground client:visible title="request.go" code={String.raw`package main
 
 import (
 	"fmt"

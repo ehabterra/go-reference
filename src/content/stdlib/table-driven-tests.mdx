@@ -107,7 +107,7 @@ $ go test -run TestReverse/unicode
 
 Here is the function under test running over the same inputs in `main`, printing got vs want — exactly what the table checks, but in a form you can run and edit:
 
-<Playground client:visible title="reverse.go" code={`package main
+<Playground client:visible title="reverse.go" code={String.raw`package main
 
 import "fmt"
 
@@ -153,7 +153,7 @@ for _, tc := range cases {
 }
 ```
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   T["cases []struct{name,input,want}"] --> L["for _, tc := range cases"]
   L --> R["t.Run(tc.name, func(t))"]
   R --> S1["subtest: empty"]

@@ -5,7 +5,7 @@ kind: topic
 order: 4
 difficulty: "Beginner"
 status: ready
-intent: "Addresses without the footguns — & and *, value vs reference semantics, nil, when a function needs a pointer to mutate, and why Go has no pointer arithmetic."
+intent: "Addresses without the footguns — & and *, pass-by-value vs mutation through pointers, nil and the panic on deref, no pointer arithmetic, new vs &T{}, pointers to struct fields, escape analysis, and when a pointer beats a value."
 related:
   - functions
   - structs
@@ -17,11 +17,11 @@ quiz:
         correct: true
       - text: "It can't, ever"
         correct: false
-      - text: "By declaring the parameter `ref`"
+      - text: "By declaring the parameter ref"
         correct: false
       - text: "Only for global variables"
         correct: false
-    explain: "Everything is copied on a call, including pointers. Copying a *int still gives you the same address, so *p = 5 writes through to the original. That's how you mutate a caller's value."
+    explain: "Everything is copied on a call, including pointers. Copying a *int still gives you the same address, so *p = 5 writes through to the original. That is how you mutate a caller's value."
   - q: "What is the zero value of a pointer, and what happens if you dereference it?"
     options:
       - text: "nil — dereferencing it panics with a nil pointer dereference"
@@ -33,7 +33,7 @@ quiz:
       - text: "It points to random memory"
         correct: false
     explain: "An unassigned pointer is nil. Reading or writing through it (*p) panics at runtime. Always ensure a pointer is non-nil before dereferencing."
-  - q: "Can you do pointer arithmetic like `p++` in Go?"
+  - q: "Can you do pointer arithmetic like p++ in Go?"
     options:
       - text: "No — Go deliberately omits pointer arithmetic for memory safety (it lives in the unsafe package)"
         correct: true
@@ -44,6 +44,28 @@ quiz:
       - text: "Only with integers"
         correct: false
     explain: "Go has pointers but no pointer arithmetic in normal code — you can't walk a pointer past its value. This keeps memory safe; the escape hatch is the rarely-needed unsafe package."
+  - q: "What is the difference between new(T) and &T{}?"
+    options:
+      - text: "Both return a *T; new(T) gives a zeroed T, while &T{...} lets you set fields in the literal"
+        correct: true
+      - text: "new allocates on the stack, &T{} on the heap"
+        correct: false
+      - text: "new(T) returns a T, &T{} returns a *T"
+        correct: false
+      - text: "They are unrelated; new is only for slices"
+        correct: false
+    explain: "new(T) allocates a zero-valued T and returns its address. &T{...} is a composite literal whose address you take, so you can initialize fields. For structs, &T{...} is the idiomatic choice; new is handy for a pointer to a scalar like new(int)."
+  - q: "Does taking the address of a local variable with &x force it onto the heap?"
+    options:
+      - text: "No — escape analysis decides; if the pointer doesn't outlive the function, x stays on the stack"
+        correct: true
+      - text: "Yes, always — &x means heap allocation"
+        correct: false
+      - text: "Only if x is a struct"
+        correct: false
+      - text: "No, Go has no heap"
+        correct: false
+    explain: "The compiler runs escape analysis: a variable whose address escapes the function (e.g. is returned or stored globally) is heap-allocated; otherwise it stays on the stack even though you took its address. You don't control this manually."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
@@ -53,61 +75,265 @@ import Playground from '../../components/islands/Playground.tsx';
 A value is a house; a pointer is the house's *address* written on a slip of paper. Hand someone a photocopy of the house (a value) and their renovations don't touch yours. Hand them the address (a pointer) and they can walk over and repaint the real thing. Go always copies the slip of paper — but the address on it still leads home.
 </Callout>
 
+## The mental model: variables, addresses, and copies
+
+Every variable lives somewhere in memory and has an **address**. A **pointer** is a value whose contents *are* an address — a `*int` holds "the location of some int." The pointer is itself a normal value: it can be copied, compared with `==`, stored in a struct, and has a zero value (`nil`, meaning "points at nothing").
+
+The single rule that makes pointers necessary: **Go is pass-by-value, always.** Calling a function, assigning a variable, or ranging over a slice copies the value. A copy of an `int` is a separate int; mutating it leaves the original alone. So how do you let a function change your variable? You give it the *address*. The address gets copied like everything else — but a copy of an address still points at the same original. Dereferencing it writes through to the source.
+
 ## & takes an address, * follows it
 
 `&x` is "the address of x"; `*p` is "the value p points at" (dereferencing):
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   X["x = 10  @0x40c138"] -->|"p := &x"| P["p  (*int)  → 0x40c138"]
   P -->|"*p = 20"| X2["x is now 20"]`} />
 
-```go
-x := 10
-p := &x      // p holds the address of x; its type is *int
-fmt.Println(*p) // 10  — read through the pointer
-*p = 20         // write through the pointer
-fmt.Println(x)  // 20  — x changed
-```
+The two operators are inverses: `&` goes from a value to its address, `*` goes from an address back to the value. `*` also appears in *types* — `*int` means "pointer to int" — which is a different use of the same symbol than dereferencing `*p`.
 
-## Pass by value — and how to mutate anyway
-
-Go copies every argument. To let a function change your variable, pass its **address**:
-
-<Playground client:visible title="pointers.go" code={`package main
+<Playground client:visible title="pointers.go" code={String.raw`package main
 
 import "fmt"
 
-// takes a copy — the caller's x is untouched
-func addOneValue(n int) { n++ }
+// scaleValue gets a COPY of n; the caller's variable is untouched.
+func scaleValue(n int) { n *= 2 }
 
-// takes the address — writes through to the caller's x
-func addOnePointer(n *int) { *n++ }
+// scalePointer gets the ADDRESS, so it writes through to the original.
+func scalePointer(n *int) { *n *= 2 }
 
 func main() {
-	x := 5
-	addOneValue(x)
-	fmt.Println("after value:  ", x) // 5 — unchanged
+	x := 21
 
-	addOnePointer(&x)
-	fmt.Println("after pointer:", x) // 6 — changed
+	scaleValue(x)
+	fmt.Println("after value:  ", x) // 21 — unchanged, n was a copy
 
-	var p *int            // zero value is nil
-	fmt.Println("nil ptr:", p == nil) // true
-	// *p = 1             // would panic: nil pointer dereference
+	scalePointer(&x)
+	fmt.Println("after pointer:", x) // 42 — written through the pointer
+
+	// & takes an address; * follows it.
+	p := &x
+	fmt.Println("address holds:", *p) // 42
+	*p = 7
+	fmt.Println("x is now:     ", x) // 7 — wrote through p
+
+	// Two pointers to the same variable are aliases.
+	q := &x
+	*q = 99
+	fmt.Println("via p:", *p) // 99 — p and q alias the same x
 }`} />
 
-## When do you actually need one?
+## nil pointers and the panic on dereference
+
+A pointer's zero value is **`nil`** — it points at nothing. Dereferencing a nil pointer (`*p`, or `p.Field` on a nil struct pointer) **panics** at runtime with `invalid memory address or nil pointer dereference`. This is a safe, deterministic crash, not the undefined behavior of C; still, you must guard against it.
+
+The idiom is to **comma-guard** the lookup that might return a nil pointer and only dereference inside the success branch — never touch a pointer you haven't confirmed is non-nil. A nil pointer is often a *meaningful state* ("not found," "not set yet"), distinct from a zero-valued `T`.
+
+<Playground client:visible title="nil-pointer.go" code={String.raw`package main
+
+import "fmt"
+
+type Config struct {
+	Host string
+	Port int
+}
+
+// lookup returns a *Config and a found flag. A nil pointer is a clean
+// "no value" signal — distinct from a zero Config{}.
+func lookup(name string, m map[string]*Config) (*Config, bool) {
+	c, ok := m[name]
+	return c, ok
+}
+
+func main() {
+	m := map[string]*Config{
+		"prod": {Host: "example.com", Port: 443},
+	}
+
+	if c, ok := lookup("prod", m); ok {
+		// GUARD before dereference: only touch the pointer when present.
+		fmt.Printf("prod: %s:%d\n", c.Host, c.Port) // prod: example.com:443
+	}
+
+	c, ok := lookup("dev", m)
+	fmt.Println("dev found?", ok)        // false
+	fmt.Println("dev is nil?", c == nil) // true
+
+	// Dereferencing nil would PANIC, so we comma-guard instead.
+	if c == nil {
+		fmt.Println("no dev config — using defaults")
+	}
+
+	var p *int
+	fmt.Println("zero value of a pointer is nil:", p == nil) // true
+	// fmt.Println(*p) // would panic: invalid memory address
+}`} />
+
+## No pointer arithmetic — and that's a feature
+
+Unlike C, you cannot do `p++` to walk through memory; Go pointers only point *at* a value, never *between* values, and you can't add an offset to one. Combined with garbage collection and bounds-checked [slices](/fundamentals/slices/), that omission is most of why Go is memory-safe — there is no way in ordinary code to fabricate a pointer to memory you don't own or to read past the end of an array.
+
+The escape hatch is the `unsafe` package (`unsafe.Pointer` plus `uintptr`), which *does* permit address math. It exists for low-level interop and serialization, is explicitly outside Go's compatibility and safety guarantees, and you should treat reaching for it as a red flag in application code.
+
+## Allocating: new(T) vs &T{}, and pointers to fields
+
+Two expressions give you a fresh `*T`:
+
+- **`new(T)`** allocates a zero-valued `T` and returns its address. Best for a pointer to a scalar — `new(int)` is a `*int` to a `0`.
+- **`&T{...}`** is a composite literal whose address you take, letting you initialize fields in place. For structs this is the idiomatic form.
+
+You can also take the address of an existing local (`&p`), and even the address of a single **struct field** (`&b.X`), producing a `*int` that writes directly into that field's storage. Go auto-dereferences field and method access on pointers, so you write `a.X` rather than `(*a).X`.
+
+<Playground client:visible title="new-vs-literal.go" code={String.raw`package main
+
+import "fmt"
+
+type Point struct{ X, Y int }
+
+func main() {
+	// THREE ways to get a *Point, all valid.
+
+	// 1) new(T): allocate a zeroed T, return its address.
+	a := new(Point) // a is *Point -> Point{0, 0}
+	a.X = 1         // Go auto-dereferences: (*a).X = 1
+
+	// 2) &T{...}: composite literal, take its address. Idiomatic and
+	//    lets you set fields at once.
+	b := &Point{X: 3, Y: 4} // b is *Point
+
+	// 3) address of a named local — works because of escape analysis:
+	//    the compiler keeps p alive as long as the pointer does.
+	p := Point{X: 5, Y: 6}
+	c := &p // c is *Point
+
+	fmt.Println(*a) // {1 0}
+	fmt.Println(*b) // {3 4}
+	fmt.Println(*c) // {5 6}
+
+	// new(int) gives a *int to a zeroed int — handy for an int pointer.
+	n := new(int)
+	*n = 42
+	fmt.Println(*n) // 42
+
+	// Pointer to a struct FIELD: &b.X is a *int into b's storage.
+	px := &b.X
+	*px = 30
+	fmt.Println(b.X) // 30 — wrote into b through the field pointer
+}`} />
+
+## Value vs pointer semantics, and pointer receivers
+
+The mutation rule extends to **methods**: a method with a *pointer receiver* (`func (a *Account) deposit(...)`) can change the value it's called on; a *value receiver* (`func (a Account) ...`) operates on a copy, so its writes vanish. Go inserts the `&` for you when you call a pointer-receiver method on an addressable value (`acc.deposit(...)` becomes `(&acc).deposit(...)`). Choosing the receiver kind is the same decision as choosing a parameter kind — covered fully in [methods](/fundamentals/methods/).
+
+<Playground client:visible title="pointer-receiver.go" code={String.raw`package main
+
+import "fmt"
+
+type Account struct {
+	Owner   string
+	Balance int
+}
+
+// deposit has a POINTER receiver, so it mutates the real Account.
+func (a *Account) deposit(amount int) { a.Balance += amount }
+
+// withdrawCopy has a VALUE receiver: it mutates a copy and the change
+// is lost — a common beginner trap.
+func (a Account) withdrawCopy(amount int) { a.Balance -= amount }
+
+// grow takes a struct by VALUE: the whole Account is copied in.
+func grow(a Account) { a.Balance += 1000 }
+
+// growPtr takes a *Account: cheap to pass, and it can mutate.
+func growPtr(a *Account) { a.Balance += 1000 }
+
+func main() {
+	acc := Account{Owner: "Ada", Balance: 100}
+
+	acc.deposit(50)          // Go takes &acc for the pointer receiver
+	fmt.Println(acc.Balance) // 150 — mutated
+
+	acc.withdrawCopy(50)
+	fmt.Println(acc.Balance) // 150 — UNCHANGED, value receiver mutated a copy
+
+	grow(acc)
+	fmt.Println(acc.Balance) // 150 — pass-by-value, copy discarded
+
+	growPtr(&acc)
+	fmt.Println(acc.Balance) // 1150 — mutated through the pointer
+}`} />
+
+## Slices, maps, and channels are already reference-like
+
+You rarely take a pointer *to* a slice, map, or channel. Each is a small **header** (or handle) that internally points at shared backing storage; copying the header — which is what pass-by-value does — copies the handle, not the data. So a function that writes to a slice element or inserts a map key affects the caller without any `&`.
+
+The one trap: `append` may **reallocate** the backing array and return a *new* header. If a function appends to its slice parameter, it's reassigning its local copy of the header — the caller never sees the growth. Return the new slice (the way the builtin `append` does), or pass a `*[]T` if you truly must.
+
+<Playground client:visible title="reference-like.go" code={String.raw`package main
+
+import "fmt"
+
+// Slices, maps, and channels are already REFERENCE-LIKE: passing one by
+// value copies a small header that still points at the same backing data.
+
+func zeroAll(xs []int) {
+	for i := range xs {
+		xs[i] = 0 // writes through the shared backing array
+	}
+}
+
+func putKey(m map[string]int, k string, v int) {
+	m[k] = v // the caller sees this; maps are reference-like
+}
+
+func main() {
+	xs := []int{1, 2, 3}
+	zeroAll(xs)     // no &xs needed
+	fmt.Println(xs) // [0 0 0]
+
+	m := map[string]int{}
+	putKey(m, "a", 1)   // no &m needed
+	fmt.Println(m["a"]) // 1
+
+	// BUT append may reallocate; that change is NOT seen by the caller,
+	// because the header was copied. This is the one slice gotcha.
+	grow := func(xs []int) { xs = append(xs, 99) } // reassigns the copy
+	ys := []int{1, 2}
+	grow(ys)
+	fmt.Println(ys) // [1 2] — the appended 99 is lost
+}`} />
+
+## Under the hood: escape analysis (stack vs heap)
+
+It's tempting to think "taking `&x` forces a heap allocation." In Go it doesn't. The compiler runs **escape analysis**: it tracks whether a variable's address *escapes* the function — is it returned, stored in a global, or captured by a closure that outlives the call? If yes, the variable is allocated on the **heap** so it stays valid; if the pointer never leaves, the variable stays on the **stack** and is freed for free when the function returns, even though you took its address.
+
+You don't control this with keywords, and you usually shouldn't try to. Write the clear code; the compiler picks the placement. (You can inspect its decisions with `go build -gcflags=-m` if you're profiling.) The practical takeaways: a small local you `&` and pass downward often stays on the stack; returning `&local` is fine and safe — Go promotes it to the heap rather than handing back a dangling pointer, unlike C.
+
+## When to use a pointer vs a value
 
 <Callout type="tip" title="✅ Reach for a pointer when…">
-- **A function must modify** the caller's value (or a method must mutate its receiver — see [methods](/fundamentals/methods/)).
-- **Copying is expensive** — a large [struct](/fundamentals/structs/) is cheaper to pass by pointer than by value.
-- **nil is a meaningful state** — "no value yet," distinct from the zero value.
+- **A function or method must modify** the caller's value (mutation through the address).
+- **Copying is expensive** — a large [struct](/fundamentals/structs/) is cheaper to pass by pointer than to copy by value.
+- **nil is a meaningful state** — "absent / not set yet," distinct from the zero value.
+- A type's methods **mix value and pointer receivers** — keep them all pointer for consistency and to stay in the right method set.
 
-Otherwise, prefer plain values — they're simpler and avoid aliasing surprises. Note: slices, maps and channels are already reference-like, so you rarely take a pointer *to* them. `new(T)` allocates a zeroed `T` and returns a `*T`.
+**Prefer a plain value when** the type is small, you don't need to mutate the original, and you want to avoid aliasing surprises and nil checks. Don't reach for a pointer reflexively — slices, maps, and channels are already reference-like, and small structs copy cheaply. Default to values; introduce a pointer when one of the reasons above actually applies.
 </Callout>
 
-<Callout type="gotcha" title="⚠️ No pointer arithmetic — and that's a feature">
-Unlike C, you can't do `p++` to walk through memory; Go pointers only point *at* a value, never *between* values. Combined with garbage collection and bounds-checked slices, that's most of why Go is memory-safe. The compiler's **escape analysis** even decides whether a value lives on the stack or heap for you — taking `&x` doesn't force a heap allocation.
+<Callout type="gotcha" title="⚠️ Common pointer pitfalls">
+- **Dereferencing nil panics.** Guard a maybe-nil pointer (comma-ok, `if p != nil`) before `*p` or `p.Field`.
+- **Value receivers/parameters mutate a copy.** Writes through a value receiver are silently discarded — use a pointer receiver to mutate.
+- **`append` inside a function doesn't grow the caller's slice.** The header is copied; reallocation produces a new one the caller never sees. Return the result.
+- **Don't take pointers to map values** — `&m[k]` is a compile error, because map entries can move during rehashing.
+- **No pointer arithmetic.** `p++` doesn't compile; if you think you need it, you almost certainly want a slice index instead.
+- **A pointer in a [range loop](/fundamentals/control-flow/)** is fine on Go 1.22+, where the loop variable is per-iteration; on older Go, `&v` of the range variable aliased one shared slot.
 </Callout>
+
+## See also
+
+- [Functions](/fundamentals/functions/) — pass-by-value, closures, and why a function needs a pointer to mutate its caller.
+- [Methods](/fundamentals/methods/) — value vs pointer receivers and method sets, the receiver side of this page.
+- [Structs](/fundamentals/structs/) — the values you most often pass by pointer.
+- [Slices](/fundamentals/slices/) and [maps](/fundamentals/maps/) — the reference-like types you rarely point *to*.
+- [Interfaces: the nil-interface trap](/fundamentals/interfaces/) — why a nil `*T` stored in an interface is not a nil interface.
 
 Next: grouping fields into one type — [structs](/fundamentals/structs/).

@@ -67,7 +67,7 @@ Sending a one-time passcode is always the same dance: generate the code, cache i
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class OTPFlow {
     -steps OTPSteps
     +GenAndSend(length) "fixed skeleton"
@@ -93,7 +93,7 @@ Sending a one-time passcode is always the same dance: generate the code, cache i
 
 Go has no abstract base class, so the "template method" lives on a struct that **holds an interface of the varying steps** — an `OTP`/`iOTP`-style design. The fixed sequence calls into that interface. Edit and **Run**:
 
-<Playground client:visible title="template_method.go" code={`package main
+<Playground client:visible title="template_method.go" code={String.raw`package main
 
 import "fmt"
 

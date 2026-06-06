@@ -57,7 +57,7 @@ A binary tree is a family tree where everyone has at most two children. Start fr
 
 Each node holds a value and two pointers, `Left` and `Right`, either of which may be `nil`. The tree is identified by its **root**:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["1 (root)"] --> B["2"]
   A --> C["3"]
   B --> D["4"]
@@ -82,7 +82,7 @@ Depth-first traversal recurses all the way down one branch before backing up. Th
 - **Preorder** — **node**, left subtree, right subtree.
 - **Postorder** — left subtree, right subtree, **node**.
 
-<Playground client:visible title="traversals.go" code={`package main
+<Playground client:visible title="traversals.go" code={String.raw`package main
 
 import "fmt"
 
@@ -148,12 +148,12 @@ func main() {
 
 Breadth-first traversal sweeps the tree level by level, top to bottom. Instead of recursion it uses a **queue**: dequeue a node, visit it, then enqueue its non-nil children so the next level is processed in order.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   Q["queue (FIFO)"] --> S1["dequeue node<br/>visit value"]
   S1 --> S2["enqueue Left,<br/>then Right"]
   S2 --> Q`} />
 
-<Playground client:visible title="bfs.go" code={`package main
+<Playground client:visible title="bfs.go" code={String.raw`package main
 
 import "fmt"
 

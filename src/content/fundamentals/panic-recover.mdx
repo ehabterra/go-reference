@@ -5,7 +5,7 @@ kind: topic
 order: 15
 difficulty: "Intermediate"
 status: ready
-intent: "defer schedules cleanup, panic unwinds the stack running those defers, and recover — only inside a defer — catches a panic and turns it back into control."
+intent: "defer schedules cleanup (LIFO, args fixed at defer time, closures can rewrite named returns), panic unwinds the stack running those defers, and recover — only inside a defer — catches a panic and turns it back into control at a boundary."
 related:
   - errors
   - control-flow
@@ -21,7 +21,7 @@ quiz:
         correct: false
       - text: "Never; defer takes no arguments"
         correct: false
-    explain: "Arguments to a deferred call are evaluated the moment `defer` executes. The call itself runs later (LIFO order) when the function returns, but the captured argument values are already fixed."
+    explain: "Arguments to a deferred call are evaluated the moment `defer` executes; the call itself runs later (LIFO) at return. A deferred *closure* is different — it reads variables when it runs, so it sees their final values."
   - q: "Where does `recover()` actually stop a panic?"
     options:
       - text: "Only when called directly inside a deferred function"
@@ -32,7 +32,7 @@ quiz:
         correct: false
       - text: "Inside the `panic()` call itself"
         correct: false
-    explain: "`recover()` only has an effect when called from within a deferred function during a panic. Called anywhere else it returns nil and does nothing. That deferred call stops the unwinding and resumes normal flow."
+    explain: "`recover()` has an effect only when called from within a deferred function during a panic. Called anywhere else it returns nil and does nothing. That deferred call stops the unwinding and resumes normal flow in the caller."
   - q: "Which situation is an appropriate use of `panic`?"
     options:
       - text: "A truly unrecoverable programmer bug — e.g. an impossible state or a failed required init"
@@ -44,66 +44,103 @@ quiz:
       - text: "Any time a function returns an error"
         correct: false
     explain: "Panic is for bugs and unrecoverable conditions, not ordinary failures. Expected problems (bad input, missing files, network errors) are returned as `error` values. Reserve panic for 'this should never happen'."
+  - q: "A goroutine panics and nothing recovers it. What happens?"
+    options:
+      - text: "The whole program crashes — a recover in main or another goroutine cannot catch it"
+        correct: true
+      - text: "Only that goroutine dies; the program keeps running"
+        correct: false
+      - text: "The panic is returned as an error from `go`"
+        correct: false
+      - text: "It is silently ignored"
+        correct: false
+    explain: "An unrecovered panic unwinds its own goroutine's stack and then takes down the entire process. recover only works on the same goroutine's stack, so each goroutine that might panic needs its own deferred recover."
+  - q: "A deferred closure assigns to a function's NAMED return value. Does it change what the caller sees?"
+    options:
+      - text: "Yes — the defer runs after `return` sets the named value, so it can rewrite the returned result"
+        correct: true
+      - text: "No — the return value is already copied out before defers run"
+        correct: false
+      - text: "Only if the function also panics"
+        correct: false
+      - text: "It causes a compile error"
+        correct: false
+    explain: "With named returns, `return x` assigns to the named variable, *then* deferred functions run and can still modify it before the value is handed back. This is exactly how a deferred recover converts a panic into a returned error."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🪂 Analogy">
-Think of `defer` as packing a parachute the moment you board: you set up the cleanup early so it *always* deploys on the way down, however the flight ends. A `panic` is pulling the ejector seat — everything unwinds fast, but each packed parachute (`defer`) still opens. And `recover`, tucked inside a defer, is the one person who can grab the controls and land the plane instead of crashing.
+Think of `defer` as packing a parachute the moment you board: you set up the cleanup early so it *always* deploys on the way down, however the flight ends. A `panic` is pulling the ejector seat — everything unwinds fast, but each packed parachute (`defer`) still opens on the way out. And `recover`, tucked inside a defer, is the one person who can grab the controls mid-fall and land the plane instead of crashing.
 </Callout>
 
 ## defer: cleanup that always runs
 
-A `defer` schedules a call for when the surrounding **function returns**, no matter how it returns. Deferred calls run in **LIFO** order (last deferred, first to run), and crucially their **arguments are evaluated at defer time**, not when the call finally fires:
+A `defer` schedules a function call for when the **surrounding function returns** — no matter *how* it returns: a normal `return`, a `return` from deep in a branch, or a panic unwinding through it. That guarantee is why `defer` is the idiomatic place for release-after-acquire: open then `defer Close`, lock then `defer Unlock`. The cleanup sits right next to the acquisition, and you can't forget it on some early-return path.
 
-<Playground client:visible title="defer.go" code={`package main
+Two rules govern *what* a deferred call sees, and they trip people up constantly:
+
+- **LIFO order.** Deferred calls run last-scheduled-first, like a stack. Acquire A then B, and they release B then A — the natural nesting order.
+- **Arguments are evaluated at defer time.** The instant `defer f(x)` executes, `x` is read and frozen; only the *call* waits until return. A deferred **closure** with no arguments is the exception — it reads variables when it actually runs, so it observes their final values.
+
+<Playground client:visible title="defer.go" code={String.raw`package main
 
 import "fmt"
 
 func main() {
-	// LIFO: this prints 3, 2, 1 — reverse of the defer order.
+	// LIFO: deferred calls fire in reverse of the order scheduled.
 	for i := 1; i <= 3; i++ {
-		defer fmt.Println("deferred", i)
+		defer fmt.Println("deferred", i) // prints 3, 2, 1
 	}
 
-	// Arguments are captured NOW, at defer time.
+	// Arguments are evaluated AT defer time, not when the call fires.
 	x := "first"
-	defer fmt.Println("snapshot:", x) // captures "first"
+	defer fmt.Println("snapshot:", x) // captures "first" right now
 	x = "changed"
 
-	fmt.Println("body done, value is", x)
+	// A deferred CLOSURE, by contrast, reads the variable when it runs,
+	// so it sees the final value.
+	defer func() { fmt.Println("closure sees:", x) }()
+	x = "final"
+
+	fmt.Println("body done, x =", x)
 }`} />
 
-The classic use is pairing acquire/release right next to each other: `f, _ := os.Open(name); defer f.Close()`.
+Read the output carefully: the two non-deferred lines print first, then defers fire in reverse. `snapshot:` shows `first` (argument frozen at defer time), while `closure sees:` shows `final` (closure reads `x` when it runs).
+
+### Internals: a per-function defer stack
+
+Each goroutine carries a list of pending defers for the functions currently on its stack. A `defer` statement pushes an entry (the function plus its already-evaluated arguments); a return or a panic pops and runs them in LIFO order. Modern Go (1.14+) makes the common case — a fixed number of defers in a function — nearly free by allocating the records inline on the stack rather than the heap, so `defer` is cheap enough for hot paths. Defers in a loop still accumulate until the function returns, so deferring inside a long-running loop is the one place to watch (move the work into a helper that returns each iteration, or call explicitly).
 
 ## panic unwinds, recover catches
 
-A `panic` stops normal execution and starts **unwinding** the stack — but it runs every pending `defer` on the way up. If a deferred function calls `recover()`, the unwinding **stops** there, `recover` returns the panic value, and the program continues normally from that function's caller.
+A `panic` stops normal execution and starts **unwinding** the stack — but it runs every pending `defer` on the way up, in LIFO order, exactly as a clean return would. If a deferred function calls `recover()`, the unwinding **stops** there: `recover` returns the value passed to `panic`, and execution resumes *normally* in the caller of the function that recovered (its remaining body is skipped, but its other defers still run). If nothing recovers, the panic reaches the top of the goroutine's stack and the program crashes with a stack trace.
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   A["normal call"] --> B["panic(v)"]
   B --> C["unwind: run deferred funcs (LIFO)"]
   C --> D{"a defer calls recover()?"}
-  D -->|"yes"| E["panic stops; return value = v"]
+  D -->|"yes"| E["panic stops; recover returns v; caller continues"]
   D -->|"no"| F["keep unwinding"]
-  F --> G["reach top: program crashes"]`} />
+  F --> G["reach top of goroutine: program crashes"]`} />
 
-`recover()` only works **inside a deferred function**. Anywhere else it just returns `nil`. The most useful pattern is to recover at a **boundary** — turning a panic into an ordinary returned error so the rest of the program (a server, a worker pool) keeps running:
+The single most important rule: **`recover()` only does something inside a deferred function during a panic.** Called anywhere else — in the normal body, or when there is no panic — it just returns `nil`. The most useful application is recovering at a **boundary**: turning a panic into an ordinary returned `error`, so the layer above (a server, a worker pool, a CLI) keeps running. The named return value is the key — the deferred closure assigns to it after `return` would have set it:
 
-<Playground client:visible title="recover.go" code={`package main
+<Playground client:visible title="recover.go" code={String.raw`package main
 
 import (
 	"errors"
 	"fmt"
 )
 
-// safeDivide turns a panic into a normal error at the boundary.
-// The named return 'err' lets the deferred recover assign to it.
+// safeDivide turns a runtime panic into an ordinary returned error at the
+// boundary. The NAMED return 'err' lets the deferred recover assign to it.
 func safeDivide(a, b int) (result int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("recovered: %v", r)
+			// recover() returns the panic value and STOPS the unwinding.
+			err = fmt.Errorf("recovered from: %v", r)
 		}
 	}()
 	return a / b, nil // b == 0 triggers a runtime panic
@@ -114,24 +151,112 @@ func main() {
 		fmt.Println("10 / 2 =", r)
 	}
 
-	// This would panic; recover converts it to an error instead.
+	// This would crash the program; recover converts it to an error.
 	if _, err := safeDivide(1, 0); err != nil {
 		fmt.Println("handled:", err)
 	}
 
-	// Program survives the panic and keeps going.
-	fmt.Println("still running:", errors.Is(nil, nil))
+	// The process survived the panic and keeps running.
+	fmt.Println("still alive:", !errors.Is(nil, errors.New("x")))
 }`} />
+
+## Deferred closures and named returns
+
+The boundary pattern relies on a deeper feature: a deferred closure can **read and modify the named return values** after the `return` statement runs. `return n` first *assigns* to the named result, then the defers fire, then the (possibly rewritten) value is handed to the caller. This is occasionally useful beyond recover — for instance, wrapping every error a function returns with one shared annotation:
+
+<Playground client:visible title="named-return.go" code={String.raw`package main
+
+import "fmt"
+
+// triple uses a NAMED return value so a deferred closure can modify it
+// AFTER the return statement has set it.
+func triple(n int) (result int) {
+	defer func() {
+		result *= 3 // runs after the return statement, rewrites the named return
+	}()
+	return n // sets result = n, then the defer multiplies it
+}
+
+func main() {
+	// return 5 sets result=5; the defer turns it into 15.
+	fmt.Println("triple(5) =", triple(5))
+	fmt.Println("triple(0) =", triple(0))
+}`} />
+
+## The recover-at-a-boundary pattern
+
+Real systems put exactly one recover at each *entry point* into untrusted or fallible work — an HTTP handler per request, a job per task in a worker pool. One unit can blow up without taking down the others. Here a tiny `guard` wraps each job so a panicking job is contained and the loop keeps going:
+
+<Playground client:visible title="boundary.go" code={String.raw`package main
+
+import "fmt"
+
+// guard runs each job and recovers a panic so one bad job can't kill the
+// loop — the recover-at-a-boundary pattern a server uses per request.
+func guard(name string, job func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("job %q failed: %v\n", name, r)
+		}
+	}()
+	job()
+	fmt.Printf("job %q ok\n", name)
+}
+
+func main() {
+	jobs := []struct {
+		name string
+		run  func()
+	}{
+		{"a", func() { fmt.Println("doing a") }},
+		{"b", func() { panic("boom") }}, // panics, but is contained
+		{"c", func() { fmt.Println("doing c") }},
+	}
+
+	for _, j := range jobs {
+		guard(j.name, j.run)
+	}
+
+	// All three jobs were attempted despite b panicking.
+	fmt.Println("all jobs attempted")
+}`} />
+
+Note what recover does *not* do here: once `guard` recovers job `b`, the rest of `guard`'s body (the "ok" print) is skipped — recovery resumes after the deferred function, in `guard`'s caller, which is the loop. Job `c` still runs because each call is its own boundary. If you want to recover, do partial cleanup, and then *still* fail loudly, you can **re-panic** by calling `panic(r)` again inside the deferred function after handling.
+
+<Callout type="gotcha" title="⚠️ A panic in a goroutine you don't recover crashes the WHOLE program">
+`recover` only works on its **own goroutine's** stack. A deferred recover in `main` (or any other goroutine) cannot catch a panic raised in a different goroutine:
+
+```go
+go func() {
+	panic("boom") // no recover here → the entire process crashes
+}()
+```
+
+There is no parent to catch it. Every goroutine that runs code which might panic needs its **own** deferred recover at its top. This is why worker pools and server frameworks wrap each goroutine's body in a recover — forget it, and one bad task takes down the server.
+</Callout>
 
 ## When (not) to panic
 
 Reach for `panic` only when continuing makes no sense:
 
-- **Yes:** an impossible/unreachable state, a corrupt invariant, a required dependency that failed to initialize at startup (`mustConnect`).
-- **No:** expected failures — bad user input, a missing file, a network timeout. Those are **values**: return an `error` and let the caller decide.
+| Use panic | Use a returned error |
+|---|---|
+| An impossible/unreachable state (`default:` that "can't" happen) | Bad user input, validation failures |
+| A corrupt invariant the program can't trust | A missing file, a closed connection |
+| A required dependency failing at init (`mustConnect`, `template.Must`) | A network timeout, a parse error |
+| Programmer-bug guards in your own code | Anything the caller might reasonably handle |
+
+The standard library follows this: functions return errors for expected failures, and the `Must…` constructors (`regexp.MustCompile`, `template.Must`) panic — but only because they are meant for package-level initialization where a bad constant *is* a programmer bug that should stop the program immediately.
 
 <Callout type="gotcha" title="⚠️ Don't use panic/recover as exceptions">
-Go is deliberately not an exception language. Using `panic`/`recover` for ordinary control flow makes code surprising and hard to follow. Keep panics rare and recover them at a single boundary (a request handler, a goroutine entry point) so one bad request can't take down the whole process. For everything else, return an `error` — see [errors](/fundamentals/errors/).
+Go is deliberately not an exception language. Using `panic`/`recover` for ordinary control flow makes code surprising and hard to follow — the failure path becomes invisible, the very thing Go's `error` values avoid. Keep panics rare, recover them at a single boundary (a request handler, a goroutine entry point), and convert to an `error` there. For everything else, return an `error` — see [errors](/fundamentals/errors/).
 </Callout>
+
+## See also
+
+- [Errors](/fundamentals/errors/) — the values you should return for *expected* failures instead of panicking.
+- [Functions](/fundamentals/functions/) — named return values, which the recover pattern depends on.
+- [Control flow](/fundamentals/control-flow/) — how `defer` fits alongside `return`, loops, and branches.
+- [Concurrency: goroutines](/concurrency/goroutines/) — why each goroutine needs its own recover.
 
 Next: organizing code into reusable units you can import and version — [packages & modules](/fundamentals/packages-and-modules/).

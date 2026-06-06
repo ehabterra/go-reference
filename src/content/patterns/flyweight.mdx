@@ -68,7 +68,7 @@ You have a huge number of objects, and most of each object is identical, immutab
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class TreeFactory {
     -cache map
     +GetTreeType(name, color) TreeType
@@ -91,7 +91,7 @@ You have a huge number of objects, and most of each object is identical, immutab
 
 A factory caches and returns shared `TreeType` values (interning). A thousand trees, but only two heavy `TreeType` objects exist. Edit and **Run**:
 
-<Playground client:visible title="flyweight.go" code={`package main
+<Playground client:visible title="flyweight.go" code={String.raw`package main
 
 import "fmt"
 

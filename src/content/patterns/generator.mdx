@@ -66,7 +66,7 @@ You want a sequence — maybe infinite — that a consumer reads lazily, without
 
 ## Structure
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   G["generator goroutine<br/>for i := 1; ; i++"] -->|"&lt;-chan int"| C["consumer<br/>range / receive"]
   D["done chan"] -.cancels.-> G`} />
 
@@ -74,7 +74,7 @@ You want a sequence — maybe infinite — that a consumer reads lazily, without
 
 `count` produces integers forever; the consumer takes only what it needs and cancels the rest via `done`. Edit and **Run**:
 
-<Playground client:visible title="generator.go" code={`package main
+<Playground client:visible title="generator.go" code={String.raw`package main
 
 import "fmt"
 

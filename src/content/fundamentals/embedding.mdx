@@ -5,7 +5,7 @@ kind: topic
 order: 11
 difficulty: "Intermediate"
 status: ready
-intent: "Composition over inheritance — promoted fields and methods, embedding structs and interfaces, overriding, and the classic embedded mutex pattern."
+intent: "Composition over inheritance — promoted fields and methods, embedding structs and interfaces, pointer vs value embedding, shadowing and overriding, ambiguity, and the classic mutex / io-wrapper patterns."
 related:
   - structs
   - interfaces
@@ -13,7 +13,7 @@ related:
 quiz:
   - q: "What does embedding a type into a struct give you?"
     options:
-      - text: "Promotion — the outer struct gains the embedded type's exported fields and methods as if they were its own"
+      - text: "Promotion — the outer struct gains the embedded type's fields and methods as if they were its own"
         correct: true
       - text: "Inheritance with virtual method dispatch"
         correct: false
@@ -21,10 +21,10 @@ quiz:
         correct: false
       - text: "Nothing until you call a constructor"
         correct: false
-    explain: "Embedding (a field with no name, just a type) promotes the inner type's fields and methods to the outer type. It's composition with convenient forwarding — not classical inheritance, since there's no virtual dispatch."
+    explain: "Embedding (a field with no name, just a type) promotes the inner type's fields and methods to the outer type. It's composition with convenient forwarding — not classical inheritance, since there's no virtual dispatch back into the outer type."
   - q: "How do you \"override\" a promoted method?"
     options:
-      - text: "Define a method with the same name on the outer type — it shadows the promoted one"
+      - text: "Define a method with the same name on the outer type — it shadows the promoted one; call the inner via the field name"
         correct: true
       - text: "Use the `override` keyword"
         correct: false
@@ -32,7 +32,7 @@ quiz:
         correct: false
       - text: "Re-embed the type a second time"
         correct: false
-    explain: "A method on the outer type with the same name shadows the embedded one. You can still call the inner version explicitly via the embedded field name, e.g. `o.Inner.Method()`, to wrap rather than fully replace it."
+    explain: "A method on the outer type with the same name shadows the embedded one. You can still call the inner version explicitly via the embedded field name, e.g. o.Inner.Method(), to wrap rather than fully replace it."
   - q: "Why embed `sync.Mutex` into a struct?"
     options:
       - text: "So the struct gains Lock and Unlock directly, keeping the lock next to the data it protects"
@@ -43,14 +43,36 @@ quiz:
         correct: false
       - text: "It's required for all structs"
         correct: false
-    explain: "Embedding sync.Mutex promotes Lock/Unlock onto the struct, so you write `s.Lock()`. It documents that the mutex guards this struct's fields. Note: such a struct must not be copied after first use."
+    explain: "Embedding sync.Mutex promotes Lock/Unlock onto the struct, so you write s.Lock(). It documents that the mutex guards this struct's fields. Such a struct must not be copied after first use — use a pointer receiver and pass *T."
+  - q: "Two embedded types both have a field `ID` at the same depth. What happens when you write `c.ID`?"
+    options:
+      - text: "It's a compile error — the selector is ambiguous; you must qualify it as c.A.ID or c.B.ID"
+        correct: true
+      - text: "Go picks the first embedded type"
+        correct: false
+      - text: "Go merges them into one field"
+        correct: false
+      - text: "It panics at runtime"
+        correct: false
+    explain: "When two embedded types contribute the same name at the same depth, the bare selector is ambiguous and won't compile. A name at a shallower depth wins outright; at equal depth you must qualify with the embedded field name."
+  - q: "Does embedding give you subtype polymorphism, like a subclass passed where the base type is expected?"
+    options:
+      - text: "No — a Car that embeds Engine is not an Engine; embedding is composition, with no subtype relationship"
+        correct: true
+      - text: "Yes — the outer type is a subtype of every embedded type"
+        correct: false
+      - text: "Only if the embedded type is an interface"
+        correct: false
+      - text: "Only with the `extends` keyword"
+        correct: false
+    explain: "Embedding promotes methods but creates no is-a relationship: you can't pass a Car where an Engine is wanted. Polymorphism in Go comes from interfaces — and an outer type does satisfy any interface its promoted methods cover."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="🧩 Analogy">
-Embedding is hiring a specialist and putting their desk *inside* your office. Visitors ask you a question; you forward the ones you don't handle straight to the specialist without a word. Go calls this **promotion** — the embedded type's skills become yours, but it's still composition, not a family tree.
+Embedding is hiring a specialist and putting their desk *inside* your office. Visitors ask you a question; you forward the ones you don't handle straight to the specialist without a word. Go calls this **promotion** — the embedded type's skills become yours. But the specialist is still a separate person: it's composition, not a family tree, and nobody mistakes your office for the specialist.
 </Callout>
 
 ## Promotion: fields and methods come along
@@ -70,19 +92,28 @@ type Car struct {
 // c.Power and c.Start() now work, promoted from Engine
 ```
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   CAR["Car"] --> EMB["Engine (embedded)"]
   CAR --> BRAND["Brand string"]
-  EMB --> P["Power int  → c.Power"]
-  EMB --> S["Start()     → c.Start()"]`} />
+  EMB --> P["Power int  -> c.Power"]
+  EMB --> S["Start()     -> c.Start()"]`} />
 
-This is Go's headline answer to reuse: **composition over inheritance.** There's no class hierarchy and no virtual dispatch — just forwarding.
+Under the hood there's no magic: the embedded value is a real field whose **name is the type name** (`Engine`), and `c.Power` is sugar the compiler expands to `c.Engine.Power`. Promotion is a *selector-resolution* rule, not a copy of methods. This is Go's headline answer to reuse: **composition over inheritance** — no class hierarchy, no virtual dispatch, just forwarding.
 
-## Overriding a promoted method
+## Composition, not inheritance
 
-Define a method of the same name on the outer type and it **shadows** the promoted one. You can still reach the original through the embedded field's name to wrap it:
+Promotion looks like inheritance but deliberately isn't. Two consequences matter:
 
-<Playground client:visible title="embedding.go" code={`package main
+- **No subtype relationship.** A `Car` is *not* an `Engine`. You can't pass a `Car` where a function wants an `Engine` — you'd pass `c.Engine`. Polymorphism comes from [interfaces](/fundamentals/interfaces/), not from embedding.
+- **No virtual dispatch upward.** If `Engine.Start` calls another `Engine` method, it always calls *Engine's* version, even if `Car` "overrides" it. The embedded type cannot reach back up into the outer type. (This is the difference that trips up people coming from Java or Python.)
+
+What embedding *does* give you toward polymorphism: because promoted methods are part of the outer type's method set, the **outer type satisfies any interface those methods cover**. Embed something with a `Read([]byte) (int, error)` method and your struct is an `io.Reader` for free.
+
+## Overriding (shadowing) a promoted method
+
+Define a method of the same name on the outer type and it **shadows** the promoted one — the outer wins on a bare `c.Method()` call. You can still reach the original through the embedded field's name, which is how you *wrap* rather than fully replace:
+
+<Playground client:visible title="overriding.go" code={String.raw`package main
 
 import "fmt"
 
@@ -94,14 +125,18 @@ func (e Engine) Start() string {
 	return fmt.Sprintf("engine starts (%d hp)", e.Power)
 }
 
+func (e Engine) Stop() string {
+	return "engine stops"
+}
+
 type Car struct {
-	Engine // embedded: Power and Start() are promoted
+	Engine // embedded: Power, Start(), Stop() are all promoted
 	Brand  string
 }
 
-// Override: a Start on Car shadows Engine.Start...
+// Override: a Start on Car SHADOWS the promoted Engine.Start...
 func (c Car) Start() string {
-	// ...but we can still call the embedded version explicitly.
+	// ...but we wrap, not replace — call the embedded original explicitly.
 	return c.Brand + ": " + c.Engine.Start()
 }
 
@@ -112,23 +147,147 @@ func main() {
 	}
 
 	fmt.Println("Power:", c.Power) // 120 — promoted field
-	fmt.Println(c.Start())         // Gopher: engine starts (120 hp)
-	fmt.Println(c.Engine.Start())  // engine starts (120 hp) — inner directly
+	fmt.Println(c.Start())         // Gopher: engine starts (120 hp) — outer wins
+	fmt.Println(c.Engine.Start())  // engine starts (120 hp) — inner, via field name
+	fmt.Println(c.Stop())          // engine stops — promoted, not shadowed
 }`} />
 
-## Embedding interfaces — and the standard-library combos
+A name at a **shallower** depth always wins over a deeper one — your own field/method beats an embedded one, which beats a doubly-embedded one. That's how the outer `Start` shadows the embedded `Start` with no ambiguity.
 
-Interfaces embed too. `io.ReadWriter` is just `Reader` plus `Writer`, glued by embedding. You can also embed an interface into a struct to **decorate** an implementation: forward everything by default, override the one method you care about.
+## Embedding an interface
 
-The two patterns you'll meet constantly:
+You can embed an **interface** — in another interface or in a struct — and it behaves differently in each spot.
 
-- **Embedded `sync.Mutex`** — promotes `Lock`/`Unlock` so they sit right next to the data they protect: `s.Lock()`.
-- **Embedded `io` interfaces** — wrap a `Reader` or `Writer` to add logging, buffering, or counting while passing the rest through untouched.
+**In another interface**, embedding *unions the method sets*. `io.ReadWriter` is literally `Reader` plus `Writer` glued together; see [interfaces](/fundamentals/interfaces/):
 
 ```go
+type ReadWriter interface {
+	Reader // Read(p []byte) (int, error)
+	Writer // Write(p []byte) (int, error)
+}
+```
+
+**In a struct**, embedding an interface gives you a *decorator with a partial implementation*: every method of the interface is promoted (forwarded to whatever value is stored), and you override just the one method you care about. The forwarded methods come "for free":
+
+<Playground client:visible title="embed-interface.go" code={String.raw`package main
+
+import "fmt"
+
+// Sorter is the behavior we want to decorate.
+type Sorter interface {
+	Name() string
+	Sort([]int) []int
+}
+
+// A concrete implementation.
+type bubble struct{}
+
+func (bubble) Name() string { return "bubble" }
+
+func (bubble) Sort(in []int) []int {
+	out := append([]int(nil), in...)
+	for i := 0; i < len(out); i++ {
+		for j := 0; j < len(out)-1-i; j++ {
+			if out[j] > out[j+1] {
+				out[j], out[j+1] = out[j+1], out[j]
+			}
+		}
+	}
+	return out
+}
+
+// Logging embeds the Sorter INTERFACE in a struct. It forwards Name() for free
+// (promoted) and overrides only Sort() to add a log line — a decorator with a
+// partial implementation.
+type Logging struct {
+	Sorter // embedded interface: Name() and Sort() are promoted
+}
+
+func (l Logging) Sort(in []int) []int {
+	out := l.Sorter.Sort(in) // delegate to the wrapped implementation
+	fmt.Printf("[%s] sorted %d items\\n", l.Name(), len(in))
+	return out
+}
+
+func main() {
+	var s Sorter = Logging{Sorter: bubble{}}
+	fmt.Println(s.Sort([]int{3, 1, 2})) // logs, then [1 2 3]
+	fmt.Println("impl name:", s.Name()) // bubble — promoted straight through
+}`} />
+
+This is exactly how the standard library lets you add behavior to an `io.Reader` or `io.Writer`: embed the interface, override `Read`/`Write` to count bytes or log, and the rest passes through. Beware: if the embedded interface is `nil`, calling a *promoted* (non-overridden) method panics with a nil-pointer dereference.
+
+## Pointer vs value embedding
+
+You can embed `Engine` (a value) or `*Engine` (a pointer). The promotion rules are the same, but the semantics differ:
+
+| | Embed `Engine` (value) | Embed `*Engine` (pointer) |
+|---|---|---|
+| Storage | inlined into the outer struct | a pointer; the Engine lives elsewhere |
+| Zero value usable | yes — embedded Engine is ready | no — pointer is `nil`, must be set first |
+| Sharing | each Car has its own Engine | several Cars can share one `*Engine` |
+| Promoted method set | value-receiver methods only | both value- and pointer-receiver methods |
+
+That last row is the subtle one: embedding `*T` promotes **pointer-receiver** methods too, so the outer type can satisfy interfaces that a value embed couldn't. The cost is that a zero-valued outer struct has a `nil` embedded pointer, which panics on first use. Prefer value embedding unless you need sharing or the wider method set.
+
+## Ambiguity: same name at the same depth
+
+When two embedded types contribute the **same** field or method name at the **same depth**, the bare selector is ambiguous — and that's a *compile error*, not a silent pick. You resolve it by qualifying with the embedded field name:
+
+<Playground client:visible title="ambiguity.go" code={String.raw`package main
+
+import "fmt"
+
+type A struct{ ID int }
+
+func (A) Who() string { return "A" }
+
+type B struct{ ID int }
+
+func (B) Who() string { return "B" }
+
+// Both A and B contribute a field ID and a method Who at the SAME depth.
+// That makes a bare c.ID or c.Who() ambiguous — a compile error. You must
+// qualify with the embedded field name to resolve it.
+type Combined struct {
+	A
+	B
+}
+
+func main() {
+	c := Combined{A: A{ID: 1}, B: B{ID: 2}}
+
+	// c.ID    // ambiguous selector: would not compile
+	// c.Who() // ambiguous selector: would not compile
+
+	// Qualify to disambiguate:
+	fmt.Println("A.ID:", c.A.ID)     // 1
+	fmt.Println("B.ID:", c.B.ID)     // 2
+	fmt.Println("A.Who:", c.A.Who()) // A
+	fmt.Println("B.Who:", c.B.Who()) // B
+}`} />
+
+Note that ambiguity only bites when you *use* the ambiguous name. A struct embedding both `A` and `B` compiles fine on its own; only `c.ID` (unqualified) fails. And depth breaks ties: if `A` is embedded directly but the other `ID` is two levels deep, the shallow one wins with no error.
+
+## The classic patterns
+
+### Embedded `sync.Mutex`
+
+Embedding `sync.Mutex` promotes `Lock`/`Unlock` so the lock sits right next to the data it guards — `s.Lock()` reads naturally and documents intent. Use a **pointer receiver** and pass `*T`, because a struct holding a mutex must not be copied after first use:
+
+<Playground client:visible title="embedded-mutex.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// SafeCounter embeds sync.Mutex, promoting Lock/Unlock so they sit right next
+// to the data they guard. Use a POINTER receiver: a struct holding a Mutex must
+// not be copied after first use.
 type SafeCounter struct {
-	sync.Mutex // promoted Lock/Unlock — guards n
-	n int
+	sync.Mutex // promoted: c.Lock(), c.Unlock()
+	n          int
 }
 
 func (c *SafeCounter) Inc() {
@@ -136,10 +295,49 @@ func (c *SafeCounter) Inc() {
 	defer c.Unlock()
 	c.n++
 }
-```
+
+func (c *SafeCounter) Value() int {
+	c.Lock()
+	defer c.Unlock()
+	return c.n
+}
+
+func main() {
+	c := &SafeCounter{}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Inc()
+		}()
+	}
+	wg.Wait()
+
+	fmt.Println("final count:", c.Value()) // 1000 — deterministic, race-free
+}`} />
+
+A common refinement is to embed it *unexported* by giving the field a lowercase alias, or to not embed at all (`mu sync.Mutex`) so callers can't reach `Lock`/`Unlock` from outside — embed it only when promoting those methods is genuinely useful.
+
+### Embedded `io` interfaces
+
+Embedding `io.Reader`/`io.Writer` (the interface) lets you wrap a stream to add logging, buffering, or counting while forwarding everything else untouched — the decorator pattern shown above, applied to I/O. `bufio.Reader`, `gzip.Reader`, and friends all build on this.
+
+## When to use embedding
+
+- **Reach for it** to mix in a small, well-defined capability — a mutex, an `io` interface, a base struct of shared fields — where forwarding is exactly what you want.
+- **Prefer a named field** when the relationship is "has-a" data rather than "behaves-as", or when promoting the inner API would leak methods you'd rather keep private.
+- **Don't fake inheritance.** If you find yourself wishing the embedded type could call back into the outer type's overrides, you want an interface (or an explicit callback), not embedding.
 
 <Callout type="gotcha" title="🐹 Promotion is not inheritance">
-The embedded type doesn't know it's embedded. If `Engine.Start` called another `Engine` method, it would call **Engine's** version, never `Car`'s override — there's no virtual dispatch reaching back up. Also: a struct embedding a `sync.Mutex` (or anything stateful) **must not be copied** after use, since the copy duplicates the lock. Use a pointer receiver and pass `*T`.
+The embedded type doesn't know it's embedded. If `Engine.Start` called another `Engine` method, it would call **Engine's** version, never `Car`'s override — there's no virtual dispatch reaching back up. Also: a struct embedding a `sync.Mutex` (or anything stateful) **must not be copied** after use, since the copy duplicates the lock and the two halves drift apart. Use a pointer receiver and pass `*T`. `go vet`'s `copylocks` check catches the obvious cases.
 </Callout>
+
+## See also
+
+- [Structs](/fundamentals/structs/) — embedding is a special unnamed struct field.
+- [Interfaces](/fundamentals/interfaces/) — embedding interfaces to compose contracts, and how promoted methods satisfy them.
+- [Methods](/fundamentals/methods/) — method sets, which decide what a value vs pointer embed promotes.
 
 Next: writing one algorithm that works across many types — [generics](/fundamentals/generics/).

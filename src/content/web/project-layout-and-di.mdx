@@ -57,7 +57,7 @@ Dependency injection is hiring with a **job description** instead of a named per
 
 Go projects converge on a small set of top-level directories. Nothing is enforced except `internal/`, but the convention makes any codebase navigable:
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   ROOT["myapp/"] --> CMD["cmd/<br/>main packages (entry points)"]
   ROOT --> INT["internal/<br/>private packages (the app guts)"]
   ROOT --> PKG["pkg/<br/>optional: reusable public packages"]
@@ -72,7 +72,7 @@ Go projects converge on a small set of top-level directories. Nothing is enforce
 
 The core idea: a **Service** depends on a **Store interface**, never on a concrete database. The real implementation is constructed in `main`; a fake is constructed in tests. Because Go satisfies interfaces [structurally](/fundamentals/interfaces/), the swap is free — no registration, no framework.
 
-<Playground client:visible title="di.go" code={`package main
+<Playground client:visible title="di.go" code={String.raw`package main
 
 import (
 	"errors"

@@ -84,7 +84,7 @@ Every new behavior means editing `Fly` and growing the switch — the type is cl
 
 ## Structure
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class Duck {
     -flyBehavior FlyBehavior
     +PerformFly()
@@ -104,7 +104,7 @@ The `Duck` (the *context*) holds a `FlyBehavior` and delegates to it. Swapping t
 
 ## How it works
 
-<Mermaid code={`sequenceDiagram
+<Mermaid code={String.raw`sequenceDiagram
   participant C as Client
   participant D as Duck (context)
   participant F as FlyBehavior
@@ -121,7 +121,7 @@ The `Duck` (the *context*) holds a `FlyBehavior` and delegates to it. Swapping t
 
 Each behavior is its own type satisfying a tiny interface, and the duck delegates. Edit and **Run** it:
 
-<Playground client:visible title="strategy.go" code={`package main
+<Playground client:visible title="strategy.go" code={String.raw`package main
 
 import "fmt"
 

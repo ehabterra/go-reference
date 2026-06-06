@@ -5,7 +5,7 @@ kind: topic
 order: 12
 difficulty: "Intermediate"
 status: ready
-intent: "Type parameters and constraints — any, comparable, cmp.Ordered, the ~ and union constraints, generic types, inference, and when an interface fits better."
+intent: "Type parameters and constraints as type sets — any/comparable/cmp.Ordered, the ~ approximation and union constraints, generic types and methods, type inference and instantiation, monomorphization, and when generics beat an interface or plain duplication."
 related:
   - interfaces
   - functions
@@ -13,7 +13,7 @@ related:
 quiz:
   - q: "What is a constraint in a generic function like `func Sum[T Number](xs []T) T`?"
     options:
-      - text: "An interface that limits which types T may be and what operations T supports"
+      - text: "An interface used as a type set that limits which types T may be and what operations T supports"
         correct: true
       - text: "A maximum number of type parameters"
         correct: false
@@ -21,7 +21,7 @@ quiz:
         correct: false
       - text: "A compiler flag"
         correct: false
-    explain: "A constraint is an interface used as a type set. `any` allows everything; `comparable` allows == ; `cmp.Ordered` allows < > ; a union like `~int | ~float64` allows arithmetic on those underlying types. It's checked at compile time."
+    explain: "A constraint is an interface read as a type set. `any` allows everything; `comparable` allows ==; `cmp.Ordered` allows < >; a union like `~int | ~float64` allows arithmetic on those underlying types. It is enforced entirely at compile time — there is no runtime type check."
   - q: "What does the `~` in a constraint like `~int` mean?"
     options:
       - text: "Any type whose underlying type is int — including named types such as `type Celsius int`"
@@ -32,10 +32,10 @@ quiz:
         correct: false
       - text: "Exactly int and nothing else"
         correct: false
-    explain: "`~int` is the set of all types with underlying type int. Without the tilde, `int` matches only the exact type int, excluding named types built on it. The tilde is what makes constraints work on your own defined types."
+    explain: "`~int` is the set of all types with underlying type int. Without the tilde, `int` matches only the exact predeclared type int and excludes named types built on it. The tilde is what lets a constraint accept your own defined types."
   - q: "When is a plain interface a better choice than generics?"
     options:
-      - text: "When you only need a shared behavior (a method set) and don't need to preserve the concrete type"
+      - text: "When you only need shared behavior (a method set) and don't need to preserve the concrete type"
         correct: true
       - text: "Never — generics always win"
         correct: false
@@ -43,22 +43,52 @@ quiz:
         correct: false
       - text: "When the function takes no arguments"
         correct: false
-    explain: "Use an interface when you call methods and don't care about the exact type (e.g. io.Writer). Reach for generics when you must preserve and relate types — return the same T you took in, or write container/algorithm code over arbitrary element types."
+    explain: "Use an interface when you call methods and don't care about the exact type (io.Writer). Reach for generics when you must preserve and relate types — return the same T you took in, or write container/algorithm code over an arbitrary element type. Generics abstract over types; interfaces abstract over behavior."
+  - q: "Why does `func Sum[T comparable](a, b T) T { return a + b }` fail to compile?"
+    options:
+      - text: "comparable guarantees == and != but not arithmetic, so + is not defined on T"
+        correct: true
+      - text: "comparable cannot be used as a constraint"
+        correct: false
+      - text: "You cannot have two parameters of the same type parameter"
+        correct: false
+      - text: "Sum is a reserved name"
+        correct: false
+    explain: "A constraint only enables the operations its whole type set guarantees. comparable's type set includes types where + is undefined (strings aside, e.g. bools, structs), so the compiler rejects +. Use a union like ~int | ~float64, or cmp.Ordered if you need ordering rather than arithmetic."
+  - q: "In `Map(nums, func(n int) string { ... })` with `func Map[T, U any](...)`, why don't you write `Map[int, string]`?"
+    options:
+      - text: "Type inference deduces T=int and U=string from the argument types, so the explicit type arguments are optional"
+        correct: true
+      - text: "Square brackets are not allowed at call sites"
+        correct: false
+      - text: "Map has no type parameters at run time"
+        correct: false
+      - text: "The compiler defaults all type parameters to any"
+        correct: false
+    explain: "Go infers type arguments from the types of the value arguments (and sometimes from an assignment's target type). When inference succeeds you may omit the brackets; you supply them only when inference can't determine a parameter, such as a type parameter that appears solely in the return type."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📐 Analogy">
-A generic function is a cookie cutter with a *blank* for the dough. Write the algorithm once with a placeholder type `T`, and the compiler stamps out a real version for every concrete type you use it with — `[]int`, `[]string`, `[]Celsius`. One recipe, many cookies, no copy-paste and no loss of type safety.
+A generic function is a cookie cutter with a *blank* for the dough. Write the algorithm once with a placeholder type `T`, and the compiler stamps out a real version for every concrete type you use it with — `[]int`, `[]string`, `[]Celsius`. One recipe, many cookies, no copy-paste and no loss of type safety. The constraint on `T` is the rule on the packaging: "works with any dough that can be *sliced*" — it tells you which ingredients fit before you start baking.
 </Callout>
+
+## What problem generics solve
+
+Before Go 1.18 you had exactly two ways to write code that worked across many types, and both hurt. You could **copy-paste** a function once per type (`SumInts`, `SumFloats`, `SumDurations`) — fast but unmaintainable. Or you could route everything through **`any`** and use [type assertions](/fundamentals/type-assertions/) — flexible but it throws away the type at the door, so the compiler can no longer help you and every read needs a cast.
+
+**Generics** give you a third path: write the algorithm once, *keep* the type. A type parameter is a placeholder the compiler fills in at each call, so a generic `Max` returns the same `T` it received — an `int` stays an `int`, a `string` stays a `string`, with zero casts and full compile-time checking. The mental shift is: an interface abstracts over **behavior** (what a value can *do*); a type parameter abstracts over **types** (what a value *is*), and crucially it can *relate* several occurrences of that type — same `T` in the parameter and the return.
 
 ## Type parameters and constraints
 
-Since Go 1.18 a function can take **type parameters** in square brackets before its value parameters. Each parameter has a **constraint** — an interface that says which types are allowed:
+Since Go 1.18 a function can take **type parameters** in square brackets *before* its value parameters. Each parameter has a **constraint** — an interface that says which types are allowed and, by extension, which operations the body may use on them:
 
 ```go
-// T and U can be any type; f turns each T into a U
+// T and U can be any type; f turns each T into a U.
+// The constraint "any" admits every type but permits no operations
+// beyond assignment, passing, and == only if you narrow it further.
 func Map[T, U any](in []T, f func(T) U) []U {
 	out := make([]U, len(in))
 	for i, v := range in {
@@ -68,16 +98,25 @@ func Map[T, U any](in []T, f func(T) U) []U {
 }
 ```
 
-A constraint is just an interface used as a **type set**:
+A constraint is just an interface read as a **type set** — the set of types it admits. This is the single most important mental model for generics: *every constraint denotes a set of types, and your function body may only use operations valid for **every** type in that set.*
 
-<Mermaid code={`graph TD
-  C["constraint (interface used as a type set)"]
-  C --> ANY["any — every type"]
+<Mermaid code={String.raw`graph TD
+  C["constraint = an interface read as a TYPE SET"]
+  C --> ANY["any — every type (no operations guaranteed)"]
   C --> CMP["comparable — supports == and !="]
   C --> ORD["cmp.Ordered — supports < <= > >="]
-  C --> UNI["~int | ~float64 — these underlying types"]`} />
+  C --> UNI["~int | ~float64 — these underlying types (supports + - * /)"]`} />
 
-The standard library ships ready-made constraints: **`comparable`** (built in, allows `==`) and **`cmp.Ordered`** from the `cmp` package (allows `<`, `>`). For arithmetic you write a **union** of underlying types with the `~` tilde, which means "any type whose underlying type is this":
+The standard library ships ready-made constraints so you rarely write your own:
+
+| Constraint | Lives in | Type set | Operations it unlocks |
+|---|---|---|---|
+| `any` | built in | every type | assignment, function calls; nothing else |
+| `comparable` | built in | every type whose values support `==` | `==`, `!=` (map keys, set membership) |
+| `cmp.Ordered` | `cmp` (std) | integers, floats, strings | `<`, `<=`, `>`, `>=` |
+| custom union, e.g. `~int \| ~float64` | you write it | the listed underlying types | the operators common to all members (here `+ - * /`) |
+
+For arithmetic you write a **union** of underlying types with the `~` tilde. The tilde means "any type whose *underlying* type is this", so named types built on `int`/`float64` are admitted too:
 
 ```go
 type Number interface {
@@ -85,11 +124,13 @@ type Number interface {
 }
 ```
 
+The `|` forms the union (the type set is the union of the members); the `~` widens each member from "exactly this type" to "anything with this underlying type". Without the tilde, `int | float64` would reject a `type Celsius float64` — a frequent newcomer surprise.
+
 ## Generic functions in action
 
-Notice you rarely write the type arguments — **type inference** fills them in from the values you pass:
+You **rarely** write the type arguments — **type inference** fills them in from the values you pass. The signature carries the constraints; the call site stays clean:
 
-<Playground client:visible title="generics.go" code={`package main
+<Playground client:visible title="generics.go" code={String.raw`package main
 
 import (
 	"cmp"
@@ -97,6 +138,7 @@ import (
 )
 
 // Map applies f to every element, producing a new slice of U.
+// T and U are independent type parameters, both unconstrained (any).
 func Map[T, U any](in []T, f func(T) U) []U {
 	out := make([]U, len(in))
 	for i, v := range in {
@@ -105,21 +147,18 @@ func Map[T, U any](in []T, f func(T) U) []U {
 	return out
 }
 
-// Number: any type whose underlying type is int or float64.
-type Number interface {
-	~int | ~float64
-}
-
-// Sum works for any Number — the union constraint allows +.
-func Sum[T Number](xs []T) T {
-	var total T
-	for _, x := range xs {
-		total += x
+// Filter keeps only the elements for which keep returns true.
+func Filter[T any](in []T, keep func(T) bool) []T {
+	var out []T
+	for _, v := range in {
+		if keep(v) {
+			out = append(out, v)
+		}
 	}
-	return total
+	return out
 }
 
-// Max uses the standard library cmp.Ordered constraint (allows >).
+// Max uses the standard library cmp.Ordered constraint, which permits >.
 func Max[T cmp.Ordered](xs []T) T {
 	m := xs[0]
 	for _, x := range xs[1:] {
@@ -131,29 +170,80 @@ func Max[T cmp.Ordered](xs []T) T {
 }
 
 func main() {
-	nums := []int{3, 1, 4, 1, 5}
+	nums := []int{3, 1, 4, 1, 5, 9, 2, 6}
 
-	// type inference: no [int, string] needed
+	// Type inference: the compiler reads T=int, U=string from the arguments,
+	// so you write Map(...) and not Map[int, string](...).
 	labels := Map(nums, func(n int) string { return fmt.Sprintf("#%d", n) })
 	fmt.Println("labels:", labels)
 
-	fmt.Println("sum:   ", Sum(nums))                 // 14
-	fmt.Println("sumf:  ", Sum([]float64{1.5, 2.5}))  // 4
-	fmt.Println("max:   ", Max(nums))                 // 5
-	fmt.Println("maxstr:", Max([]string{"go", "rust", "c"})) // rust
+	evens := Filter(nums, func(n int) bool { return n%2 == 0 })
+	fmt.Println("evens: ", evens)
+
+	fmt.Println("max:   ", Max(nums))
+	fmt.Println("maxstr:", Max([]string{"go", "rust", "c"}))
 }`} />
 
-## Generic types
+`Map` keeps two independent types in play — it can turn `[]int` into `[]string` — while `Max` *relates* its input and output (`[]T` in, `T` out). That relating-of-types is precisely what an interface cannot express.
 
-Type parameters work on types too, letting you build reusable containers without `any` casts:
+## Union constraints and the tilde
 
-```go
+When the body needs an *operator* rather than a *method*, you need a constraint whose type set guarantees that operator. Arithmetic needs a union; the `~` lets it reach your own named types:
+
+<Playground client:visible title="union-constraint.go" code={String.raw`package main
+
+import "fmt"
+
+// Number is a UNION constraint: any type whose underlying type is int OR
+// float64. The ~ (tilde) means "underlying type", so named types built on
+// these (like type Celsius float64) are admitted too.
+type Number interface {
+	~int | ~float64
+}
+
+// Celsius has underlying type float64, so it satisfies Number thanks to ~float64.
+type Celsius float64
+
+// Sum works for any Number. The union guarantees + is defined for the type set.
+func Sum[T Number](xs []T) T {
+	var total T // the zero value of T: 0 for int, 0 for float64
+	for _, x := range xs {
+		total += x
+	}
+	return total
+}
+
+func main() {
+	fmt.Println("ints:   ", Sum([]int{3, 1, 4, 1, 5}))
+	fmt.Println("floats: ", Sum([]float64{1.5, 2.5, 3.0}))
+
+	// Named type built on float64 flows through because of the tilde.
+	temps := []Celsius{19.5, 20.0, 21.5}
+	fmt.Printf("celsius: %.1f\n", Sum(temps))
+}`} />
+
+Drop the tilde and `Sum(temps)` stops compiling: `Celsius` is not literally `float64`. The tilde is the bridge between generic algorithms and the named types Go programs are full of.
+
+## Generic types and methods
+
+Type parameters work on **types**, not just functions — this is how you build reusable containers without `any` and without casts. The element type is named once and threaded through every method:
+
+<Playground client:visible title="stack.go" code={String.raw`package main
+
+import "fmt"
+
+// Stack is a generic container: one type parameter T, usable as a real type.
+// Methods repeat the receiver's type parameter as Stack[T].
 type Stack[T any] struct {
 	items []T
 }
 
-func (s *Stack[T]) Push(v T) { s.items = append(s.items, v) }
+func (s *Stack[T]) Push(v T) {
+	s.items = append(s.items, v)
+}
 
+// Pop returns the top element and ok=false when empty. var zero T gives the
+// correct zero value for whatever T turns out to be.
 func (s *Stack[T]) Pop() (T, bool) {
 	var zero T
 	if len(s.items) == 0 {
@@ -163,19 +253,124 @@ func (s *Stack[T]) Pop() (T, bool) {
 	s.items = s.items[:len(s.items)-1]
 	return v, true
 }
-```
 
-## Generics or an interface?
+func (s *Stack[T]) Len() int { return len(s.items) }
+
+// Pair relates two type parameters K and V, preserving both concretely.
+type Pair[K comparable, V any] struct {
+	Key K
+	Val V
+}
+
+func main() {
+	// Instantiation: Stack[string] is a concrete type. Here we name it; the
+	// compiler could also infer it from a composite literal.
+	var s Stack[string]
+	s.Push("a")
+	s.Push("b")
+	s.Push("c")
+
+	for {
+		v, ok := s.Pop()
+		if !ok {
+			break
+		}
+		fmt.Println("pop:", v)
+	}
+
+	p := Pair[string, int]{Key: "age", Val: 42}
+	fmt.Printf("pair: %s=%d\n", p.Key, p.Val)
+}`} />
+
+Two rules for generic types worth memorizing: **methods cannot add new type parameters** of their own (only the ones from the type), and you usually must write the type arguments at **instantiation** (`Stack[string]`) because there are no value arguments for the compiler to infer them from — composite literals like `Pair[string, int]{...}` are the exception when the field values pin the types down.
+
+## Instantiation and inference, precisely
+
+**Instantiation** is the moment a generic is turned into a concrete entity by substituting real types for its type parameters — `Max[int]`, `Stack[string]`. **Inference** is the compiler doing that substitution for you from the argument types. Inference covers the common cases but not all of them:
+
+- It works when a type parameter appears in a *value* parameter: `Max(nums)` infers `T=int`.
+- It fails when a type parameter appears **only in the return type** or has no value to read from — then you must write it explicitly: `make` of a generic type, or `Zero[int]()` for a hypothetical `func Zero[T any]() T`.
+- A constraint can sometimes drive inference too (Go's inference improved through 1.21), but the simple rule "if there's an argument of that type, you can omit the bracket" carries you most of the way.
+
+## Under the hood: monomorphization vs dictionaries
+
+Generic code is *not* boxed through `any` at run time. The Go compiler uses **GC shape stenciling**: it generates one specialized copy of a generic function per distinct *memory shape* of its type arguments (roughly, one for each pointer-shaped type and one per distinct value layout), and passes a hidden **dictionary** for the per-type details the shared copy still needs. The practical upshots:
+
+- **No interface boxing or dynamic dispatch** for the type parameter itself — a generic `Max[int]` compiles to tight integer code, comparable to a hand-written version.
+- **Some code-size and a small dictionary cost** versus full per-type stamping (true monomorphization, as C++ templates do). It is a deliberate middle ground between code bloat and speed.
+- **Don't reach for generics as a micro-optimization.** Their value is type safety and removing duplication; the performance is "as good as a hand-written version of the same algorithm", not magically faster.
+
+## Generics, an interface, or just duplication?
 
 <Callout type="tip" title="✅ Pick the right tool">
-- **Reach for generics** when you must *preserve and relate* types — a container that holds one element type, or a function that returns the same `T` it received (`Map`, `Filter`, `Max`). An [interface](/fundamentals/interfaces/) would lose the concrete type and force casts.
-- **Prefer a plain interface** when you only need shared *behavior* — you call methods and don't care about the exact type (`io.Writer`, `fmt.Stringer`). It's simpler and keeps APIs small.
+- **Reach for generics** when you must *preserve and relate* types — a container that holds one element type, or a function that returns the same `T` it received (`Map`, `Filter`, `Max`, `Stack[T]`). An [interface](/fundamentals/interfaces/) would erase the concrete type and force casts on the way out.
+- **Prefer a plain interface** when you only need shared *behavior* — you call methods and don't care about the exact type (`io.Writer`, `fmt.Stringer`). It's simpler, keeps APIs small, and supports values of *different* types in one slice (a `[]Shape` of circles and rectangles), which a single type parameter cannot.
+- **Just duplicate** when there are only two or three cases, they rarely change, and a generic version would need a baroque constraint to express. Two short functions can be clearer than one clever one.
 
-A handy line: generics abstract over **types**, interfaces abstract over **behavior**.
+A handy line: generics abstract over **types**; interfaces abstract over **behavior**. If your code says "the same type goes in and comes out", that's generics. If it says "anything that can `Read`", that's an interface.
 </Callout>
+
+## A pitfall: the constraint must permit the operation
+
+The body of a generic function may use *only* operations valid for **every** type in its constraint's set. Pick `comparable` and you get `==` but not `<`; pick `cmp.Ordered` and you get `<` but not `+`. Each function below uses only what its constraint guarantees — and the comment shows the line that would *not* compile:
+
+<Playground client:visible title="constraints.go" code={String.raw`package main
+
+import (
+	"cmp"
+	"fmt"
+)
+
+// IndexOf finds the first index of target, or -1. comparable is the built-in
+// constraint that permits == and != (but NOT < or >).
+func IndexOf[T comparable](xs []T, target T) int {
+	for i, x := range xs {
+		if x == target { // == is allowed: T is comparable
+			return i
+		}
+	}
+	return -1
+}
+
+// ClampMax returns the smaller of v and hi. cmp.Ordered permits < <= > >=
+// (but NOT +): ordering, not arithmetic.
+func ClampMax[T cmp.Ordered](v, hi T) T {
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func main() {
+	// THE PITFALL: comparable gives you == but not ordering, and cmp.Ordered
+	// gives ordering but not +. Pick the constraint for the operators you use.
+	//
+	//   func bad[T comparable](a, b T) T { return a + b } // compile error:
+	//     invalid operation: operator + not defined on a (variable of type T)
+	//
+	// Below, each function uses only operators its constraint guarantees.
+
+	fmt.Println("index:", IndexOf([]string{"go", "rust", "c"}, "rust")) // 1
+	fmt.Println("miss: ", IndexOf([]int{1, 2, 3}, 9))                   // -1
+	fmt.Println("clamp:", ClampMax(10, 7))                              // 7
+	fmt.Println("clamp:", ClampMax(3, 7))                               // 3
+}`} />
+
+## Edge cases worth knowing
+
+- **No specialization by type.** You cannot write "`if T is int do X`" inside a generic body; the body must type-check for *every* type in the constraint's set. To branch on the concrete type, take an `any` and use a [type switch](/fundamentals/type-assertions/) instead — that's the dividing line between the two features.
+- **The zero value is `var zero T`.** There is no `nil` or `0` you can write directly for an arbitrary `T`; declare `var zero T` and return that.
+- **Constraints are not types.** You can't declare `var x Number`; `Number` is a constraint (a type set), usable only as a type-parameter bound, not as an ordinary variable type. (A constraint that happens to be a normal method-only interface *can* double as a value type, but unions and `~`/`comparable` ones cannot.)
+- **`comparable` and interface keys.** `comparable` excludes types that only *might* be comparable at run time; an `any`-typed map key can panic on a non-comparable value, but a `comparable` type parameter is checked at compile time.
 
 <Callout type="gotcha" title="🐹 The tilde and the missing operator">
-Two snags catch newcomers. First, `int` in a constraint matches *only* the exact type `int` — to also accept `type ID int` you must write **`~int`**. Second, a constraint only enables the operations its type set guarantees: `cmp.Ordered` gives you `<` but **not** `+`, and `comparable` gives `==` but not ordering. Choose the constraint that grants exactly the operators your code uses.
+Two snags catch newcomers. First, `int` in a constraint matches *only* the exact predeclared `int` — to also accept `type ID int` you must write **`~int`**; this is the #1 "why won't my named type fit?" mistake. Second, a constraint only enables the operations its *entire* type set guarantees: `cmp.Ordered` gives you `<` but **not** `+`, and `comparable` gives `==` but neither ordering nor arithmetic — so `func F[T comparable](a, b T) T { return a + b }` fails with "operator + not defined on T". Choose the constraint that grants exactly the operators your code uses, and no more.
 </Callout>
+
+## See also
+
+- [Interfaces](/fundamentals/interfaces/) — the behavior-based abstraction generics complement; constraints *are* interfaces read as type sets.
+- [Type assertions & switches](/fundamentals/type-assertions/) — how to branch on a concrete type, the thing a generic body deliberately cannot do.
+- [Functions](/fundamentals/functions/) and [slices](/fundamentals/slices/) — where `Map`/`Filter`/`Reduce`-style generic helpers most often live.
 
 Next: pulling a concrete type back out of an interface — [type assertions & switches](/fundamentals/type-assertions/).

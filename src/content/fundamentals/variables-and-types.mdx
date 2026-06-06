@@ -5,7 +5,7 @@ kind: topic
 order: 1
 difficulty: "Start here"
 status: ready
-intent: "How Go names and types values — var and :=, constants and iota, the basic types, guaranteed zero values, and why every conversion is explicit."
+intent: "How Go names and types values — var, :=, and const; typed vs untyped constants and why untyped constants adapt; iota and bit-flag enums; the numeric types with explicit conversion and overflow rules; byte/rune aliases; guaranteed zero values; scope, shadowing, multiple assignment, and the blank identifier."
 related:
   - control-flow
   - functions
@@ -21,7 +21,18 @@ quiz:
         correct: false
       - text: "It's undefined until assigned"
         correct: false
-    explain: "Every type has a well-defined zero value: 0 for numbers, false for bool, \"\" for string, and nil for pointers, slices, maps, channels and interfaces. A declared-but-unassigned variable is never garbage."
+    explain: "Every type has a well-defined zero value: 0 for numbers, false for bool, \"\" for string, and nil for pointers, slices, maps, channels, functions and interfaces. A declared-but-unassigned variable is never garbage."
+  - q: "Why can `const Big = 1 << 40` be assigned to a float64 even though it overflows int32?"
+    options:
+      - text: "It's an untyped constant — it has no fixed type until it's used, and it adapts to (and is checked against) the context"
+        correct: true
+      - text: "Go promotes all constants to int64"
+        correct: false
+      - text: "float64 can hold any integer"
+        correct: false
+      - text: "Constants are always float"
+        correct: false
+    explain: "Untyped constants carry an arbitrary-precision value and a default kind, taking on a concrete type only where they're used. The same literal can become an int, a float64, or a byte depending on context — and the compiler errors if it does not fit."
   - q: "Can you assign an int to a float64 variable directly, like `var f float64 = myInt`?"
     options:
       - text: "No — Go has no implicit numeric conversion; you must write float64(myInt)"
@@ -32,7 +43,18 @@ quiz:
         correct: false
       - text: "Only inside a function"
         correct: false
-    explain: "Go never converts between numeric types implicitly — mixing them is a compile error. Convert explicitly with T(x). (Untyped constants are the one exception: they adapt to context.)"
+    explain: "Go never converts between distinct numeric types implicitly — mixing them is a compile error. Convert explicitly with T(x). Untyped constants are the one exception: they adapt to context."
+  - q: "What does the bit-flag pattern `1 << iota` produce across a const block?"
+    options:
+      - text: "Successive powers of two (1, 2, 4, 8, …) — one bit per constant, so they can be OR-combined"
+        correct: true
+      - text: "The sequence 0, 1, 2, 3"
+        correct: false
+      - text: "A random set of integers"
+        correct: false
+      - text: "Always 1"
+        correct: false
+    explain: "iota is 0 on the first line of a const block and increments by one per line, so 1 << iota yields 1<<0, 1<<1, 1<<2 … Each value occupies a distinct bit, which is exactly what you want for combinable flags."
   - q: "What does `:=` do that `var` doesn't?"
     options:
       - text: "Declares and initializes in one step, inferring the type — but only inside a function"
@@ -43,89 +65,249 @@ quiz:
         correct: false
       - text: "Makes the variable immutable"
         correct: false
-    explain: "Short declaration `x := expr` infers the type from the value and only works inside functions. At package scope you must use `var` (or `const`)."
+    explain: "Short declaration `x := expr` infers the type from the value and only works inside functions. At package scope you must use `var` (or `const`). Used in an inner block, it can also accidentally shadow an outer variable."
 ---
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
 
 <Callout type="analogy" title="📦 Analogy">
-A variable is a labeled box with a fixed *shape*: an `int` box only holds whole numbers, a `string` box only holds text. Unlike some languages, Go never leaves a box empty-and-dangerous — declare one and it starts with a sensible default (the **zero value**), so there's no "uninitialized garbage."
+A variable is a labeled box with a fixed *shape*: an `int` box only holds whole numbers, a `string` box only holds text. Unlike some languages, Go never leaves a box empty-and-dangerous — declare one and it starts with a sensible default (the **zero value**), so there's no "uninitialized garbage." And Go never quietly pours the contents of one box into a differently-shaped box: moving an `int` into a `float64` box is something *you* spell out, every time.
 </Callout>
+
+## The mental model: names, types, and where they live
+
+A Go program is built from **values**, each of which has a **type** that is fixed for the life of the value and known at compile time. A **variable** is a name bound to a piece of storage of one type; the name lets you read and overwrite that storage. Two ideas make Go's approach distinctive, and the rest of this page is really just their consequences:
+
+1. **Static typing with inference.** Every variable has exactly one type, but you rarely have to write it down — Go infers it from the initializer. You get the safety of static types with much of the brevity of a dynamic language.
+2. **No surprises.** Go refuses to do things behind your back: no implicit numeric conversions, no uninitialized memory, no unused variables left lying around. The compiler turns whole classes of bugs into errors you see immediately.
 
 ## Declaring values
 
-Three ways, depending on context:
+Three keywords, chosen by context:
 
 ```go
 var count int = 10   // explicit type and value
 var name = "Go"      // type inferred from the value
 score := 95          // short form — declares + infers, functions only
-const Pi = 3.14159   // a constant: fixed at compile time
+const Pi = 3.14159   // a constant: fixed at compile time, immutable
 ```
 
-`:=` is the one you'll use most inside functions; `var` also works at **package scope** (where `:=` is not allowed).
+`var` is the general form and the only one that works at **package scope**. `:=` is the short declaration you'll use most *inside functions*; it both declares and infers, and it is a syntax error outside a function body. `const` binds a name to a compile-time value that can never be reassigned.
+
+A subtle but important detail: `:=` requires that **at least one** name on its left be new. This lets you reuse it in the common `v, err :=` idiom where `err` already exists — only `v` is freshly declared, and `err` is merely assigned.
 
 ## Every type has a zero value
 
-Declare without assigning and Go fills in a guaranteed default — no `undefined`, no random memory:
+Declare without assigning and Go fills in a guaranteed default — no `undefined`, no random memory. This is why Go code rarely needs constructors just to avoid garbage:
 
 | Type | Zero value |
 |---|---|
-| `int`, `float64`, … | `0` |
+| `int`, `int8`…`int64`, `uint`…, `uintptr` | `0` |
+| `float32`, `float64` | `0` |
+| `complex64`, `complex128` | `0+0i` |
 | `bool` | `false` |
-| `string` | `""` (empty) |
-| `*T`, slice, map, channel, interface, func | `nil` |
+| `string` | `""` (empty, never nil) |
+| `*T`, slice, map, channel, func, interface | `nil` |
+| `struct` | every field set to its own zero value |
+
+The zero value is meant to be *useful*: a zero `bytes.Buffer` is an empty buffer ready to write to, a zero `sync.Mutex` is an unlocked mutex. Designing types whose zero value is immediately usable is idiomatic Go.
 
 ## The basic types
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   T["Go basic types"] --> B["bool"]
   T --> S["string (immutable UTF-8)"]
   T --> N["numeric"]
-  N --> I["int, int8…int64, uint…, uintptr"]
+  N --> I["int, int8 to int64, uint family, uintptr"]
   N --> F["float32, float64"]
-  N --> O["byte = uint8, rune = int32, complex"]`} />
+  N --> O["complex64, complex128"]
+  N --> A["byte = uint8, rune = int32"]`} />
 
-Prefer `int` for counts and indices, `float64` for real numbers, and `string` for text. `byte` and `rune` are aliases you'll meet again with [strings](/fundamentals/strings-and-runes/).
+Use `int` for counts and indices (it is 64-bit on modern platforms but is *not guaranteed* to be — only that it is at least 32 bits), `float64` for real numbers, and `string` for text. The sized integers (`int32`, `uint8`, …) matter when you care about exact width: binary formats, hashes, byte manipulation. `byte` is an alias for `uint8` and `rune` is an alias for `int32`; they're the same types, but the names document intent — `byte` for raw data, `rune` for a Unicode code point. You'll meet both again with [strings & runes](/fundamentals/strings-and-runes/).
 
-## Conversions are always explicit
+Strings are **immutable**: a `string` is a read-only view of UTF-8 bytes, so `s[i] = 'x'` does not compile. "Changing" a string always makes a new one.
 
-Go won't silently mix numeric types — you convert with `T(x)`. Constants are the exception: an **untyped constant** adapts to whatever context needs it.
+## Typed vs untyped constants
 
-<Playground client:visible title="types.go" code={`package main
+This is the single most surprising and most useful idea on this page. A constant declared without a type — `const x = 5`, `const Pi = 3.14159` — is an **untyped constant**. It carries an arbitrary-precision value and a *default kind* (integer, float, rune, string, bool, complex) but **no concrete type** until the moment it is used. At that point it adapts to whatever the context needs, and the compiler checks that it fits.
+
+This is why a single `const Pi = 3.14159` works in a `float64` expression *and* a `float32` one without conversions, and why `const Big = 1 << 40` is fine even though it would overflow an `int32` — the constant is just a number until you pin it down. A *typed* constant (`const x float64 = 3.14`) behaves like a variable's type: it is locked to `float64` and obeys the same no-implicit-conversion rules.
+
+Untyped constants also get **higher precision** than any runtime type — the compiler evaluates them with arbitrary precision and only rounds when assigning to a concrete type.
+
+<Playground client:visible title="untyped-constants.go" code={String.raw`package main
 
 import "fmt"
 
-type Color int // a named type built on int
+// Untyped: no type until used. The same literal adapts to context.
+const k = 1024
 
-const (
-	Red   Color = iota // iota counts up: 0
-	Green             // 1
-	Blue              // 2
-)
+// Untyped float with very high precision; rounds only when assigned.
+const Pi = 3.14159265358979323846
 
 func main() {
-	// zero values — declared, not assigned
-	var i int
-	var f float64
-	var s string
-	var p *int
-	fmt.Printf("zero values: i=%d f=%g s=%q p=%v\n", i, f, s, p)
+	var i int = k       // k becomes int here
+	var f float64 = k   // and float64 here — same constant, no conversion
+	var b byte = 200    // untyped 200 fits in a byte, so it is allowed
+	fmt.Println(i, f, b)
 
-	// short declaration infers the type
-	x := 42      // int
-	y := 3.14    // float64
+	// A typed constant is locked to its type.
+	const typed float64 = 2
+	// var x int = typed // would NOT compile: typed is float64, no implicit convert
+	fmt.Printf("%.5f\n", Pi)
 
-	// no implicit int -> float64: convert explicitly
-	sum := float64(x) + y
-	fmt.Printf("sum = %.2f\n", sum)
-
-	fmt.Println("colors:", Red, Green, Blue) // 0 1 2
+	// Constant expressions are evaluated at compile time with full precision.
+	const huge = 1 << 62
+	fmt.Println("1<<62 =", huge)
 }`} />
 
-<Callout type="gotcha" title="⚠️ Constants, iota, and unused variables">
-**Untyped constants** like `const Pi = 3.14` have no fixed type until used, so `Pi * float64(r)` just works — handy, unlike variables. **`iota`** auto-increments within a `const` block, the idiomatic way to make enums. And Go is strict: a declared-but-unused local variable (or import) is a **compile error**, not a warning — delete it or use `_`.
+## iota: enumerations and bit flags
+
+`iota` is a compiler-managed counter that resets to **0** at the start of every `const` block and increments by **1** for each *line* (each ConstSpec) in that block. It's the idiomatic way to build enumerations. The trick that makes it powerful is that the expression on one line is *repeated* on the lines below it if they're left blank — so writing the formula once defines the whole sequence.
+
+You can do far more than count: skip values with the blank identifier `_`, start at an offset, and use full expressions. The most important pattern is `1 << iota`, which assigns each constant its own **bit**, so the constants can be combined and tested with bitwise OR and AND:
+
+<Playground client:visible title="iota-flags.go" code={String.raw`package main
+
+import "fmt"
+
+type Perm uint8
+
+// Each flag gets its own bit: 1<<0, 1<<1, 1<<2, 1<<3.
+const (
+	Read    Perm = 1 << iota // 1  (binary 0001)
+	Write                    // 2  (binary 0010)
+	Execute                  // 4  (binary 0100)
+	Delete                   // 8  (binary 1000)
+)
+
+// Skipping and offsets in a counting enum:
+type Level int
+
+const (
+	_       = iota // discard 0 with the blank identifier
+	Low            // 1
+	Medium         // 2
+	High           // 3
+)
+
+func (p Perm) Has(flag Perm) bool { return p&flag != 0 }
+
+func main() {
+	// Combine flags with OR.
+	access := Read | Write
+	fmt.Printf("access bits: %04b\n", access) // 0011
+
+	fmt.Println("can read:   ", access.Has(Read))    // true
+	fmt.Println("can execute:", access.Has(Execute)) // false
+
+	// Add a flag, then remove it with AND-NOT.
+	access |= Execute
+	access &^= Write
+	fmt.Printf("now:        %04b\n", access) // 0101 (Read+Execute)
+
+	fmt.Println("levels:", Low, Medium, High) // 1 2 3
+}`} />
+
+`iota` only advances by line, so to assign several names the same value, set them all explicitly on separate lines; to leave a gap in the sequence, put `_` on a line. Expressions like `1 << (10 * iota)` (for KiB, MiB, GiB) are a classic use.
+
+## Conversions are always explicit
+
+Go won't silently mix numeric types — you convert with `T(x)`. This rules out a category of bugs where a lossy conversion happens by accident. The flip side is that you must be aware of **overflow and truncation**: converting to a narrower type keeps only the low bits, and converting a float to an integer truncates toward zero (it does not round). Conversions never panic; they wrap or truncate silently, so the responsibility to keep values in range is yours.
+
+<Playground client:visible title="conversion-pitfall.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// Explicit conversion is required to mix numeric types.
+	x := 42
+	y := 3.75
+	sum := float64(x) + y
+	fmt.Printf("sum = %.2f\n", sum) // 45.75
+
+	// float -> int TRUNCATES toward zero (no rounding).
+	pos, neg := 3.75, -3.75
+	fmt.Println("int(3.75) =", int(pos))   // 3
+	fmt.Println("int(-3.75) =", int(neg)) // -3
+
+	// Narrowing keeps only the low bits — silent overflow, no panic.
+	var big int32 = 300
+	var small uint8 = uint8(big) // 300 mod 256 = 44
+	fmt.Println("uint8(300) =", small) // 44
+
+	// Signed wrap-around on an int8.
+	var s int8 = 127
+	s++ // overflows to the minimum
+	fmt.Println("int8 127 + 1 =", s) // -128
+
+	// byte and rune are just aliases for uint8 and int32.
+	var r rune = 'A'
+	fmt.Println("rune 'A' as int32:", r, "byte:", byte(r)) // 65 65
+}`} />
+
+| Conversion | Rule | Example |
+|---|---|---|
+| widening int → int64 | exact, value preserved | `int64(300)` → 300 |
+| narrowing int → uint8 | keeps low 8 bits (mod 256) | `uint8(300)` → 44 |
+| float → int | truncates toward zero | `int(3.9)` → 3 |
+| int → float64 | exact for small ints, may lose precision for very large | `float64(1<<53+1)` may round |
+| signed overflow (`++`/arithmetic) | wraps around (two's complement) | `int8(127)+1` → -128 |
+
+## Scope, shadowing, and multiple assignment
+
+A name is visible only within the **block** where it's declared — between the `{` and `}`, including nested blocks. `if`, `for`, and `switch` init statements introduce their own little scopes too. Re-declaring a name in an inner block doesn't change the outer variable; it creates a *new* one that **shadows** the outer for the rest of that block. Shadowing is occasionally useful but is a frequent source of bugs, especially with `err`.
+
+Go also supports **multiple assignment**: the right-hand side is fully evaluated before any assignment happens, which makes swaps trivial and means there's no temporary variable needed.
+
+<Playground client:visible title="scope-shadowing.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// Multiple assignment: RHS evaluated first, then assigned.
+	a, b := 1, 2
+	a, b = b, a // swap, no temp needed
+	fmt.Println("after swap:", a, b) // 2 1
+
+	x := 10
+	fmt.Println("outer x:", x) // 10
+	{
+		// := declares a NEW x that shadows the outer one in this block.
+		x := 20
+		x += 5
+		fmt.Println("inner x:", x) // 25
+	}
+	fmt.Println("outer x still:", x) // 10 — untouched
+
+	// The blank identifier _ discards values you don't need.
+	_, only := divmod(17, 5)
+	fmt.Println("remainder:", only) // 2
+}
+
+func divmod(n, d int) (int, int) { return n / d, n % d }`} />
+
+## Naming conventions and the compiler's strictness
+
+Two rules with outsized impact:
+
+- **Capitalization controls export.** A name starting with an uppercase letter (`Println`, `Color`) is **exported** — visible outside its package. A lowercase name is package-private. There is no `public`/`private` keyword; the case of the first letter *is* the access modifier. Idiomatic Go favors short names (`i`, `r`, `buf`), `camelCase` (never `snake_case`), and brevity that grows with scope.
+- **Unused locals and imports are errors, not warnings.** A declared-but-unused *local variable* or an unused *import* stops compilation. This keeps code clean but trips up newcomers mid-refactor. The escape valve is the blank identifier `_`: assign to `_` to deliberately discard a value, or `import _ "pkg"` to import a package only for its side effects. (Note: unused *package-level* variables and unused *function parameters* are allowed.)
+
+<Callout type="gotcha" title="⚠️ Shadowing, lossy conversion, and the unused-variable wall">
+Three traps that catch nearly everyone:
+
+- **Accidental shadowing.** Inside an `if` or a new block, `result, err := f()` declares a *new* `err` if you're not careful, and the outer `err` you meant to set stays unchanged. `go vet` has a shadow check for exactly this. Prefer `=` over `:=` when the variable already exists.
+- **Silent narrowing.** `uint8(someInt)` and `int(someFloat)` never panic — they truncate. A value that "looks fine" can wrap to garbage. Validate ranges before converting.
+- **The unused-variable error.** Deleting the one line that used a variable suddenly breaks the build. Delete the declaration too, or park the value in `_`. The same goes for imports you commented out.
 </Callout>
+
+## See also
+
+- [Control flow](/fundamentals/control-flow/) — where `:=` init statements and shadowing show up most.
+- [Pointers](/fundamentals/pointers/) — what `nil` and `*T` mean, and value vs reference semantics.
+- [Strings & runes](/fundamentals/strings-and-runes/) — the `byte`/`rune` aliases in depth and string immutability.
+- [Functions](/fundamentals/functions/) — multiple return values, the source of the `v, err :=` idiom.
 
 Next: making decisions and looping — [control flow](/fundamentals/control-flow/).

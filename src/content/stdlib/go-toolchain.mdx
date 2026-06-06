@@ -77,7 +77,7 @@ $ ls -lh app
 -rwxr-xr-x  1 you  staff   1.4M app    # smaller, same behavior
 ```
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   SRC["main.go + packages"] --> C["go build"]
   C --> BIN["single static binary"]
   BIN --> RUN["runs anywhere<br/>same GOOS/GOARCH<br/>no dependencies"]`} />

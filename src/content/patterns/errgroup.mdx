@@ -67,7 +67,7 @@ You run several things concurrently and any of them might fail. A `sync.WaitGrou
 
 ## Structure
 
-<Mermaid code={`graph TD
+<Mermaid code={String.raw`graph TD
   G["errgroup.WithContext"] --> A["g.Go task A"]
   G --> B["g.Go task B (fails)"]
   G --> C["g.Go task C"]
@@ -79,7 +79,7 @@ You run several things concurrently and any of them might fail. A `sync.WaitGrou
 
 `g.Go` launches each task; a failure cancels the shared `ctx`, and `g.Wait` returns the first error. Edit and **Run**:
 
-<Playground client:visible title="errgroup.go" code={`package main
+<Playground client:visible title="errgroup.go" code={String.raw`package main
 
 import (
 	"context"

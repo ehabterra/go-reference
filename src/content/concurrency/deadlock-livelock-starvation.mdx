@@ -62,7 +62,7 @@ A deadlock needs **all four** of these at once. Break any one and it can't happe
 3. **No preemption** — resources are released only voluntarily.
 4. **Circular wait** — a cycle of goroutines each waiting on the next.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   G1["Goroutine 1<br/>holds Lock A"] -->|wants Lock B| G2["Goroutine 2<br/>holds Lock B"]
   G2 -->|wants Lock A| G1`} />
 
@@ -81,7 +81,7 @@ go func() { b.Lock(); a.Lock(); /* ... */ }()
 
 If *every* goroutine is blocked, the runtime aborts with a clear message instead of hanging forever. **Run** this:
 
-<Playground client:visible title="deadlock.go" code={`package main
+<Playground client:visible title="deadlock.go" code={String.raw`package main
 
 import "fmt"
 

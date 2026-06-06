@@ -55,7 +55,7 @@ A **stack** is a pile of plates: you add and take from the top, so the last plat
 
 ## Two ends, two disciplines
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   subgraph S["Stack · LIFO"]
     direction TB
     S3["3  ← top: push & pop"] --> S2["2"] --> S1["1  ← bottom"]
@@ -69,7 +69,7 @@ A **stack** is a pile of plates: you add and take from the top, so the last plat
 
 The end of a slice is the top. `append` pushes; reslicing off the last element pops — both O(1). The classic use is matching brackets:
 
-<Playground client:visible title="stack.go" code={`package main
+<Playground client:visible title="stack.go" code={String.raw`package main
 
 import "fmt"
 
@@ -102,7 +102,7 @@ func main() {
 
 The trap: `Dequeue` as `q = q[1:]` looks O(1), but the head drifts forward while the backing array — and everything before the head — is never reclaimed. Keep a **head index** and compact occasionally:
 
-<Playground client:visible title="queue.go" code={`package main
+<Playground client:visible title="queue.go" code={String.raw`package main
 
 import "fmt"
 

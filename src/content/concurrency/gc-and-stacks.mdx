@@ -66,7 +66,7 @@ Two knobs:
 
 A goroutine starts with a **~2 KB** stack (vs ~1 MB for an OS thread). When it's about to overflow, the runtime allocates a larger stack, **copies** the frames over, and fixes up pointers — and shrinks it back later when it can. That's the secret behind running **millions** of goroutines.
 
-<Mermaid code={`graph LR
+<Mermaid code={String.raw`graph LR
   S1["new goroutine<br/>~2 KB stack"] -->|deeper calls| S2["copy to<br/>~4 KB"]
   S2 -->|deeper still| S3["copy to<br/>~8 KB …"]
   S3 -.shrinks when idle.-> S1`} />
@@ -81,7 +81,7 @@ go build -gcflags=-m ./...   # prints "escapes to heap" / "does not escape"
 
 ## Watch the GC work
 
-<Playground client:visible title="memstats.go" code={`package main
+<Playground client:visible title="memstats.go" code={String.raw`package main
 
 import (
 	"fmt"

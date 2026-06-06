@@ -71,7 +71,7 @@ When code does `d := &MallardDuck{}`, it's welded to that concrete type. Every p
 
 The everyday Go factory is a function returning an interface. A *Simple Factory* extends that with a switch when the caller chooses a kind at runtime. Edit and **Run**:
 
-<Playground client:visible title="factory.go" code={`package main
+<Playground client:visible title="factory.go" code={String.raw`package main
 
 import "fmt"
 
@@ -124,7 +124,7 @@ The duck switch above is a *Simple Factory* — a handy idiom, but not formally 
 
 The order workflow is fixed — prepare, bake, cut, box — but **which pizza gets created** is a step each store provides. In Go (no subclassing), the base store delegates creation to an embedded creator, and `NYPizzaStore`/`ChicagoPizzaStore` each supply their own `CreatePizza`:
 
-<Mermaid code={`classDiagram
+<Mermaid code={String.raw`classDiagram
   class PizzaStore {
     <<interface>>
     +OrderPizza(kind) Pizza
