@@ -311,6 +311,44 @@ A directory named **`internal/`** is a compiler-enforced privacy boundary at the
 
 A package whose path contains `.../internal/...` is importable **only** by code rooted at the directory that *contains* that `internal/`. So `example.com/app/internal/auth` is usable by anything under `example.com/app/`, but no other module can import it — even though the source is public on GitHub. It's how you share code across your own packages while keeping it out of your public API, free to refactor without breaking anyone.
 
+## Laying out a project: cmd, internal, pkg
+
+Go has **no enforced project structure** — only the rules above (one package per directory; `internal/` is private). But a widely-used convention has grown up around a few well-known directory names, and recognizing them makes any Go repo readable at a glance:
+
+```text
+myapp/                      # module root — holds go.mod
+├── go.mod
+├── go.sum
+├── cmd/                    # entry points: one subdir per binary
+│   ├── server/
+│   │   └── main.go         # package main → builds "server"
+│   └── cli/
+│       └── main.go         # package main → builds "cli"
+├── internal/              # private packages (this module only)
+│   ├── auth/
+│   ├── store/
+│   └── http/              # handlers, middleware
+├── pkg/                   # OPTIONAL: packages meant for outside reuse
+│   └── token/
+├── api/                   # OpenAPI / protobuf schemas (non-Go)
+└── README.md
+```
+
+What each well-known directory means:
+
+| Directory | Meaning |
+|---|---|
+| **`cmd/<name>/`** | A `package main` with a `main()` — **one subdirectory per executable**. Keep these thin: parse flags/config, wire dependencies, call into your packages. |
+| **`internal/`** | Implementation packages **private to this module** (toolchain-enforced). Most of your real code lives here, safe to refactor. |
+| **`pkg/`** | Library packages deliberately exposed for **other modules** to import. Optional and debated — many projects skip it and just put exported packages at the root. |
+| **root / feature dirs** | A small library or program can be a single flat package at the root. Group by **feature/domain** (`order/`, `billing/`), not by technical layer (`models/`, `controllers/`) — the latter is a Java habit Go projects tend to avoid. |
+
+The pattern is: **`cmd/` holds the executables, `internal/` holds the private guts, exported API sits at the root (or under `pkg/`).** It's a community convention popularized by the [golang-standards/project-layout](https://github.com/golang-standards/project-layout) repo — **not** an official standard, and the Go team explicitly discourages cargo-culting it.
+
+<Callout type="tip" title="🧭 Start flat; grow structure only when it hurts">
+A new program should be a **single package in one directory** — `main.go` plus a few `*.go` files. Add `cmd/` the moment you need a *second* binary; add `internal/` when `main` grows enough that you want to extract and test real logic; add `pkg/` only if another module will import you. Reaching for the full `cmd/internal/pkg` tree on day one is over-engineering: Go rewards growing the layout to fit the code, not the other way around. The wiring of those packages — passing dependencies in — is [dependency injection](/web/project-layout-and-di/).
+</Callout>
+
 ## replace and workspaces (briefly)
 
 Two tools let you point at code other than the published version:
