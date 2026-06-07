@@ -151,14 +151,38 @@ Every entry carries a **mode**: type bits plus Unix permission bits.
   M --> G["group: r-- (4)"]
   M --> W["other: r-- (4)"]`} />
 
-```go
-info, _ := os.Stat("config.yaml")
-fmt.Println(info.Size(), info.Mode(), info.ModTime())
-// 128 -rw-r--r-- 2026-06-07 10:00:00
+This runs here — create a file, read its mode, flip the permission bits, and read them back:
 
-os.Chmod("script.sh", 0o755)     // make executable
-info.Mode().IsDir()              // type check
-info.Mode()&os.ModeSymlink != 0  // is it a symlink?
+<Playground client:visible title="perms.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+func main() {
+	dir, _ := os.MkdirTemp("", "perms")
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "script.sh")
+	os.WriteFile(path, []byte("#!/bin/sh\necho hi\n"), 0o644)
+
+	info, _ := os.Stat(path)
+	fmt.Printf("before: mode=%v size=%d isDir=%v\n",
+		info.Mode(), info.Size(), info.Mode().IsDir())
+
+	os.Chmod(path, 0o755) // make it executable
+
+	info, _ = os.Stat(path)
+	fmt.Printf("after:  mode=%v  (owner can execute: %v)\n",
+		info.Mode(), info.Mode().Perm()&0o100 != 0)
+}`} />
+
+```go
+// The mode also encodes the file TYPE, queryable with the helper methods:
+info.Mode().IsDir()              // directory?
+info.Mode()&os.ModeSymlink != 0  // symlink?
+info.Mode().Perm()               // just the 0o777 permission bits
 ```
 
 ## Symlinks

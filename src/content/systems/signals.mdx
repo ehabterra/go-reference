@@ -83,7 +83,7 @@ A signal is an **asynchronous** notification from the kernel. Handling async eve
   OS["OS: SIGTERM"] -->|"signal.Notify"| CH["chan os.Signal (buffered)"]
   CH --> CODE["your code: &lt;-ch → clean up → exit"]`} />
 
-This runs anywhere — real signals can't be delivered in the sandbox, so we **send into the same channel ourselves** to exercise the exact handler logic:
+This runs here and delivers a **real** signal — the goroutine sends our own process `SIGTERM` via `syscall.Kill` (the `kill(2)` syscall), exactly as `kill <pid>` or an orchestrator would. (A `select` timeout guards against any sandbox that blocks self-signalling.)
 
 <Playground client:visible title="signals.go" code={String.raw`package main
 
@@ -100,21 +100,25 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	// On a real machine, Ctrl-C or 'kill <pid>' delivers the signal.
-	// The sandbox can't, so simulate one by sending into the channel —
-	// the receive-and-shutdown logic below is identical either way.
+	// Deliver a REAL signal to ourselves — the same kill(2) syscall that
+	// Ctrl-C, 'kill <pid>', or Kubernetes uses.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		sigs <- syscall.SIGTERM
+		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 	}()
 
 	fmt.Println("server running; waiting for shutdown signal…")
-	sig := <-sigs // block until a signal arrives
-	fmt.Printf("received %v — shutting down gracefully\n", sig)
-
-	// Real cleanup goes here: stop accepting work, drain, flush, close.
-	fmt.Println("drained connections, flushed logs — bye")
+	select {
+	case sig := <-sigs: // block until the signal arrives
+		fmt.Printf("received %v — shutting down gracefully\n", sig)
+		// Real cleanup goes here: stop accepting work, drain, flush, close.
+		fmt.Println("drained connections, flushed logs — bye")
+	case <-time.After(2 * time.Second):
+		fmt.Println("(no signal delivered — sandbox restriction)")
+	}
 }`} />
+
+The handler logic — receive on the channel, then clean up — is identical whether the signal comes from `syscall.Kill`, a terminal Ctrl-C, or an orchestrator's `SIGTERM`.
 
 ## Graceful shutdown, the modern way
 

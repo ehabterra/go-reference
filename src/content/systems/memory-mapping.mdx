@@ -75,8 +75,8 @@ import Playground from '../../components/islands/Playground.tsx';
 Normal file I/O is like phoning the archive and asking a clerk to photocopy pages and mail them to you (each `read` copies bytes from the kernel into your buffer). **Memory mapping** is like getting the archive's floor plan overlaid on your own office: the shelves now *appear* in your room, and a book only physically materializes the moment you reach for it (the kernel pages it in on demand). No copying, and you only pull in what you touch — but you're now holding real shelves, so if the archive demolishes one while you're reaching (the file is truncated), you don't get a polite "not found" — you grab at thin air (SIGBUS).
 </Callout>
 
-<Callout type="gotcha" title="🧪 Not runnable here">
-`mmap` needs a real file descriptor and OS memory manager, which the Go Playground sandbox doesn't provide — so every example on this page is **study-only (fenced)**. They're correct for a real Linux/macOS machine.
+<Callout type="tip" title="🧪 What runs here">
+**Anonymous** mmap (memory not backed by a file) runs right here — the first playground below is a real `mmap`/`munmap`. **File-backed** mmap needs a real file descriptor, so those examples are fenced (correct for a real Linux/macOS machine).
 </Callout>
 
 ## What memory mapping is
@@ -89,6 +89,41 @@ Normal file I/O is like phoning the archive and asking a clerk to photocopy page
   V -. "[]byte view, no read() per access" .-> APP["your Go code"]`} />
 
 The two payoffs: **zero-copy** (no `read()` into a user buffer) and **laziness** (only the pages you touch are loaded). For random access over a multi-gigabyte file — a database file, a search index, a column store — that beats `read`/`seek`, which would copy and often over-read.
+
+## A real mmap, runnable
+
+The simplest mapping is **anonymous** — memory not backed by any file. It's a real `mmap(2)`/`munmap(2)` and runs right here: the returned region *is* a `[]byte` you read and write as ordinary memory, with no per-access syscall:
+
+<Playground client:visible title="mmap_anon.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"syscall"
+)
+
+func main() {
+	const size = 4096 // one page
+
+	// Anonymous mmap: ask the kernel for memory directly (fd = -1, no file).
+	// MAP_SHARED means a forked child would see writes too — true shared memory.
+	region, err := syscall.Mmap(-1, 0, size,
+		syscall.PROT_READ|syscall.PROT_WRITE,
+		syscall.MAP_ANON|syscall.MAP_SHARED)
+	if err != nil {
+		fmt.Println("mmap failed:", err)
+		return
+	}
+	defer syscall.Munmap(region) // outside the GC heap — you must free it
+
+	// The region IS a []byte. Write to it like ordinary memory...
+	msg := "written straight into mapped memory"
+	copy(region, msg)
+	// ...and read it back — no read()/write() syscall per access.
+	fmt.Printf("read back: %q\n", region[:len(msg)])
+	fmt.Println("region length:", len(region), "bytes")
+}`} />
+
+File-backed mappings are the same call with a real fd instead of `-1` — that's the next section.
 
 ## Mapping a file in Go
 

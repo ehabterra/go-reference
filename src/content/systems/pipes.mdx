@@ -134,6 +134,37 @@ out, _ := cmd.Output()        // ...child counts the lines → "2"
 
 Often you don't even need `os.Pipe` directly: `exec` wires pipes for you when you connect commands.
 
+You can also use the two ends in one process — this is a *real* kernel pipe (the `pipe(2)` syscall), with actual file descriptors, and it runs here:
+
+<Playground client:visible title="ospipe.go" code={String.raw`package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+func main() {
+	pr, pw, _ := os.Pipe() // two *os.File over a real kernel pipe
+	fmt.Printf("read fd = %d, write fd = %d\n", pr.Fd(), pw.Fd())
+
+	// Producer goroutine writes to the write end, then closes it (→ EOF).
+	go func() {
+		defer pw.Close()
+		for i := 1; i <= 3; i++ {
+			fmt.Fprintf(pw, "line %d\n", i)
+		}
+	}()
+
+	// Consumer reads the read end until EOF.
+	sc := bufio.NewScanner(pr)
+	for sc.Scan() {
+		fmt.Println("got:", sc.Text())
+	}
+}`} />
+
+Unlike `io.Pipe` (pure Go, in-process), these fds are real — you could pass the write end to a child process, and `strace` would show the `pipe2`/`read`/`write` calls.
+
 <Mermaid code={String.raw`graph LR
   A["producer (write end)"] -->|"kernel pipe buffer"| B["consumer (read end)"]
   B -. "buffer full → writer blocks (back-pressure)" .-> A`} />
