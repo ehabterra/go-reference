@@ -377,6 +377,8 @@ img { max-width: 100%; }
   --dp-observability:   #8b5cf6;
   --dp-messaging:       #f59e0b;
   --dp-resilience:      #10b981;
+  --dp-arch-principles: #e879f9;
+  --dp-arch-structure:  #2dd4bf;
 }
 .dp-badge[data-cat="building-blocks"] { color: var(--dp-building-blocks); }
 .dp-badge[data-cat="coordination"]    { color: var(--dp-coordination); }
@@ -413,6 +415,8 @@ img { max-width: 100%; }
 .dp-badge[data-cat="observability"]   { color: var(--dp-observability); }
 .dp-badge[data-cat="messaging"]       { color: var(--dp-messaging); }
 .dp-badge[data-cat="resilience"]      { color: var(--dp-resilience); }
+.dp-badge[data-cat="arch-principles"] { color: var(--dp-arch-principles); }
+.dp-badge[data-cat="arch-structure"]  { color: var(--dp-arch-structure); }
 .dp-card[data-cat="building-blocks"]  { --c: var(--dp-building-blocks); }
 .dp-card[data-cat="coordination"]     { --c: var(--dp-coordination); }
 .dp-card[data-cat="runtime"]          { --c: var(--dp-runtime); }
@@ -448,6 +452,8 @@ img { max-width: 100%; }
 .dp-card[data-cat="observability"]    { --c: var(--dp-observability); }
 .dp-card[data-cat="messaging"]        { --c: var(--dp-messaging); }
 .dp-card[data-cat="resilience"]       { --c: var(--dp-resilience); }
+.dp-card[data-cat="arch-principles"]  { --c: var(--dp-arch-principles); }
+.dp-card[data-cat="arch-structure"]   { --c: var(--dp-arch-structure); }
 
 /* hub topic cards */
 .dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
@@ -469,6 +475,7 @@ img { max-width: 100%; }
 .dp-topic[data-cat="syscalls"]        { --c: var(--dp-syscalls); }
 .dp-topic[data-cat="offensive"]       { --c: var(--dp-offensive); }
 .dp-topic[data-cat="containers"]      { --c: var(--dp-containers); }
+.dp-topic[data-cat="arch-principles"] { --c: var(--dp-arch-principles); }
 .dp-topic:not(.dp-topic--soon):hover { transform: translateY(-3px); border-color: var(--c); box-shadow: var(--dp-shadow-sm); color: #fff; text-decoration: none; }
 .dp-topic__icon { font-size: 2rem; }
 .dp-topic h3 { margin: .2rem 0 0; font-size: 1.4rem; }

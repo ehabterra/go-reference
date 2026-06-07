@@ -1,0 +1,53 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CategorySection from '../../components/CategorySection.astro';
+import { ARCHITECTURE_CATEGORIES } from '../../lib/consts';
+
+const topics = await getCollection('architecture');
+const slugs = topics.filter((t) => t.data.kind !== 'pattern').map((t) => t.id).join(',');
+---
+<BaseLayout title="Software Architecture in Go" description="Designing Go systems that last — Domain-Driven Design and bounded contexts, aggregates and repositories, hexagonal/clean architecture (ports & adapters), an idiomatic Go project layout, and the modular-monolith-vs-microservices decision, with diagrams and runnable code.">
+  <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Architecture</span></nav>
+
+  <header class="dp-hero">
+    <p class="dp-hero__eyebrow" data-i18n="architecture.eyebrow">Designing systems</p>
+    <h1 data-i18n="architecture.h1">Software Architecture in Go</h1>
+    <p class="dp-hero__lede" data-i18n-html="architecture.lede">
+      Code that compiles is easy; code that stays changeable for years is architecture. This track covers the
+      ideas that keep a Go codebase coherent as it grows — <strong>Domain-Driven Design</strong> and bounded
+      contexts, aggregates and repositories, <strong>hexagonal/clean</strong> architecture, an idiomatic
+      project layout, and knowing when a modular monolith should become microservices.
+    </p>
+    <div class="dp-hero__cta">
+      <a class="dp-btn dp-btn--primary" href="/architecture/domain-driven-design/" data-i18n="ui.startJourney">Start the journey →</a>
+      <a class="dp-btn dp-btn--ghost" href="#arch-structure" data-i18n="architecture.cta.jump">Jump to structure</a>
+    </div>
+  </header>
+
+  <div class="dp-overall">
+    <div class="dp-overall__top">
+      <strong data-i18n="architecture.progressTitle">Your architecture progress</strong>
+      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-reset data-i18n="ui.reset">Reset</button>
+    </div>
+    <div class="dp-progress" data-dp-progress data-slugs={slugs}>
+      <div class="dp-progress__track"><div class="dp-progress__fill"></div></div>
+      <span class="dp-progress__label"></span>
+    </div>
+    <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="architecture.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
+  </div>
+
+  {ARCHITECTURE_CATEGORIES.map((c) => (
+    <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="architecture" base="/architecture" />
+  ))}
+
+  <div class="dp-callout dp-callout--go" style="margin-top:2.6rem;">
+    <p class="dp-callout__title" data-i18n="architecture.go.title">🐹 Architecture is about change, not diagrams</p>
+    <p data-i18n="architecture.go.body">
+      The point of good architecture isn't a pretty diagram — it's that the next change is cheap and safe.
+      Go's small interfaces, explicit dependencies, and lack of magic make clean boundaries natural: depend
+      on interfaces, keep the domain free of I/O, and let the compiler enforce the lines. Start simple (a
+      well-structured monolith) and add structure only when a real force — a team, a scaling need — demands it.
+    </p>
+  </div>
+</BaseLayout>

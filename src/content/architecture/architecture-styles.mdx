@@ -1,0 +1,193 @@
+---
+title: "Architecture Patterns (Styles)"
+category: arch-structure
+kind: topic
+order: 6
+difficulty: "Intermediate"
+status: ready
+intent: "A field guide to the macro architecture styles — layered, event-driven, microkernel/plugin, microservices, and space-based — what each optimizes for, and how to choose by trade-offs instead of fashion."
+related:
+  - modular-monolith-vs-microservices
+  - hexagonal-and-clean-architecture
+  - domain-driven-design
+quiz:
+  - q: "What is the 'big ball of mud' anti-pattern that motivates having a deliberate architecture?"
+    options:
+      - text: "Code with no clear structure — unorganized modules with tangled, undefined responsibilities and dependencies, making the system tightly coupled and hard to change"
+        correct: true
+      - text: "An application that uses too many design patterns"
+        correct: false
+      - text: "A monolith deployed on one server"
+        correct: false
+      - text: "A system with too much test coverage"
+        correct: false
+    explain: "The 'big ball of mud' is what you get by coding without a deliberate architecture: source modules with no clear roles, responsibilities, or dependency rules, so everything is tightly coupled and brittle. Basic questions — does it scale? how does it deploy? how easily does it change? — become impossible to answer without understanding every component. Choosing an architecture style up front is how you avoid sliding into the mud."
+  - q: "In a classic layered (n-tier) architecture with CLOSED layers, what is 'layers of isolation'?"
+    options:
+      - text: "A request must pass through each layer in order, and a change in one layer doesn't ripple to others — layers depend only on the contract of the one directly below"
+        correct: true
+      - text: "Each layer runs on a physically isolated server"
+        correct: false
+      - text: "Layers cannot share any data types"
+        correct: false
+      - text: "Only the database layer is isolated"
+        correct: false
+    explain: "Closed layers mean a request flows top-to-bottom through each layer (presentation → business → persistence → database); you can't skip one. 'Layers of isolation' is the payoff: because each layer talks only to the contract of the layer directly below, a change confined to one layer (e.g. swapping the UI framework) doesn't affect the others. The cost is the 'architecture sinkhole' risk — requests that just pass straight through every layer doing nothing but forwarding."
+  - q: "What distinguishes the two event-driven topologies, mediator and broker?"
+    options:
+      - text: "The mediator uses a central component to orchestrate a multi-step event flow; the broker has no central orchestrator — events chain reactively from one processor to the next"
+        correct: true
+      - text: "Mediator is synchronous; broker is always single-threaded"
+        correct: false
+      - text: "They are two names for the same thing"
+        correct: false
+      - text: "Broker requires a database; mediator does not"
+        correct: false
+    explain: "Event-driven architecture is built from decoupled event processors. In the MEDIATOR topology a central mediator receives an event and orchestrates the steps (knowing the workflow), good for events needing coordination. In the BROKER topology there's no central orchestrator — a processor publishes an event and other processors react and publish their own, forming a chain. Broker is more decoupled and scalable but the overall flow is harder to follow and to recover when a step fails."
+  - q: "What is the core idea of the microkernel (plug-in) architecture?"
+    options:
+      - text: "A minimal core system provides the general functionality, and independent plug-in modules add features/customizations that the core discovers and invokes"
+        correct: true
+      - text: "Every feature runs in the OS kernel"
+        correct: false
+      - text: "The application has no core at all"
+        correct: false
+      - text: "It is the same as microservices"
+        correct: false
+    explain: "Microkernel architecture splits the system into a small, stable core (the minimum to make it run) plus plug-in modules that add specialized or customer-specific behavior. The core knows how to discover and call plug-ins through a registry/contract, but plug-ins are independent and ideally don't know about each other. It's ideal for product-style apps with a stable base and lots of optional/extensible features (IDEs, browsers with extensions, task/rules engines)."
+  - q: "What problem does the space-based architecture specifically target?"
+    options:
+      - text: "Extreme, unpredictable scalability and concurrency — it removes the central database bottleneck by keeping data in replicated in-memory grids (a tuple space) shared across processing units"
+        correct: true
+      - text: "Reducing the number of microservices"
+        correct: false
+      - text: "Making layered apps easier to test"
+        correct: false
+      - text: "Storing files in cloud object storage"
+        correct: false
+    explain: "Space-based architecture (a.k.a. cloud/grid architecture) attacks the classic scalability killer: the database becoming the bottleneck under high, variable load. Instead, processing units hold data in-memory and share/replicate it through a 'tuple space' (an in-memory data grid), with a backing store updated asynchronously. By eliminating the central DB from the request path, it scales out elastically for spiky, high-concurrency workloads — at the cost of significant complexity and eventual-consistency concerns."
+  - q: "What's the right way to CHOOSE among these architecture styles?"
+    options:
+      - text: "By trade-offs against your needs — agility, deployability, testability, performance, scalability, simplicity — since each style optimizes some at the expense of others; no style is universally best"
+        correct: true
+      - text: "Always pick microservices — it's the most modern"
+        correct: false
+      - text: "Always pick layered — it's the simplest"
+        correct: false
+      - text: "Pick whichever the largest company uses"
+        correct: false
+    explain: "Every architecture style is a bundle of trade-offs across qualities like agility, ease of deployment, testability, performance, scalability, and overall simplicity. Layered is simple but scales and deploys poorly; microservices deploy and scale independently but add operational complexity; space-based scales extremely but is complex; microkernel is great for extensibility but not for raw scale. An architect's job is to justify the choice against the specific business and quality needs — not to follow fashion."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏗️ Analogy">
+The pages around this one zoom <em>in</em> — how to model a domain, where the I/O seam goes. This one zooms <em>out</em>: the shape of the whole building. A bungalow (layered), a mall with independent shops (microservices), a power strip you plug modules into (microkernel), a trading floor where everyone shouts updates (event-driven), a fleet of identical food trucks that carry their own stock (space-based) — each is "good architecture" for a different job. Picking one is choosing what you optimize and what you sacrifice.
+</Callout>
+
+## Why a deliberate style at all
+
+Skip the decision and you drift into the **big ball of mud**: modules with no clear roles or dependency rules, everything tightly coupled, and nobody able to answer "does this scale? how does it deploy? how easily does it change?" without reading the whole codebase. A named architecture style gives you those answers up front. The five below are the classic macro patterns catalogued in Mark Richards' <a href="https://www.oreilly.com/library/view/software-architecture-patterns/9781491971437/" target="_blank" rel="noopener">*Software Architecture Patterns* (O'Reilly, free report)</a> — the canonical short read for this material; this page is the Go-flavored tour.
+
+## The five styles at a glance
+
+<Mermaid code={String.raw`graph TD
+  Layered["① Layered (n-tier)<br/>presentation→business→persistence→db"]
+  Event["② Event-Driven<br/>decoupled processors react to events"]
+  Micro["③ Microkernel<br/>small core + plug-ins"]
+  Services["④ Microservices<br/>independently deployable services"]
+  Space["⑤ Space-Based<br/>in-memory grid, no central DB"]`} />
+
+**① Layered (n-tier).** Horizontal layers — presentation, business, persistence, database — each a closed abstraction. A request passes *through* each layer (you can't skip one), giving **layers of isolation**: a change in one layer doesn't ripple to others. Simple, familiar, the default for most apps. Weaknesses: it scales and deploys as one unit, and risks the **architecture sinkhole** (requests that fall straight through every layer doing nothing but forwarding). *Use when:* small-to-medium apps, you want the lowest-ceremony start. (Closely related to the [modular monolith](/architecture/modular-monolith-vs-microservices/).)
+
+**② Event-Driven.** Decoupled **event processors** that react to events asynchronously. Two topologies: a **mediator** orchestrates a known multi-step workflow centrally; a **broker** has no orchestrator — events chain reactively from one processor to the next (more decoupled, harder to trace/recover). *Use when:* highly responsive, asynchronous, spiky workloads; complex event flows. (In Go this is [channels](/concurrency/channels/), [pub/sub](/patterns/pub-sub/), and [message queues](/cloud/message-queues/).)
+
+**③ Microkernel (plug-in).** A minimal **core** plus independent **plug-in** modules the core discovers and invokes through a registry/contract. *Use when:* product-style apps with a stable base and lots of optional or customer-specific features — IDEs, browsers, rules/task engines.
+
+**④ Microservices.** Independently deployable, separately scalable services around bounded contexts. *Use when:* a real force (independent deploy/scale, team autonomy) justifies the distributed-systems tax — covered in depth in [modular monolith vs microservices](/architecture/modular-monolith-vs-microservices/) and [microservices basics](/cloud/microservices-basics/).
+
+**⑤ Space-Based.** Removes the central-database bottleneck: processing units hold data **in memory** and share it through a replicated **tuple space** (in-memory data grid), with a backing store updated asynchronously. *Use when:* extreme, unpredictable scalability and high concurrency (think flash-sale / ticketing spikes) — at the cost of real complexity and eventual consistency.
+
+## See it: the microkernel core + plug-in registry
+
+The microkernel pattern is tiny and clean in Go: a core holds a registry of plug-ins satisfying a contract interface, and dispatches to them without knowing what they do. Adding a feature means registering a plug-in — the core never changes. This runs here:
+
+<Playground client:visible title="microkernel.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+// Plugin is the contract the core knows about — the only coupling.
+type Plugin interface {
+	Name() string
+	Apply(order float64) float64
+}
+
+// --- core: a minimal engine that discovers & invokes plug-ins ---
+type Core struct{ plugins map[string]Plugin }
+
+func NewCore() *Core { return &Core{plugins: map[string]Plugin{}} }
+
+func (c *Core) Register(p Plugin) { c.plugins[p.Name()] = p }
+
+func (c *Core) Process(order float64, active []string) float64 {
+	sort.Strings(active) // deterministic order
+	for _, name := range active {
+		if p, ok := c.plugins[name]; ok {
+			order = p.Apply(order)
+		}
+	}
+	return order
+}
+
+// --- independent plug-ins: the core has zero knowledge of these ---
+type loyalty struct{}
+func (loyalty) Name() string             { return "loyalty" }
+func (loyalty) Apply(o float64) float64  { return o * 0.95 } // 5% off
+
+type tax struct{}
+func (tax) Name() string                 { return "tax" }
+func (tax) Apply(o float64) float64      { return o * 1.10 } // +10%
+
+func main() {
+	core := NewCore()
+	core.Register(loyalty{}) // add a feature = register a plug-in;
+	core.Register(tax{})     // the core code never changes.
+
+	total := core.Process(100, []string{"loyalty", "tax"})
+	fmt.Printf("final: %.2f\n", total) // loyalty then tax: 100*0.95*1.10
+}`} />
+
+The `Core` depends only on the `Plugin` interface — exactly the dependency-inversion idea from [hexagonal architecture](/architecture/hexagonal-and-clean-architecture/), applied at the scale of whole features. New behavior plugs in; the core stays stable.
+
+## Choosing: it's all trade-offs
+
+There is no "best" style — each optimizes some qualities at the expense of others:
+
+| Style | Scales | Deploys independently | Simplicity | Best for |
+|---|---|---|---|---|
+| Layered | whole app | no | ★★★ | most CRUD / line-of-business apps |
+| Event-driven | high | partly | ★ | async, spiky, reactive flows |
+| Microkernel | low–med | plug-ins | ★★ | extensible products |
+| Microservices | per service | yes | ★ | independent deploy/scale/teams |
+| Space-based | extreme | yes | ☆ | unpredictable high-concurrency spikes |
+
+<Callout type="go" title="🐹 Most Go systems start layered/modular — and that's right">
+For the typical Go service, a clean <a href="/architecture/modular-monolith-vs-microservices/">modular monolith</a> (a disciplined layered/feature-sliced design) is the correct first style: simple to build, run, and reason about. Reach for the others when a <em>specific quality need</em> appears — event-driven when you need asynchronous, decoupled reactions (Go's <a href="/concurrency/channels/">channels</a> and <a href="/cloud/message-queues/">queues</a> make it natural); microkernel when you're building an extensible product; microservices when independent deploy/scale/teams justify the cost; space-based only for genuinely extreme, spiky scale. The architect's job, per Richards, is to <em>justify</em> the choice against business and quality needs — never to adopt a style because it's fashionable.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Styles compose — and the labels blur">
+Real systems mix these. A microservice is usually <em>internally</em> layered (or hexagonal); an event-driven system often has a microkernel-style processor; a space-based system communicates via events. Don't treat the five as mutually exclusive boxes — treat them as a vocabulary of forces. The mistake isn't combining them; it's adopting the heaviest one (microservices, space-based) for prestige before any quality need demands it, and paying enormous complexity for benefits you don't use — the flip side of the big ball of mud.
+</Callout>
+
+## See also
+
+- [Modular monolith vs microservices](/architecture/modular-monolith-vs-microservices/) — the layered-vs-distributed decision in depth.
+- [Hexagonal & clean architecture](/architecture/hexagonal-and-clean-architecture/) — how a single service is structured inside.
+- [Message queues (cloud)](/cloud/message-queues/) & [pub/sub (patterns)](/patterns/pub-sub/) — the plumbing of event-driven style.
+- [*Software Architecture Patterns*, Mark Richards (O'Reilly)](https://www.oreilly.com/library/view/software-architecture-patterns/9781491971437/) — the free report this tour is based on.
+
+Back to the [Architecture index](/architecture/), or explore the [Cloud-Native track](/cloud/).

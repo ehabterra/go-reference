@@ -1,0 +1,165 @@
+---
+title: "Hexagonal & Clean Architecture"
+category: arch-principles
+kind: topic
+order: 3
+difficulty: "Intermediate"
+status: ready
+intent: "Ports & adapters and the dependency rule — keeping the domain free of I/O so the database, HTTP, and queues are swappable details. Demonstrated with Go interfaces."
+related:
+  - aggregates-and-repositories
+  - domain-driven-design
+  - project-layout
+quiz:
+  - q: "What is the central rule of hexagonal (ports & adapters) and clean architecture?"
+    options:
+      - text: "Dependencies point inward — the domain/business core depends on nothing external; outer layers (DB, HTTP, queues) depend on the core via interfaces"
+        correct: true
+      - text: "Every layer can call every other layer"
+        correct: false
+      - text: "The database is the center of the design"
+        correct: false
+      - text: "HTTP handlers contain the business logic"
+        correct: false
+    explain: "Both styles enforce the dependency rule: source-code dependencies point only inward, toward the business core. The domain knows nothing about Postgres, HTTP, or Kafka. Those are 'adapters' on the outside that depend on the core through 'ports' (interfaces). This is what makes the core testable in isolation and infrastructure swappable — flip a coupling so the framework depends on your code, not the reverse."
+  - q: "What is a 'port' vs an 'adapter'?"
+    options:
+      - text: "A port is an interface the core defines (what it needs/offers); an adapter is a concrete implementation that connects a port to a real technology (Postgres, HTTP, SMTP)"
+        correct: true
+      - text: "A port is a TCP port; an adapter is a network card"
+        correct: false
+      - text: "They are two names for the same struct"
+        correct: false
+      - text: "A port is the database; an adapter is the cache"
+        correct: false
+    explain: "A port is an interface owned by the application core — a driven port like OrderRepository (something the core needs) or a driving port like a use-case interface (something the core offers). An adapter is the concrete code that fulfills a port using a real technology: a Postgres adapter implements OrderRepository; an HTTP handler is a driving adapter that calls a use case. Ports are the shape; adapters are the plumbing."
+  - q: "Why does the domain layer NOT import the database driver?"
+    options:
+      - text: "So business rules stay testable without infrastructure and storage can change without touching the domain — the dependency is inverted via an interface"
+        correct: true
+      - text: "Because importing drivers is slow to compile"
+        correct: false
+      - text: "Because Go forbids it"
+        correct: false
+      - text: "Because the driver has bugs"
+        correct: false
+    explain: "If the domain imported lib/pq, every business rule would be entangled with Postgres — untestable without a DB and impossible to re-platform. Instead the domain defines a repository *interface* and an infrastructure adapter imports the driver and implements it. The dependency is inverted: infrastructure depends on the domain, not the reverse. The payoff is fast unit tests (in-memory adapter) and the freedom to swap storage."
+  - q: "In Go, how is dependency inversion typically wired up cleanly?"
+    options:
+      - text: "The core defines small interfaces; concrete adapters satisfy them implicitly; main() constructs the adapters and injects them into the core (manual dependency injection)"
+        correct: true
+      - text: "A global registry that adapters write themselves into at init()"
+        correct: false
+      - text: "A heavyweight DI container/framework is required"
+        correct: false
+      - text: "Reflection at startup to find implementations"
+        correct: false
+    explain: "Idiomatic Go does this with plain constructor injection: define small interfaces in the core, have adapters satisfy them implicitly (no 'implements' keyword), and wire everything in main() by constructing concrete types and passing them in. No DI framework needed — main() is the composition root. (Tools like google/wire just generate that wiring; they're optional.) Small interfaces defined by the *consumer* are the key Go idiom."
+  - q: "What's a common misuse of clean/hexagonal architecture?"
+    options:
+      - text: "Applying all the layers and indirection to a simple CRUD app, creating mapping boilerplate and ceremony with no real benefit"
+        correct: true
+      - text: "Using interfaces for the database"
+        correct: false
+      - text: "Keeping business logic out of HTTP handlers"
+        correct: false
+      - text: "Writing unit tests for the core"
+        correct: false
+    explain: "The architecture earns its keep when the domain is complex and infrastructure genuinely changes. Bolting four layers, DTO-to-entity mappers, and a port for everything onto a small CRUD service produces mountains of boilerplate that obscure trivial logic. Start with a clear package boundary between domain and infrastructure; add ports/adapters where you actually need substitutability (testing, multiple backends). Pragmatism over dogma."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔌 Analogy">
+Think of your laptop's USB-C port. The laptop doesn't know or care whether you plug in a drive, a monitor, or a charger — it defines the <em>shape of the hole</em> (the port) and each device brings its own plug (the adapter). Hexagonal architecture does the same for software: the business core defines the shapes it needs (a "save orders" port, a "send email" port), and the outside world — Postgres, SMTP, HTTP — brings adapters that fit. Swap the database the way you swap a USB drive: the core never notices.
+</Callout>
+
+## One rule: dependencies point inward
+
+**Hexagonal architecture** (Alistair Cockburn's "ports & adapters") and Robert Martin's **Clean Architecture** are two names for the same core idea — the **dependency rule**: source-code dependencies point *only inward*, toward the business core. The domain depends on nothing external; the database, web framework, and message broker are **outer** details that depend on the core. Read <a href="https://alistair.cockburn.us/hexagonal-architecture/" target="_blank" rel="noopener">Cockburn's original</a> and <a href="https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html" target="_blank" rel="noopener">Martin's Clean Architecture post</a> for the full treatment.
+
+<Mermaid code={String.raw`graph TD
+  subgraph core["Application core (no I/O imports)"]
+    D["Domain: entities, aggregates, rules"]
+    UC["Use cases / services"]
+    P1["Port: OrderRepository (interface)"]
+    P2["Port: Notifier (interface)"]
+    UC --> D
+    UC --> P1
+    UC --> P2
+  end
+  HTTP["HTTP handler<br/>(driving adapter)"] --> UC
+  PG["Postgres adapter"] -. implements .-> P1
+  SMTP["SMTP adapter"] -. implements .-> P2
+  HTTP -.->|"main() wires it all"| core`} />
+
+- **Driving (primary) adapters** call *into* the core: HTTP handlers, CLI, a queue consumer.
+- **Driven (secondary) adapters** are called *by* the core through ports: the Postgres repository, an email sender, an HTTP client to another service.
+- **Ports** are the interfaces in between, owned by the core.
+
+## See it: the core depends only on a port
+
+Below, the `BillingService` (core) depends on a `Notifier` **port** — an interface — not on email or SMS. Two **adapters** satisfy it. The core has zero knowledge of which one runs; `main` (the *composition root*) picks. This is dependency inversion with plain Go:
+
+<Playground client:visible title="ports.go" code={String.raw`package main
+
+import "fmt"
+
+// --- Application core: defines the PORT it needs, imports no I/O ---
+type Notifier interface {
+	Notify(user, msg string) error
+}
+
+type BillingService struct {
+	notify Notifier // depends on the abstraction
+}
+
+func NewBillingService(n Notifier) *BillingService { return &BillingService{notify: n} }
+
+func (s *BillingService) Charge(user string, cents int64) error {
+	// ... business logic: validate, record the charge (omitted) ...
+	return s.notify.Notify(user, fmt.Sprintf("charged %.2f", float64(cents)/100))
+}
+
+// --- Adapters: infrastructure details, satisfy the port implicitly ---
+type emailAdapter struct{}
+func (emailAdapter) Notify(user, msg string) error {
+	fmt.Printf("[email] to %s: %s\n", user, msg)
+	return nil
+}
+
+type smsAdapter struct{}
+func (smsAdapter) Notify(user, msg string) error {
+	fmt.Printf("[sms] to %s: %s\n", user, msg)
+	return nil
+}
+
+func main() {
+	// Composition root: choose the adapter here, nowhere else.
+	svc := NewBillingService(emailAdapter{})
+	_ = svc.Charge("ada", 1999)
+
+	// Swap infrastructure without touching the core:
+	svc = NewBillingService(smsAdapter{})
+	_ = svc.Charge("ada", 1999)
+}`} />
+
+Notice the adapters never import or mention `Notifier` — Go satisfies the interface implicitly. The arrow of dependency points *into* the core: infrastructure knows about the domain, never the reverse. To unit-test `BillingService`, pass a tiny fake `Notifier` that records calls — no email server required.
+
+<Callout type="go" title="🐹 main() is your composition root — skip the DI framework">
+In Go you don't need a dependency-injection container. Define <strong>small interfaces in the consumer</strong> (the core), let adapters satisfy them implicitly, and do all the wiring in <code>main()</code>: construct the Postgres repo, the SMTP notifier, the HTTP server, and inject them inward. That single function is your "composition root" — the one place that knows every concrete type. If wiring grows unwieldy, <a href="https://github.com/google/wire" target="_blank" rel="noopener">google/wire</a> can <em>generate</em> the same constructor calls at compile time, but it's optional sugar, not a requirement. The Go idiom — "accept interfaces, return structs," interfaces defined where they're used — <em>is</em> hexagonal architecture in miniature.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Don't cargo-cult the layers">
+The biggest failure mode is ceremony: four named layers, a port for every function, and entity↔DTO mappers everywhere — on a CRUD app whose "domain logic" is three validations. That boilerplate hides trivial code and slows everyone down. Earn the structure: start with a clean package split between <code>domain</code> and <code>infra</code>, and introduce a port only where you genuinely need substitutability (a real second backend, or isolating the core for tests). Also resist the urge to leak infrastructure types (a <code>*sql.Rows</code>, an <code>http.Request</code>) across a port — that quietly re-couples the core to the detail you were trying to hide.
+</Callout>
+
+## See also
+
+- [Aggregates & repositories](/architecture/aggregates-and-repositories/) — the repository is the canonical driven port.
+- [Domain-Driven Design](/architecture/domain-driven-design/) — what lives in the core.
+- [Project layout](/architecture/project-layout/) — mapping core vs adapters to Go packages.
+- [Strategy (patterns)](/patterns/strategy/) — swapping behavior behind an interface, the building block here.
+
+Next: where all this code actually lives on disk — [project layout](/architecture/project-layout/).
