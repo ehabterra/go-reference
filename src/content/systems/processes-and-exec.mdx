@@ -1,0 +1,222 @@
+---
+title: "Processes & exec"
+category: processes
+kind: topic
+order: 5
+difficulty: "Intermediate"
+status: ready
+intent: "Launching and managing external programs in Go — os/exec, wiring up stdin/stdout/env, Run vs Start vs Output, process IDs, and killing children."
+related:
+  - signals
+  - pipes
+  - os-exec
+quiz:
+  - q: "What's the difference between cmd.Run(), cmd.Start(), and cmd.Output()?"
+    options:
+      - text: "Run starts and waits; Start starts and returns immediately (you Wait later); Output runs and returns captured stdout"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Only Run executes the program"
+        correct: false
+      - text: "Output starts without running"
+        correct: false
+    explain: "Run = Start + Wait (blocks until done). Start launches the process and returns right away, so you can do other work and call Wait() when ready. Output runs to completion and returns the child's stdout as []byte (CombinedOutput adds stderr)."
+  - q: "Why should you prefer exec.CommandContext over exec.Command?"
+    options:
+      - text: "It ties the child's lifetime to a context — cancel or timeout the context and the process is killed automatically"
+        correct: true
+      - text: "It runs faster"
+        correct: false
+      - text: "It's the only one that captures output"
+        correct: false
+      - text: "Command is deprecated"
+        correct: false
+    explain: "exec.CommandContext(ctx, ...) kills the process when ctx is cancelled or its deadline passes — essential for not leaking runaway children. Pair it with context.WithTimeout to bound how long an external command may run."
+  - q: "How do you safely pass user input as an argument to a command?"
+    options:
+      - text: "As separate args to exec.Command (exec.Command(\"grep\", userInput)) — Go executes the binary directly, with no shell, so there's no shell-injection"
+        correct: true
+      - text: "Build a shell string and run sh -c on it"
+        correct: false
+      - text: "Concatenate it into the command name"
+        correct: false
+      - text: "Escape it manually for the shell"
+        correct: false
+    explain: "exec.Command does NOT invoke a shell — it execs the program with an argv array, so metacharacters in userInput are just literal argument text, not commands. The injection risk only appears if you deliberately run sh -c \"...\"+userInput. Pass args separately and you're safe by default."
+  - q: "How do you capture a child process's output as a stream rather than all at once?"
+    options:
+      - text: "cmd.StdoutPipe() gives an io.Reader you read incrementally; with Output() you get everything buffered after it exits"
+        correct: true
+      - text: "You can't stream child output"
+        correct: false
+      - text: "Set cmd.Stream = true"
+        correct: false
+      - text: "Read os.Stdout"
+        correct: false
+    explain: "StdoutPipe()/StderrPipe() return readers you consume while the process runs (good for long-running commands or huge output). Output()/CombinedOutput() buffer everything and return it after exit (simpler for short commands). You can also set cmd.Stdout to any io.Writer to redirect directly."
+  - q: "On the Go Playground, can you run external programs with os/exec?"
+    options:
+      - text: "No — the sandbox has no external binaries or process execution, so os/exec examples are study-only (fenced) here"
+        correct: true
+      - text: "Yes, any system binary works"
+        correct: false
+      - text: "Only Go programs"
+        correct: false
+      - text: "Only with cgo"
+        correct: false
+    explain: "The playground sandbox blocks process creation and has no /bin, so os/exec calls fail there. The code on this page is correct for a real machine; we show process/env introspection runnably and keep the exec examples in fenced blocks."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧑‍🍳 Analogy">
+Sometimes your program is the head chef who doesn't cook every dish personally — it delegates to specialist line cooks (`git`, `ffmpeg`, `pg_dump`) and collects their results. `os/exec` is the kitchen pass: you write the ticket (the command and its arguments), decide how the dish comes back (captured all at once, or streamed plate by plate), set a timer so a slow cook gets pulled, and clean up when service ends. Crucially, you hand the cook an *argument list*, not a sentence to interpret — so there's no chance a weird order becomes a destructive instruction.
+</Callout>
+
+## Running an external program
+
+Go shells out through **`os/exec`**. The simplest forms capture output:
+
+```go
+// Output(): run to completion, return stdout as []byte.
+out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+if err != nil {
+	// *exec.ExitError carries the non-zero exit + stderr
+	log.Fatalf("git failed: %v", err)
+}
+fmt.Printf("commit: %s", out)
+
+// CombinedOutput(): stdout + stderr together (handy for diagnostics).
+out, _ = exec.Command("go", "version").CombinedOutput()
+```
+
+The three ways to launch, by how much control you want:
+
+<Mermaid code={String.raw`graph TD
+  C["exec.Command(name, args...)"] --> R["Run() = Start + Wait<br/>(block until done)"]
+  C --> S["Start()<br/>(returns now; Wait() later)"]
+  C --> O["Output()/CombinedOutput()<br/>(run, return captured bytes)"]`} />
+
+## Wiring streams, environment, and working dir
+
+A `*exec.Cmd` is a struct you configure before launching — redirect its streams to any `io.Writer`/`io.Reader`, set its environment and directory:
+
+```go
+cmd := exec.Command("my-tool", "--flag", userInput) // args are safe, see below
+cmd.Stdin = strings.NewReader("data on stdin")
+cmd.Stdout = os.Stdout                 // inherit our stdout
+cmd.Stderr = os.Stderr
+cmd.Dir = "/work"                      // run in this directory
+cmd.Env = append(os.Environ(), "LANG=C") // tweak the child's environment
+
+if err := cmd.Run(); err != nil { /* ... */ }
+fmt.Println("child pid was:", cmd.ProcessState.Pid())
+```
+
+For long-running commands, stream instead of buffering:
+
+```go
+cmd := exec.Command("tail", "-f", "app.log")
+stdout, _ := cmd.StdoutPipe()
+cmd.Start()
+scanner := bufio.NewScanner(stdout)
+for scanner.Scan() {        // process each line as it arrives
+	fmt.Println("log:", scanner.Text())
+}
+cmd.Wait()
+```
+
+## Timeouts and cancellation
+
+Never run an external command without a leash. `CommandContext` kills the child when the context is cancelled or times out:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+cmd := exec.CommandContext(ctx, "slow-converter", "in.mov", "out.mp4")
+if err := cmd.Run(); err != nil {
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Println("converter timed out and was killed")
+	}
+}
+```
+
+## Inspecting the current process
+
+You can't spawn programs on the playground, but you *can* introspect the running process — its PID, parent, environment, and arguments. This runs anywhere:
+
+<Playground client:visible title="proc.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+func main() {
+	fmt.Println("pid:        ", os.Getpid())
+	fmt.Println("parent pid: ", os.Getppid())
+	fmt.Println("args:       ", os.Args)
+
+	// The environment is inherited from the parent and handed to children.
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "PATH=") {
+			fmt.Println("PATH is set, length:", len(kv))
+			break
+		}
+	}
+
+	// os.Executable() is the path to this running binary.
+	if exe, err := os.Executable(); err == nil {
+		fmt.Println("executable: ", exe)
+	}
+}`} />
+
+When you `Start` a child, it *inherits* this process's environment by default; set `cmd.Env` to change that. The child's PID lives in `cmd.Process.Pid` once started.
+
+## Under the hood: fork + exec
+
+`exec.Command(...).Start()` is two classic syscalls in a trench coat:
+
+<Mermaid code={String.raw`graph LR
+  P["parent process"] -->|"fork(2)"| C["child: a clone of the parent"]
+  C -->|"execve(2)"| N["child's memory replaced<br/>by the new program"]
+  P -->|"wait4(2)"| R["reap exit status<br/>(ProcessState)"]`} />
+
+- **`fork`** duplicates the calling process, giving a child with copies of its fds and memory (copy-on-write).
+- **`execve`** then *replaces* that child's program image with the new binary — same PID, brand-new code.
+- **`wait`** lets the parent collect the child's exit status. Until it does, a finished child is a **zombie** holding a slot in the process table.
+
+Go hides all three: `Start` does the fork+exec, and `Wait` (or `Run`/`Output`, which call it) does the reaping and fills in `cmd.ProcessState`:
+
+```go
+cmd := exec.Command("false") // exits non-zero
+err := cmd.Run()
+var ee *exec.ExitError
+if errors.As(err, &ee) {
+	fmt.Println("exit code:", ee.ExitCode())          // 1
+	fmt.Println("user CPU time:", ee.UserTime())       // from ProcessState
+}
+```
+
+So "always `Wait()`" isn't style advice — it's how you reap the zombie. And the child *inheriting* fds is exactly what makes [pipes](/systems/pipes/) between parent and child work: the parent's `os.Pipe` write end survives the fork into the child.
+
+<Callout type="go" title="🐹 No shell means no shell-injection — by default">
+The single most important safety property: `exec.Command(name, args...)` runs the binary **directly with an argv array** — there's no shell parsing, so a user-supplied argument like `; rm -rf /` is just a harmless literal string passed to the program. The classic injection hole only opens if you *choose* to run `exec.Command("sh", "-c", "tool "+userInput)`. Avoid `sh -c` with interpolated input; pass arguments separately and you're safe. (See the broader treatment on the stdlib <a href="/stdlib/os-exec/">os/exec</a> page.)
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Zombies, deadlocks, and lookups">
+Three classics. **Always `Wait()`** (or use `Run`) — a `Start`ed child you never wait on becomes a zombie that lingers in the process table. **Don't deadlock on pipes** — if you set `StdoutPipe` you must read it *before* `Wait()`, and a child that fills a pipe buffer while you're blocked elsewhere hangs both sides (using `cmd.Output()` avoids this). And **`exec.Command` doesn't error if the binary is missing until you Run** — check the error, which will be `exec.ErrNotFound` if it's not on `PATH`.
+</Callout>
+
+## See also
+
+- [signals](/systems/signals/) — sending/handling signals to control processes.
+- [pipes](/systems/pipes/) — wiring one process's output into another's input.
+- [os/exec (stdlib)](/stdlib/os-exec/) — the package in depth, including security.
+- [context & cancellation (patterns)](/patterns/context-cancellation/) — the leash for `CommandContext`.
+
+Next: how a process reacts to the outside world — [signals](/systems/signals/).

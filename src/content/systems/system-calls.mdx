@@ -1,0 +1,281 @@
+---
+title: "System Calls"
+category: syscalls
+kind: topic
+order: 2
+difficulty: "Intermediate"
+status: ready
+intent: "How Go asks the kernel for services — system calls, the syscall and x/sys packages, file descriptors, the standard streams, and tracing calls with strace/dtrace."
+related:
+  - why-go-for-systems
+  - files-and-directories
+  - pipes
+quiz:
+  - q: "What is a system call?"
+    options:
+      - text: "The mechanism a program uses to request a service from the OS kernel — open a file, write bytes, create a process — crossing from user space to kernel space"
+        correct: true
+      - text: "A function call to another Go package"
+        correct: false
+      - text: "A network request"
+        correct: false
+      - text: "A call to the garbage collector"
+        correct: false
+    explain: "User-space code can't touch hardware or kernel data structures directly. A syscall is the controlled doorway: it traps into the kernel, which performs the privileged operation (I/O, process creation, memory mapping) and returns. os.Open, os.Read, etc. are thin wrappers over syscalls."
+  - q: "In Go, what do you normally use instead of calling syscalls directly?"
+    options:
+      - text: "The os, io, and net packages — portable wrappers; you drop to syscall/x/sys only for platform-specific calls"
+        correct: true
+      - text: "Always the raw syscall package"
+        correct: false
+      - text: "cgo and C functions"
+        correct: false
+      - text: "Inline assembly"
+        correct: false
+    explain: "os.Open, os.ReadFile, net.Dial and friends wrap the syscalls portably. Reach for the syscall package or golang.org/x/sys/unix only when you need something the portable API doesn't expose (a specific flag, an ioctl) — and guard it with build tags."
+  - q: "What are file descriptors 0, 1, and 2?"
+    options:
+      - text: "Standard input, standard output, and standard error — the three streams every process starts with"
+        correct: true
+      - text: "The first three files in the current directory"
+        correct: false
+      - text: "Error codes"
+        correct: false
+      - text: "CPU registers"
+        correct: false
+    explain: "A file descriptor is a small integer the kernel uses to identify an open file (or socket, pipe, device). By convention every process starts with 0 = stdin, 1 = stdout, 2 = stderr — which is why os.Stdin.Fd() is 0 and you write errors to fd 2."
+  - q: "Why is golang.org/x/sys preferred over the standard syscall package for new code?"
+    options:
+      - text: "The std syscall package is frozen; x/sys is maintained, more complete, and tracks new kernel features"
+        correct: true
+      - text: "x/sys is faster at runtime"
+        correct: false
+      - text: "syscall doesn't work at all anymore"
+        correct: false
+      - text: "x/sys removes the need for build tags"
+        correct: false
+    explain: "The standard library's syscall package is effectively frozen (kept for compatibility). golang.org/x/sys/unix (and /windows) is the actively-maintained home for low-level OS calls and constants, so new platform-specific code should use it."
+  - q: "How do you see exactly which system calls a program makes?"
+    options:
+      - text: "strace on Linux (or dtruss on macOS) traces the syscalls a process issues"
+        correct: true
+      - text: "go vet -syscalls"
+        correct: false
+      - text: "GODEBUG=syscalls=1"
+        correct: false
+      - text: "You can't observe syscalls"
+        correct: false
+    explain: "strace -f ./prog (Linux) or sudo dtruss ./prog (macOS) prints every syscall with its arguments and result — invaluable for seeing the mmap calls for goroutine stacks, futex for scheduling, epoll for I/O, and what your file/network code actually does."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎟️ Analogy">
+Your program lives in a guarded lobby (user space) and can't walk into the vault (the kernel, hardware, other processes' memory) on its own. To get anything done — read a file, send bytes, spawn a process — it slides a request through a single guarded window: a **system call**. The guard (the kernel) checks permissions, performs the privileged operation, and hands back a result. Every `os.Open`, every `conn.Write`, is ultimately a slip passed through that window.
+</Callout>
+
+## The user/kernel boundary
+
+Code you write runs in **user space**, which can't directly touch hardware, kernel memory, or another process. The OS exposes its services through **system calls** — controlled entry points that *trap* into **kernel space**, do the privileged work, and return. Opening a file (`open`), reading bytes (`read`), creating a process (`fork`/`exec`), mapping memory (`mmap`): all syscalls.
+
+<Mermaid code={String.raw`graph LR
+  APP["your Go code"] --> OS["os.ReadFile"]
+  OS --> SC["syscall: read(fd, buf, n)"]
+  SC -->|"trap"| K["kernel: do the I/O"]
+  K -->|"bytes + status"| SC
+  SC --> OS --> APP`} />
+
+You rarely issue syscalls by hand — `os`, `io`, and `net` wrap them portably. But knowing the layer exists explains *everything* underneath: what a file descriptor is, why I/O can block, and what `strace` shows you.
+
+## Making syscalls directly
+
+You don't *need* to call syscalls by hand, but doing it once makes the boundary concrete. The `syscall` package exposes thin portable wrappers — here we call `write(2)` straight to fd 1, trigger a real `errno`, ask the kernel for a `pipe(2)`, and read our PID. Every line below is a genuine trap into the kernel, and it runs right here:
+
+<Playground client:visible title="syscalls.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"syscall"
+)
+
+func main() {
+	// write(2): push bytes straight to fd 1 (stdout) — no fmt, no *os.File.
+	n, _ := syscall.Write(1, []byte("hello from write(2)\n"))
+	fmt.Printf("wrote %d bytes via the write syscall\n", n)
+
+	// Failures come back as an errno. Writing to a bogus fd fails with EBADF.
+	if _, err := syscall.Write(999, []byte("x")); err != nil {
+		fmt.Printf("write to bad fd -> errno %d: %v\n", err.(syscall.Errno), err)
+	}
+
+	// pipe(2): ask the kernel for a connected pair of fds.
+	var p [2]int
+	syscall.Pipe(p[:])
+	fmt.Printf("pipe(2) gave fds %d (read) and %d (write)\n", p[0], p[1])
+	syscall.Write(p[1], []byte("ping"))
+	buf := make([]byte, 4)
+	syscall.Read(p[0], buf)
+	fmt.Printf("round-tripped through the pipe: %q\n", buf)
+
+	// getpid(2): the simplest syscall — no arguments, can't fail.
+	fmt.Println("getpid():", syscall.Getpid())
+}`} />
+
+`strace` on that program would show `write`, `pipe2`, `read`, and `getpid` lines. The `os` package wraps exactly these calls, adding `EINTR` retries, partial-I/O handling, and a `*os.File` around the bare integer fd — which is why you normally use `os.WriteFile` instead of `syscall.Write`.
+
+## The error model: errno
+
+A syscall doesn't return a Go `error` — the kernel returns a small integer **errno** on failure. Go represents it as [`syscall.Errno`](https://pkg.go.dev/syscall#Errno), which implements `error`, so you compare against named constants with `errors.Is`:
+
+```go
+_, err := os.Open("/nope")
+if errors.Is(err, syscall.ENOENT) { // "no such file or directory"
+	// handle missing file
+}
+
+// EINTR ("interrupted system call") is the classic one to retry:
+for {
+	n, err := syscall.Read(fd, buf)
+	if err == syscall.EINTR {
+		continue // a signal interrupted the call; just retry
+	}
+	// ... handle n, err
+	break
+}
+```
+
+The portable `os`/`io` wrappers handle `EINTR` retries for you — another reason to prefer them. When you *do* hold a raw error, `errors.Is(err, syscall.E…)` is how you branch on it.
+
+## Syscall, RawSyscall, and the scheduler
+
+Under the wrappers sit two primitives: `syscall.Syscall(trap, a1, a2, a3)` and `syscall.RawSyscall`. The difference is pure systems Go, and it ties straight to [the scheduler](/internals/scheduler-internals/):
+
+- **`Syscall`** wraps the call in `runtime.entersyscall` / `exitsyscall`. Before a *potentially blocking* call it tells the runtime "I'm about to block in the kernel," so the scheduler can **detach this goroutine's P and hand it to another thread** — your other goroutines keep running. On return it re-acquires a P.
+- **`RawSyscall`** skips that bookkeeping. It's only safe for calls that *never* block (like `getpid`), because parking and re-acquiring a P needlessly would cost throughput.
+
+That handoff is exactly why "a blocking syscall doesn't stall everything" — the mechanism is implemented right here at the syscall boundary.
+
+```go
+//go:build linux
+
+// The raw form: trap number + up to three uintptr args.
+r1, _, errno := syscall.Syscall(syscall.SYS_WRITE, 1,
+	uintptr(unsafe.Pointer(&msg[0])), uintptr(len(msg)))
+if errno != 0 {
+	return errno // errno is a syscall.Errno
+}
+_ = r1 // bytes written
+```
+
+## File descriptors and the standard streams
+
+The kernel identifies every open file, socket, or pipe by a small integer: a **file descriptor (fd)**. Every process starts with three, by convention:
+
+| fd | Stream | Go handle |
+|---|---|---|
+| 0 | standard input | `os.Stdin` |
+| 1 | standard output | `os.Stdout` |
+| 2 | standard error | `os.Stderr` |
+
+That's why diagnostics go to fd 2 (so they don't pollute piped stdout), and why `os.Stdin.Fd()` returns `0`. This runs anywhere:
+
+<Playground client:visible title="fds.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	// The three standard streams are just open file descriptors.
+	fmt.Println("stdin  fd =", os.Stdin.Fd())  // 0
+	fmt.Println("stdout fd =", os.Stdout.Fd()) // 1
+	fmt.Println("stderr fd =", os.Stderr.Fd()) // 2
+
+	// Normal output goes to stdout (fd 1)...
+	fmt.Fprintln(os.Stdout, "this is normal output")
+	// ...diagnostics go to stderr (fd 2), so a pipe on stdout stays clean.
+	fmt.Fprintln(os.Stderr, "this is a diagnostic")
+}`} />
+
+Because they're ordinary `*os.File` values, you can redirect them, hand them to a child process, or build a [testable CLI](/stdlib/cli-with-flag/) by injecting your own writers instead of hard-coding `os.Stdout`.
+
+## Dropping to the syscall layer
+
+When the portable API doesn't expose what you need, you call the OS directly. The standard `syscall` package is **frozen**; the maintained home is `golang.org/x/sys/unix` (and `/windows`):
+
+```go
+//go:build linux
+
+package main
+
+import "golang.org/x/sys/unix"
+
+func main() {
+	// Open a file with explicit flags/mode, then write — the raw calls
+	// that os.OpenFile wraps for you.
+	fd, err := unix.Open("/tmp/out.txt", unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC, 0o644)
+	if err != nil {
+		panic(err)
+	}
+	defer unix.Close(fd)
+	unix.Write(fd, []byte("written via the raw syscall\n"))
+}
+```
+
+Note the **build tag** (`//go:build linux`): raw syscalls are platform-specific, so you isolate them in their own file and provide a portable fallback for other OSes.
+
+## Common syscalls and their Go wrappers
+
+Almost everything in this track is a syscall under a friendlier name:
+
+| Syscall | What it does | Portable Go |
+|---|---|---|
+| `open` / `openat` | open a file → fd | `os.Open`, `os.OpenFile` |
+| `read` / `write` | move bytes through an fd | `f.Read`/`f.Write`, `io.Copy` |
+| `close` | release an fd | `f.Close` |
+| `stat` / `lstat` | file metadata | `os.Stat`, `os.Lstat` |
+| `pipe` | connected fd pair | `os.Pipe` |
+| `fork` + `execve` | spawn a process | `exec.Command` (see [processes](/systems/processes-and-exec/)) |
+| `kill` | send a signal | `proc.Signal`, `syscall.Kill` |
+| `mmap` | map memory/file | `syscall.Mmap` (see [mmap](/systems/memory-mapping/)) |
+| `socket`/`bind`/`accept` | sockets | the `net` package |
+| `nanosleep` | sleep | `time.Sleep` |
+
+## Seeing the calls: strace / dtrace
+
+The best way to understand what your program asks of the kernel is to watch it:
+
+```bash
+# Linux — every syscall with args and result, following child processes.
+strace -f ./myprogram
+
+# Trace just file opens:
+strace -f -e trace=open,openat ./myprogram
+
+# macOS equivalent:
+sudo dtruss ./myprogram
+
+# You'll see the runtime's own calls too:
+#   mmap   — goroutine stacks and the heap
+#   futex  — the scheduler parking/waking threads
+#   epoll  — the netpoller waiting on sockets
+```
+
+<Callout type="go" title="🐹 Stay portable; reach down deliberately">
+The Go way is to live in the portable layer (`os`, `io`, `net`) and treat raw syscalls as a deliberate, isolated choice. When you do need them, prefer `golang.org/x/sys` over the frozen `syscall` package, put the code behind build tags, and wrap it in a small portable interface so the rest of your program doesn't care which OS it's on. Most "I need a syscall" moments turn out to have an `os`/`x/sys` helper already.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Syscalls are platform-specific and error-prone">
+Raw calls bypass Go's portability and some of its safety. **Constants and signatures differ by OS** (`O_*` flags, `ioctl` numbers), so syscall code must be build-tagged per platform or it won't compile elsewhere. **Always check the error and the returned count** — a `write` can succeed partially. And **descriptors leak**: every `Open` needs a matching `Close` (use `defer`), or you'll exhaust the process's fd limit. When in doubt, use the `os` wrapper, which handles retries (`EINTR`), partial I/O, and finalizers for you.
+</Callout>
+
+## See also
+
+- [why Go for systems](/systems/why-go-for-systems/) — the portable layer these calls sit beneath.
+- [files & directories](/systems/files-and-directories/) — the `os` wrappers over file syscalls.
+- [pipes](/systems/pipes/) — fds wired between processes.
+- [the scheduler (internals)](/internals/scheduler-internals/) — the `futex`/`epoll` calls `strace` reveals.
+
+Next: the first system resource you'll work with — [files & directories](/systems/files-and-directories/).

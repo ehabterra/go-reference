@@ -1,0 +1,177 @@
+---
+title: "Signals"
+category: processes
+kind: topic
+order: 6
+difficulty: "Intermediate"
+status: ready
+intent: "Reacting to OS signals in Go — os/signal.Notify, catching SIGINT/SIGTERM for graceful shutdown, signal.NotifyContext, and ignoring or resetting signals."
+related:
+  - processes-and-exec
+  - scheduling-and-watching
+  - context-cancellation
+quiz:
+  - q: "What is an OS signal?"
+    options:
+      - text: "An asynchronous notification the kernel delivers to a process — e.g. SIGINT from Ctrl-C, SIGTERM to ask it to stop, SIGKILL to force-kill"
+        correct: true
+      - text: "A network packet"
+        correct: false
+      - text: "A log message"
+        correct: false
+      - text: "A Go channel"
+        correct: false
+    explain: "Signals are the OS's way of poking a running process out-of-band: Ctrl-C sends SIGINT, `kill` sends SIGTERM, a segfault raises SIGSEGV. The process can catch most of them and decide how to react — except SIGKILL and SIGSTOP, which can't be caught."
+  - q: "How do you receive signals in Go?"
+    options:
+      - text: "signal.Notify(ch, sigs...) relays the named signals onto a channel you receive from"
+        correct: true
+      - text: "Register a callback with signal.Handle"
+        correct: false
+      - text: "Poll os.LastSignal()"
+        correct: false
+      - text: "Override the main function"
+        correct: false
+    explain: "Go turns async signals into channel sends: make a buffered chan os.Signal, call signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM), then `sig := <-ch`. This fits signals into the normal select/channel model instead of unsafe async handlers."
+  - q: "Which signals can a process NOT catch or ignore?"
+    options:
+      - text: "SIGKILL and SIGSTOP — the kernel always enforces them"
+        correct: true
+      - text: "SIGINT and SIGTERM"
+        correct: false
+      - text: "SIGHUP and SIGUSR1"
+        correct: false
+      - text: "None; all signals are catchable"
+        correct: false
+    explain: "SIGKILL (force terminate) and SIGSTOP (force suspend) are uncatchable and unignorable by design — they're the OS's last resort. That's why graceful shutdown listens for SIGTERM/SIGINT: SIGKILL gives you no chance to clean up."
+  - q: "What's the idiomatic modern way to tie shutdown to a context?"
+    options:
+      - text: "signal.NotifyContext(ctx, sigs...) returns a context that's cancelled when a signal arrives"
+        correct: true
+      - text: "Put the signal channel in a global variable"
+        correct: false
+      - text: "Call context.Cancel() from a signal handler"
+        correct: false
+      - text: "It's not possible"
+        correct: false
+    explain: "signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM) (Go 1.16+) gives a context that cancels on the first matching signal. You pass it to your server's Shutdown(ctx) and everything wired to ctx.Done() unwinds — the cleanest graceful-shutdown wiring."
+  - q: "Why must the signal channel be buffered (capacity ≥ 1)?"
+    options:
+      - text: "signal.Notify never blocks sending; if the channel is full/unbuffered with no ready receiver, the signal is dropped"
+        correct: true
+      - text: "Buffering makes it faster"
+        correct: false
+      - text: "Unbuffered channels can't carry os.Signal"
+        correct: false
+      - text: "It isn't required"
+        correct: false
+    explain: "The runtime delivers signals with a non-blocking send. If your channel has no buffer and you're not parked on a receive at that instant, the notification is lost. A buffer of 1 ensures a signal arriving before you reach `<-ch` is still captured."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔔 Analogy">
+A signal is the OS tapping your program on the shoulder. Some taps are polite requests — "please wrap up and exit" (SIGTERM), "the user pressed Ctrl-C" (SIGINT) — and you can choose how to respond: finish the in-flight request, flush logs, close connections, *then* leave. Two taps, though, aren't requests but commands the kernel enforces no matter what: SIGKILL ("you're gone, now") and SIGSTOP ("freeze"). Good systems software listens for the polite taps so it almost never has to be killed.
+</Callout>
+
+## Signals as channel receives
+
+A signal is an **asynchronous** notification from the kernel. Handling async events safely is hard in most languages (you're in a restricted handler context). Go's trick: **turn signals into channel sends** with `os/signal`, so you handle them in ordinary code.
+
+<Mermaid code={String.raw`graph LR
+  OS["OS: SIGTERM"] -->|"signal.Notify"| CH["chan os.Signal (buffered)"]
+  CH --> CODE["your code: &lt;-ch → clean up → exit"]`} />
+
+This runs here and delivers a **real** signal — the goroutine sends our own process `SIGTERM` via `syscall.Kill` (the `kill(2)` syscall), exactly as `kill <pid>` or an orchestrator would. (A `select` timeout guards against any sandbox that blocks self-signalling.)
+
+<Playground client:visible title="signals.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+func main() {
+	// Relay SIGINT/SIGTERM onto a buffered channel.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	// Deliver a REAL signal to ourselves — the same kill(2) syscall that
+	// Ctrl-C, 'kill <pid>', or Kubernetes uses.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+	}()
+
+	fmt.Println("server running; waiting for shutdown signal…")
+	select {
+	case sig := <-sigs: // block until the signal arrives
+		fmt.Printf("received %v — shutting down gracefully\n", sig)
+		// Real cleanup goes here: stop accepting work, drain, flush, close.
+		fmt.Println("drained connections, flushed logs — bye")
+	case <-time.After(2 * time.Second):
+		fmt.Println("(no signal delivered — sandbox restriction)")
+	}
+}`} />
+
+The handler logic — receive on the channel, then clean up — is identical whether the signal comes from `syscall.Kill`, a terminal Ctrl-C, or an orchestrator's `SIGTERM`.
+
+## Graceful shutdown, the modern way
+
+In real services you rarely manage the channel yourself — **`signal.NotifyContext`** gives you a context that cancels on the first signal, which you hand straight to your server's `Shutdown`:
+
+```go
+func main() {
+	// ctx is cancelled when SIGINT or SIGTERM arrives.
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	srv := &http.Server{Addr: ":8080", Handler: mux}
+	go srv.ListenAndServe()
+
+	<-ctx.Done() // wait for the signal
+	log.Println("shutting down…")
+
+	// Give in-flight requests up to 10s to finish, then force.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv.Shutdown(shutdownCtx) // stops accepting, drains existing conns
+}
+```
+
+That's the canonical pattern: catch the signal → stop accepting new work → drain in-flight work with a deadline → exit. It pairs directly with [context cancellation](/patterns/context-cancellation/).
+
+## Common signals
+
+| Signal | Meaning | Default | Catchable? |
+|---|---|---|---|
+| `SIGINT` | Ctrl-C from terminal | terminate | yes |
+| `SIGTERM` | polite "please stop" (`kill`, orchestrators) | terminate | yes |
+| `SIGHUP` | terminal closed / "reload config" by convention | terminate | yes |
+| `SIGUSR1`/`SIGUSR2` | user-defined | terminate | yes |
+| `SIGKILL` | force kill | terminate | **no** |
+| `SIGSTOP` | force suspend | stop | **no** |
+
+You can also **ignore** a signal (`signal.Ignore`) or **stop catching** one (`signal.Reset`/`signal.Stop`), e.g. to restore default Ctrl-C behavior after a critical section.
+
+<Callout type="go" title="🐹 SIGTERM is your shutdown contract with the platform">
+Kubernetes, systemd, Docker, and most process managers send **SIGTERM** first and only escalate to **SIGKILL** after a grace period (30s by default in k8s). So the single most valuable signal to handle is SIGTERM: catch it, stop accepting new requests, finish what's in flight, and exit *before* the grace period runs out. A service that ignores SIGTERM gets SIGKILLed mid-request — dropped connections, half-written files (which is why [atomic writes](/systems/temp-and-atomic-writes/) matter). Handle SIGTERM and you control your own shutdown.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Buffer the channel; you can't catch SIGKILL">
+Two musts. **Buffer the signal channel** (`make(chan os.Signal, 1)`) — `signal.Notify` sends non-blocking, so an unbuffered channel with no waiting receiver silently drops the signal. And **you cannot catch SIGKILL or SIGSTOP** — no amount of handling saves you from `kill -9`, so never rely on cleanup running on those; make your on-disk state crash-safe instead. Finally, signal *handlers* run concurrently with everything else, so the work you do on receiving one must be goroutine-safe.
+</Callout>
+
+## See also
+
+- [processes & exec](/systems/processes-and-exec/) — sending signals to child processes.
+- [scheduling & watching](/systems/scheduling-and-watching/) — the other "react to events" mechanism.
+- [context & cancellation (patterns)](/patterns/context-cancellation/) — what `NotifyContext` plugs into.
+- [graceful shutdown (web)](/web/) — applying this to an HTTP server.
+
+Next: programs that wake on a timer or a file change — [scheduling & watching](/systems/scheduling-and-watching/).
