@@ -1,0 +1,185 @@
+---
+title: "TLS & PKI"
+category: cryptography
+kind: topic
+order: 11
+difficulty: "Intermediate"
+status: ready
+intent: "How strangers establish trust on the internet — the TLS handshake, certificates and the chain of trust, certificate transparency, and mutual TLS — with runnable Go cert generation and verification."
+related:
+  - symmetric-encryption
+  - dns-enumeration
+  - authentication-and-authorization
+quiz:
+  - q: "What problem does a certificate (and the CA system) actually solve?"
+    options:
+      - text: "Authenticity — proving the public key you're talking to really belongs to example.com, so you're not handshaking with an impostor"
+        correct: true
+      - text: "It makes the connection faster"
+        correct: false
+      - text: "It compresses the traffic"
+        correct: false
+      - text: "It hides your IP address"
+        correct: false
+    explain: "Encryption alone protects you from eavesdroppers but not from talking to the wrong party. A certificate binds a public key to an identity (a domain), and a Certificate Authority you already trust signs that binding. So when you connect to example.com, you can verify its cert chains up to a trusted CA — defeating man-in-the-middle impersonation."
+  - q: "In a TLS handshake, how are symmetric and asymmetric crypto combined?"
+    options:
+      - text: "Asymmetric crypto authenticates the server and agrees on a shared secret; that secret derives a fast symmetric key used to encrypt the actual traffic"
+        correct: true
+      - text: "Everything is encrypted with the server's RSA key"
+        correct: false
+      - text: "Only symmetric crypto is used"
+        correct: false
+      - text: "The client sends its password to derive the key"
+        correct: false
+    explain: "Asymmetric crypto is slow, so TLS uses it only for the handshake: verify the server's certificate and run a key exchange (ECDHE) to agree on a shared secret. Both sides derive symmetric session keys from it, then switch to fast AES-GCM/ChaCha20 for the bulk data. Best of both worlds — authenticated key setup, fast encrypted transfer."
+  - q: "What is the 'chain of trust'?"
+    options:
+      - text: "A server cert is signed by an intermediate CA, signed by a root CA that's already in your trust store — verification walks the chain to a root you trust"
+        correct: true
+      - text: "A list of every website you've visited"
+        correct: false
+      - text: "The order in which packets arrive"
+        correct: false
+      - text: "A blockchain of certificates"
+        correct: false
+    explain: "Your OS/browser ships a set of trusted root CA certificates. A site's certificate is usually signed by an intermediate CA, which is signed by a root. To verify, the client builds and checks the chain up to a trusted root. If any link is missing, expired, or untrusted, verification fails. Go's crypto/x509 does this with Certificate.Verify against a CertPool."
+  - q: "What is mutual TLS (mTLS), and where is it used?"
+    options:
+      - text: "Both client AND server present certificates and verify each other — common for service-to-service auth in microservices and zero-trust networks"
+        correct: true
+      - text: "Using TLS on both HTTP and HTTPS ports"
+        correct: false
+      - text: "Encrypting the certificate itself"
+        correct: false
+      - text: "A TLS connection with two passwords"
+        correct: false
+    explain: "Normal TLS authenticates only the server (you verify the bank; the bank doesn't verify you cryptographically). mTLS adds client-certificate verification so both sides prove identity — ideal for service meshes and internal APIs where every caller should be a known, certificate-holding service. In Go you set tls.Config.ClientAuth = RequireAndVerifyClientCert."
+  - q: "Why is it dangerous to set InsecureSkipVerify: true on a TLS client?"
+    options:
+      - text: "It disables certificate verification entirely — accepting ANY cert, including an attacker's — which silently turns HTTPS into unauthenticated encryption open to man-in-the-middle"
+        correct: true
+      - text: "It makes the connection slower"
+        correct: false
+      - text: "It only affects logging"
+        correct: false
+      - text: "It is required for TLS 1.3"
+        correct: false
+    explain: "InsecureSkipVerify skips the chain-of-trust check, so the client accepts a self-signed or attacker-supplied certificate without complaint. You still get encryption, but no authenticity — a MITM can present their own cert and read everything. It's a notorious foot-gun used to 'fix' cert errors in dev that then ships to production. Use a proper CA or pin a known cert instead."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🪪 Analogy">
+Imagine meeting a stranger who claims to be your bank. Encryption is whispering so eavesdroppers can't hear — but you're still whispering to a stranger who might be an impostor. A <strong>certificate</strong> is their government-issued ID, and the <strong>Certificate Authority</strong> is the government whose signature you already trust. TLS checks the ID against a trusted issuer before sharing secrets. Encryption keeps the conversation private; the certificate makes sure it's the right person.
+</Callout>
+
+## What TLS actually does
+
+TLS solves two problems at once: **confidentiality** (encryption) and **authenticity** (you're really talking to `example.com`). The handshake is a small dance that combines asymmetric and symmetric crypto:
+
+<Mermaid code={String.raw`sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: ClientHello (ciphers, SNI=example.com)
+  S->>C: ServerHello + certificate (chain)
+  Note over C: verify cert chains to a trusted CA<br/>+ matches the hostname
+  C->>S: key exchange (ECDHE)
+  Note over C,S: both derive the same symmetric session key
+  C->>S: encrypted with AES-GCM
+  S->>C: encrypted with AES-GCM`} />
+
+Asymmetric crypto authenticates the server and agrees on a shared secret; that secret becomes a fast **symmetric** session key for the actual data. That's why every TLS connection has a handshake phase then a (much faster) data phase — exactly the symmetric/asymmetric split from the [previous page](/security/symmetric-encryption/).
+
+## The chain of trust
+
+Your OS ships a set of trusted **root CA** certificates. A website's certificate is signed by an **intermediate** CA, which is signed by a **root**. Verification walks that chain up to a root you already trust — if any link is missing, expired, revoked, or untrusted, it fails.
+
+## See it: generate and verify a certificate
+
+Go's `crypto/x509` builds and verifies certificates. This runs here — it generates a self-signed cert, parses it back, and verifies it against a pool containing itself. Output is fixed fields + booleans, so it's deterministic:
+
+<Playground client:visible title="cert.go" code={String.raw`package main
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"fmt"
+	"math/big"
+	"time"
+)
+
+func main() {
+	// A key pair for the certificate.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "example.com"},
+		DNSNames:     []string{"example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		IsCA:         true, // self-signed root for the demo
+		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+
+	// Self-sign: parent == template, signed with our own key.
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(der)
+
+	fmt.Println("subject:  ", cert.Subject.CommonName)
+	fmt.Println("is CA:    ", cert.IsCA)
+
+	// Verify the cert chains to a trusted root (itself, here).
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+	_, err := cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "example.com"})
+	fmt.Println("verifies: ", err == nil)
+
+	// A hostname that isn't on the cert must fail.
+	_, err = cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: "evil.com"})
+	fmt.Println("rejects wrong host:", err != nil)
+}`} />
+
+`Verify` does the real work browsers do: chain-building to a trusted root, expiry checks, and **hostname matching** (`evil.com` is rejected because it's not in the cert's `DNSNames`). In production you'd let a real CA — or **Let's Encrypt** via `golang.org/x/crypto/acme/autocert` — issue the cert, and the client's system root pool would do the verifying.
+
+## Serving and consuming TLS
+
+Running an HTTPS server is one line once you have a cert; **mutual TLS** adds client-cert verification for service-to-service auth (fenced — needs real certs and sockets):
+
+```go
+// Server requiring client certificates (mTLS).
+srv := &http.Server{
+	Addr: ":8443",
+	TLSConfig: &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  clientCAPool, // verify clients against these CAs
+		MinVersion: tls.VersionTLS12,
+	},
+}
+srv.ListenAndServeTLS("server.crt", "server.key")
+```
+
+mTLS is the backbone of zero-trust service meshes: every caller must present a valid certificate, so identity is cryptographic, not just a bearer token.
+
+<Callout type="go" title="🐹 Let the platform do TLS, and pin versions">
+Don't hand-roll certificate handling. For public services use <strong>Let's Encrypt</strong> via <code>autocert</code> (automatic issuance and renewal); for internal services use your org's CA or a service mesh that does mTLS for you. When you do configure <code>tls.Config</code>, set <code>MinVersion: tls.VersionTLS12</code> (or 1.3), rely on Go's sane default cipher suites, and use the system root pool for verification. Go's TLS stack is excellent and safe by default — the danger is in the knobs you turn off.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ InsecureSkipVerify is how HTTPS becomes a lie">
+Setting <code>InsecureSkipVerify: true</code> in a <code>tls.Config</code> disables certificate verification — the client accepts <em>any</em> cert, including a man-in-the-middle's. You still get encryption, but zero authenticity, so an attacker on the path can read and modify everything. It's the most common way teams "fix" a cert error in development and then ship the foot-gun to production. If you need to trust a custom CA, add it to a <code>RootCAs</code> pool; if you need to trust one specific cert, pin its fingerprint — never blanket-skip verification.
+</Callout>
+
+## See also
+
+- [Symmetric encryption](/security/symmetric-encryption/) — the session crypto TLS sets up.
+- [DNS enumeration](/security/dns-enumeration/) — why certificate transparency makes every TLS hostname public.
+- [TLS & HTTPS (web track)](/web/tls-and-https/) — serving HTTPS with net/http in depth.
+- [Web security](/web/web-security/) — TLS as one layer of a hardened server.
+
+Next: the mistakes that break otherwise-good crypto — [attacking weak crypto](/security/attacking-weak-crypto/).

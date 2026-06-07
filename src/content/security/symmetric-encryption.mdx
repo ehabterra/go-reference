@@ -1,0 +1,161 @@
+---
+title: "Symmetric Encryption"
+category: cryptography
+kind: topic
+order: 10
+difficulty: "Intermediate"
+status: ready
+intent: "Keeping data confidential with one shared key — why you reach for authenticated encryption (AES-GCM), the absolute rule of nonce uniqueness, and the broken modes (ECB) you must never use."
+related:
+  - hashing-and-passwords
+  - tls-and-pki
+  - attacking-weak-crypto
+quiz:
+  - q: "What does 'authenticated encryption' (AEAD) give you that plain encryption does not?"
+    options:
+      - text: "Both confidentiality AND integrity — it detects any tampering with the ciphertext and refuses to decrypt, instead of returning garbage"
+        correct: true
+      - text: "A longer key"
+        correct: false
+      - text: "Faster decryption"
+        correct: false
+      - text: "The ability to skip the nonce"
+        correct: false
+    explain: "AEAD (e.g. AES-GCM, ChaCha20-Poly1305) combines encryption with a built-in authentication tag. If an attacker flips a bit in the ciphertext, Open() returns an error instead of silently producing corrupted plaintext. Plain modes (CBC, CTR) provide only confidentiality — an attacker can tamper undetectably, which is why you should default to AEAD."
+  - q: "What is a nonce, and what is the one unbreakable rule about it?"
+    options:
+      - text: "A number used once — it must be UNIQUE for every encryption under the same key; reusing a nonce with GCM can catastrophically leak the key/plaintext"
+        correct: true
+      - text: "A secret you must keep hidden like the key"
+        correct: false
+      - text: "A value that must be the same every time for decryption to work"
+        correct: false
+      - text: "A salt for the password"
+        correct: false
+    explain: "A nonce ('number used once') ensures encrypting the same plaintext twice yields different ciphertext. It does NOT need to be secret (it's stored/sent alongside the ciphertext), but it MUST be unique per key. Reusing a GCM nonce breaks authentication and can expose the plaintext XOR and even the authentication key — a catastrophic failure."
+  - q: "Why must you never use AES in ECB mode?"
+    options:
+      - text: "ECB encrypts identical plaintext blocks to identical ciphertext blocks, so structure/patterns leak straight through (the famous 'ECB penguin')"
+        correct: true
+      - text: "ECB is too slow"
+        correct: false
+      - text: "ECB requires a 4096-bit key"
+        correct: false
+      - text: "ECB only works on text, not binary"
+        correct: false
+    explain: "ECB encrypts each block independently with no chaining, so equal input blocks produce equal output blocks. Encrypt a bitmap and the image is still visible in the ciphertext (the 'ECB penguin'). It leaks patterns and enables block-shuffling attacks. Go's stdlib deliberately makes ECB awkward to use; reach for AEAD instead."
+  - q: "Where should the AES key come from?"
+    options:
+      - text: "A cryptographically secure source — crypto/rand for random keys, or a proper KDF (argon2/HKDF) when deriving from a password/secret"
+        correct: true
+      - text: "math/rand seeded with the current time"
+        correct: false
+      - text: "A hardcoded constant in the source"
+        correct: false
+      - text: "The first 32 bytes of the plaintext"
+        correct: false
+    explain: "Keys must be unpredictable: use crypto/rand for random keys, or derive from a password with a slow KDF (argon2id) or from a high-entropy secret with HKDF. Never use math/rand (predictable), never hardcode keys in source (they end up in git and the binary), and never derive a key by simply hashing a low-entropy value."
+  - q: "Symmetric vs asymmetric encryption — when do you use which?"
+    options:
+      - text: "Symmetric (one shared key) is fast and used for bulk data; asymmetric (key pair) solves key exchange and signatures. Real systems use asymmetric to establish a symmetric key"
+        correct: true
+      - text: "Asymmetric is always better, so never use symmetric"
+        correct: false
+      - text: "They are the same thing"
+        correct: false
+      - text: "Symmetric can only encrypt text"
+        correct: false
+    explain: "Symmetric crypto (AES) is fast but needs both sides to share the secret key. Asymmetric crypto (RSA/ECDSA) uses a public/private key pair — great for exchanging a key or signing, but slow for bulk data. So TLS uses asymmetric crypto in the handshake to agree on a symmetric session key, then encrypts the actual traffic with fast AES-GCM."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔐 Analogy">
+Symmetric encryption is a lockbox with one key that both locks and unlocks. Whoever holds the key can read and write; everyone else sees only a sealed box. <strong>Authenticated</strong> encryption adds a tamper-evident seal: if anyone scratches at the box in transit, the recipient knows instantly and refuses to open it — rather than handing over a subtly altered message. Always use the box with the seal.
+</Callout>
+
+## Default to AEAD
+
+The first rule of modern symmetric crypto: use **authenticated encryption with associated data (AEAD)**. In Go that means **AES-GCM** (or ChaCha20-Poly1305). AEAD gives you two things at once:
+
+<Mermaid code={String.raw`graph LR
+  PT["plaintext"] --> ENC["AES-GCM<br/>(key + unique nonce)"]
+  ENC --> CT["ciphertext + auth tag"]
+  CT --> DEC["Open<br/>(key + same nonce)"]
+  DEC -->|tag valid| PT2["plaintext"]
+  DEC -->|tampered| ERR["error — refuse to decrypt"]`} />
+
+- **Confidentiality** — the plaintext is hidden.
+- **Integrity/authenticity** — a built-in tag detects *any* tampering; `Open` returns an error instead of corrupted output.
+
+Plain modes (CBC, CTR) give only confidentiality — an attacker can flip bits undetectably. Default to AEAD and you sidestep an entire class of attacks.
+
+## See it: AES-256-GCM round trip and tamper detection
+
+This runs here. It encrypts, decrypts back to the original, then flips one ciphertext byte to prove GCM **detects tampering** and refuses to decrypt. The output is booleans, so it's deterministic despite the random key and nonce:
+
+<Playground client:visible title="aesgcm.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"fmt"
+)
+
+func main() {
+	// 32-byte key = AES-256, from a cryptographically secure source.
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+
+	// A UNIQUE nonce per message. Not secret, but never reused under this key.
+	nonce := make([]byte, gcm.NonceSize())
+	rand.Read(nonce)
+
+	plaintext := []byte("attack at dawn")
+	// Seal prepends nothing; we carry the nonce alongside the ciphertext.
+	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
+
+	// Decrypt: same key + same nonce.
+	out, err := gcm.Open(nil, nonce, ciphertext, nil)
+	fmt.Println("round-trip ok:", err == nil && bytes.Equal(out, plaintext))
+
+	// Tamper: flip one bit of the ciphertext.
+	ciphertext[0] ^= 0x01
+	_, err = gcm.Open(nil, nonce, ciphertext, nil)
+	fmt.Println("tamper detected:", err != nil)
+}`} />
+
+That `tamper detected: true` is the whole value of AEAD — a bit-flip turns into a clean error, not silent corruption. The `nil` last argument is **associated data**: extra context (a header, a user ID) that's authenticated but not encrypted, binding the ciphertext to where it belongs.
+
+## The two rules that keep AES-GCM safe
+
+**1. The nonce must be unique per key — forever.** A nonce is "number used once." It need not be secret (store it with the ciphertext), but reusing one under the same key is catastrophic for GCM: it leaks the XOR of the two plaintexts and can expose the authentication key. Use `crypto/rand` for a random 12-byte nonce per message, or a counter you can *guarantee* never repeats.
+
+**2. The key must come from a secure source.** `crypto/rand` for random keys; a slow KDF (`argon2id`) when deriving from a password; HKDF when deriving from a high-entropy secret. Never `math/rand`, never a hardcoded constant.
+
+## Symmetric vs asymmetric
+
+Symmetric crypto (AES) is **fast** but needs both parties to already share the key — which is the hard part. **Asymmetric** crypto (RSA, ECDSA, X25519) uses a public/private key pair to solve key exchange and signatures, but it's slow for bulk data. Real systems combine them: [TLS](/security/tls-and-pki/) uses asymmetric crypto in the handshake to agree on a symmetric session key, then encrypts traffic with fast AES-GCM. You rarely implement this yourself — you use TLS — but knowing the split explains why every protocol has a "handshake" then a "data" phase.
+
+<Callout type="go" title="🐹 Don't design your own scheme — use the AEAD recipe">
+The dangerous part of crypto isn't the algorithm, it's <em>assembling</em> it. The safe recipe in Go is small and fixed: <code>aes.NewCipher</code> → <code>cipher.NewGCM</code> → random key from <code>crypto/rand</code>, random nonce per message, <code>Seal</code>/<code>Open</code>, and store nonce+ciphertext together. For anything higher-level (encrypting files, messages between services), prefer a vetted library like <a href="https://github.com/FiloSottile/age">age</a> or NaCl/secretbox (<code>golang.org/x/crypto/nacl/secretbox</code>) that bakes the recipe in. Rolling your own modes, padding, or MAC-then-encrypt is how subtle, fatal bugs get shipped.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Encryption is not integrity, and ECB is not encryption">
+Two deadly mistakes. First, a non-authenticated mode (CBC/CTR) hides data but lets an attacker <em>change</em> it undetectably — pair it with an HMAC, or just use AEAD. Second, <strong>ECB mode</strong> encrypts identical blocks to identical ciphertext, so patterns leak straight through (encrypt an image and you still see it — the infamous "ECB penguin"). Go's stdlib makes ECB deliberately awkward for a reason. If you ever see <code>NewECBEncrypter</code> in a codebase, treat it as a vulnerability.
+</Callout>
+
+## See also
+
+- [TLS & PKI](/security/tls-and-pki/) — how asymmetric crypto bootstraps a symmetric session.
+- [Hashing & passwords](/security/hashing-and-passwords/) — the one-way counterpart.
+- [Attacking weak crypto](/security/attacking-weak-crypto/) — nonce reuse, ECB, and hardcoded keys in the wild.
+- [Why Go for security](/security/why-go-for-security/) — the crypto/* standard library tour.
+
+Next: how the internet bootstraps trust between strangers — [TLS & PKI](/security/tls-and-pki/).
