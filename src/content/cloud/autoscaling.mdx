@@ -1,0 +1,153 @@
+---
+title: "Autoscaling"
+category: resilience
+kind: topic
+order: 17.5
+difficulty: "Advanced"
+status: ready
+intent: "Letting the platform size your service to demand — horizontal vs vertical scaling, the Kubernetes HPA control loop and its replica formula, scaling on the right signal, and scale-to-zero."
+related:
+  - rate-limiting-and-load
+  - deployment-strategies
+  - health-and-lifecycle
+quiz:
+  - q: "What's the difference between horizontal and vertical scaling?"
+    options:
+      - text: "Horizontal adds/removes instances (more replicas); vertical adds/removes resources per instance (bigger CPU/memory) — horizontal is preferred for stateless services"
+        correct: true
+      - text: "Horizontal is for databases, vertical is for web servers"
+        correct: false
+      - text: "They are the same thing"
+        correct: false
+      - text: "Horizontal means scaling down only"
+        correct: false
+    explain: "Horizontal scaling (scale out/in) changes the number of instances; vertical scaling (scale up/down) changes the size of each instance. For stateless services — like a typical Go HTTP server — horizontal is preferred: it has no single-machine ceiling, gives redundancy, and matches how load balancers spread traffic. Vertical scaling suits things that can't easily shard (some databases) but has a hard upper limit and usually needs a restart."
+  - q: "How does the Kubernetes Horizontal Pod Autoscaler (HPA) decide the replica count?"
+    options:
+      - text: "desiredReplicas = ceil( currentReplicas × currentMetricValue / targetMetricValue ) — a control loop that scales to bring the average metric back to the target"
+        correct: true
+      - text: "It doubles the replicas whenever CPU is over 50%"
+        correct: false
+      - text: "It adds one replica per minute regardless of load"
+        correct: false
+      - text: "It picks a random number within limits"
+        correct: false
+    explain: "The HPA periodically computes desiredReplicas = ceil(currentReplicas × currentMetric / targetMetric). If 4 pods average 80% CPU against a 50% target, it wants ceil(4 × 80/50) = ceil(6.4) = 7 pods. It's a proportional control loop aiming to keep the observed average at the target, clamped between configured min/max replicas, with stabilization windows to avoid flapping."
+  - q: "Why is scaling on a request-based metric (e.g. requests-per-second or queue depth) often better than scaling on CPU?"
+    options:
+      - text: "CPU can be a poor proxy for load — an I/O-bound service may be saturated with idle CPU; scaling on the metric that actually reflects demand reacts correctly"
+        correct: true
+      - text: "CPU metrics are always wrong"
+        correct: false
+      - text: "Request metrics are cheaper to collect"
+        correct: false
+      - text: "You can never scale on CPU"
+        correct: false
+    explain: "CPU utilization is a convenient default but a leaky proxy. An I/O-bound Go service (waiting on DB/HTTP calls) can be overwhelmed — queues growing, latency climbing — while CPU sits low, so a CPU-based HPA won't scale up. Scaling on the signal that reflects real demand (requests/sec, p99 latency, or message-queue backlog via custom/external metrics, e.g. KEDA) tracks load far better. Pick the metric that actually correlates with 'we need more capacity.'"
+  - q: "What is 'scale to zero' and what's its main trade-off?"
+    options:
+      - text: "Removing all instances when there's no traffic (saving cost), at the cost of a cold-start latency on the next request while an instance spins up"
+        correct: true
+      - text: "Permanently deleting the service"
+        correct: false
+      - text: "Running exactly zero replicas forever"
+        correct: false
+      - text: "Scaling that never reaches zero"
+        correct: false
+    explain: "Scale-to-zero (Knative, KEDA, many serverless platforms) drops a service to zero replicas when idle, so you pay nothing while it's not serving. The trade-off is the cold start: the first request after idling waits for an instance to be scheduled and started. Go shines here — a small static binary starts in milliseconds, making its cold starts far cheaper than runtimes that must boot a VM/interpreter. Keep a warm minimum if even that latency is unacceptable."
+  - q: "Why must autoscaling be paired with load shedding / rate limiting?"
+    options:
+      - text: "Scaling isn't instant — during a spike, before new instances are ready, the service must shed or limit excess load to avoid collapsing; scaling handles sustained load, shedding handles the gap"
+        correct: true
+      - text: "Because autoscaling replaces the need for any limits"
+        correct: false
+      - text: "Because rate limiting makes scaling faster"
+        correct: false
+      - text: "They are unrelated concerns"
+        correct: false
+    explain: "Autoscaling reacts on the order of seconds-to-minutes (detect, schedule, pull image, start, pass readiness). A sudden traffic spike can overwhelm current capacity in that window, so without protection the existing pods collapse before reinforcements arrive. Rate limiting and load shedding cover that gap — bounding concurrent work and rejecting excess gracefully — so the service degrades instead of dying while the autoscaler catches up. They're complementary: scaling for sustained demand, shedding for the transient overshoot."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🍽️ Analogy">
+A restaurant during a rush. <strong>Vertical scaling</strong> is giving your one chef a bigger stove — helps, but there's a ceiling and you have to close the kitchen to install it. <strong>Horizontal scaling</strong> is calling in more cooks — no single-person limit, and if one quits the others carry on. The manager watches the ticket rail (the <em>metric</em>) and adds cooks when tickets pile up, sends them home when it's quiet. But cooks take minutes to arrive — so during a sudden flood you also have to <em>stop seating people</em> (load shedding) until the extra hands show up.
+</Callout>
+
+## Horizontal vs vertical
+
+- **Horizontal** (scale out/in) — add/remove **instances**. Preferred for stateless services: no single-machine ceiling, built-in redundancy, matches load balancing.
+- **Vertical** (scale up/down) — give each instance **more CPU/memory**. For things that can't shard (some databases); hard upper limit, usually needs a restart.
+
+A typical Go HTTP service is stateless → **scale horizontally**.
+
+## The HPA control loop
+
+Kubernetes' **Horizontal Pod Autoscaler** runs a periodic control loop: read the metric, compute the desired replica count, clamp to `[min, max]`, and adjust.
+
+<Mermaid code={String.raw`graph LR
+  M["observe metric<br/>(avg CPU / RPS / queue depth)"] --> C["desired = ceil(current × metric / target)"]
+  C --> Cl["clamp to [min, max]"]
+  Cl --> S["scale Deployment"]
+  S --> M`} />
+
+## See it: the HPA replica formula
+
+The math is small and worth knowing — it's the same proportional rule the HPA applies. This runs here:
+
+<Playground client:visible title="hpa.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"math"
+)
+
+// desiredReplicas implements the core HPA formula, clamped to [min,max].
+func desiredReplicas(current int, metricNow, target float64, min, max int) int {
+	raw := math.Ceil(float64(current) * metricNow / target)
+	d := int(raw)
+	if d < min {
+		d = min
+	}
+	if d > max {
+		d = max
+	}
+	return d
+}
+
+func main() {
+	const target = 50.0 // target avg CPU %
+	min, max := 2, 10
+
+	// Load rising: 4 pods at 80% avg CPU -> needs more.
+	fmt.Println("80% load:", desiredReplicas(4, 80, target, min, max)) // ceil(4*80/50)=7
+
+	// At target: stable.
+	fmt.Println("50% load:", desiredReplicas(4, 50, target, min, max)) // 4
+
+	// Quiet: scales in, but not below min.
+	fmt.Println("10% load:", desiredReplicas(4, 10, target, min, max)) // max(min, ceil(0.8))=2
+
+	// Spike beyond capacity: clamped to max (then load-shed the rest).
+	fmt.Println("500% load:", desiredReplicas(4, 500, target, min, max)) // min(max,40)=10
+}`} />
+
+Note the last line: past `max`, the autoscaler can't help — that's where [rate limiting & load shedding](/cloud/rate-limiting-and-load/) takes over.
+
+<Callout type="go" title="🐹 Go is built for horizontal scale (and cheap cold starts)">
+Go services autoscale beautifully: they're <strong>stateless and small</strong>, a <a href="/cloud/dockerizing-go/">static binary in a tiny image</a> starts in milliseconds, and the runtime sizes its threads to the CPU. Two tips. First, set <code>GOMAXPROCS</code> to match the pod's CPU <em>limit</em> (use <code>go.uber.org/automaxprocs</code>) so a pod capped at 1 CPU doesn't spin up dozens of OS threads and thrash. Second, scale on the metric that reflects <em>your</em> bottleneck — RPS or queue depth via custom/external metrics (<a href="https://keda.sh/" target="_blank" rel="noopener">KEDA</a>), not just CPU, since an I/O-bound Go service can be saturated with idle CPU. The millisecond cold start also makes <strong>scale-to-zero</strong> genuinely practical.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Scaling is not instant — and not free of state">
+Autoscaling reacts over seconds-to-minutes (detect → schedule → pull image → start → pass readiness). A sharp spike will saturate current capacity <em>before</em> reinforcements arrive, so pair it with <a href="/cloud/rate-limiting-and-load/">load shedding</a> to survive the gap. Also watch for: a too-tight or missing <strong>stabilization window</strong> causing flapping (scale up/down repeatedly); scaling a <em>stateful</em> workload that can't simply add replicas (sticky sessions, leader election); and the autoscaler fighting your <a href="/cloud/deployment-strategies/">deploy</a> if both change replica counts at once. Set sane min/max, a cooldown, and scale on a metric that won't oscillate.
+</Callout>
+
+## See also
+
+- [Rate limiting & load shedding](/cloud/rate-limiting-and-load/) — surviving the spike before scaling catches up.
+- [Deployment strategies](/cloud/deployment-strategies/) — rollouts that interact with replica counts.
+- [Health probes & graceful lifecycle](/cloud/health-and-lifecycle/) — readiness gates new replicas; graceful stop drains removed ones.
+- [Kubernetes HPA docs](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/) & [KEDA](https://keda.sh/) — the autoscalers.
+
+Next: the infrastructure layer that handles service-to-service traffic, retries, and mTLS for you — [service mesh](/cloud/service-mesh/).

@@ -1,0 +1,189 @@
+---
+title: "CI/CD & GitOps"
+category: containers
+kind: topic
+order: 4.5
+difficulty: "Intermediate"
+status: ready
+intent: "Getting a Go service from commit to production safely and repeatably — the CI vs CD split, what a Go pipeline runs, and GitOps: Git as the single source of truth a controller reconciles toward."
+related:
+  - deployment-strategies
+  - dockerizing-go
+  - supply-chain-security
+quiz:
+  - q: "What's the difference between Continuous Integration (CI) and Continuous Delivery/Deployment (CD)?"
+    options:
+      - text: "CI automatically builds and tests every change as it merges; CD automatically takes a passing build through to a release artifact (delivery) or all the way to production (deployment)"
+        correct: true
+      - text: "CI is for code, CD is for databases"
+        correct: false
+      - text: "They are two names for the same pipeline"
+        correct: false
+      - text: "CI runs in production, CD runs locally"
+        correct: false
+    explain: "CI (Continuous Integration) is the discipline of merging frequently and automatically building + testing every change, so integration problems surface immediately. CD has two senses: Continuous Delivery keeps the build always releasable (produces a deployable artifact, with a manual gate to push to prod); Continuous Deployment goes further and ships every passing build to production automatically. CI answers 'does it work?'; CD answers 'get it released.'"
+  - q: "What does a typical CI pipeline for a Go service run?"
+    options:
+      - text: "go build, go test (with -race), go vet, a linter, govulncheck, then build and push a container image — all gating the merge/release"
+        correct: true
+      - text: "Only go build"
+        correct: false
+      - text: "Just a deploy to production"
+        correct: false
+      - text: "Manual testing by QA only"
+        correct: false
+    explain: "A solid Go CI pipeline compiles (go build), runs tests including the race detector (go test -race), checks go vet and a linter (golangci-lint), scans for known vulnerabilities (govulncheck), and on success builds a container image and pushes it to a registry — tagged with the commit. Each step is a gate: a failure stops the merge or release. Go's fast compile and built-in test/race tooling make these pipelines quick."
+  - q: "What is the core principle of GitOps?"
+    options:
+      - text: "A Git repository is the single source of truth for the desired state of the system, and an automated controller continuously reconciles the live cluster to match it"
+        correct: true
+      - text: "Developers SSH into servers to deploy manually"
+        correct: false
+      - text: "All code must be stored in Git (that's just version control)"
+        correct: false
+      - text: "CI pipelines push directly to production with kubectl"
+        correct: false
+    explain: "GitOps declares the desired state of your infrastructure/apps (Kubernetes manifests, Helm values) in Git, and an in-cluster controller (Argo CD, Flux) continuously compares live state to that desired state and reconciles any drift. Deploys become Git commits/PRs — auditable, reviewable, and revertable with git revert. The cluster pulls its config rather than a pipeline pushing to it, which is more secure (no external creds into the cluster) and self-healing."
+  - q: "Why is the reconciliation/pull model of GitOps more robust than a pipeline pushing kubectl apply?"
+    options:
+      - text: "The controller continuously detects and corrects drift (manual changes get reverted to the Git state), and the cluster needs no inbound deploy credentials — it pulls"
+        correct: true
+      - text: "Because pushing is always slower"
+        correct: false
+      - text: "Because Git is faster than kubectl"
+        correct: false
+      - text: "Because it removes the need for tests"
+        correct: false
+    explain: "A push pipeline applies once and forgets; if someone hand-edits the cluster (drift), nothing notices. A GitOps controller runs a continuous reconcile loop: it keeps comparing actual to desired and re-applies until they match, so out-of-band changes are automatically reverted — the cluster self-heals toward Git. It's also more secure: credentials live inside the cluster pulling from Git, instead of a CI system holding cluster admin creds and pushing in."
+  - q: "Why pin/stamp the deployed image by immutable digest (or commit SHA), and keep the deploy manifest in Git?"
+    options:
+      - text: "So every environment runs the exact, traceable artifact that was tested, and a rollback is just reverting the Git commit that changed the digest"
+        correct: true
+      - text: "To make images larger"
+        correct: false
+      - text: "Because Kubernetes rejects tags"
+        correct: false
+      - text: "To avoid running tests"
+        correct: false
+    explain: "Referencing the image by digest (or a unique commit-SHA tag) in a Git-tracked manifest gives you full traceability — you know exactly which bytes are running — and makes rollback trivial and safe: git revert the commit that bumped the digest and the controller reconciles back to the previous known-good image. Mutable tags like :latest break both properties (you can't tell what's running, and rollback is ambiguous)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔁 Analogy">
+Old-school deploys are like steering a car by yanking the wheel and hoping — push a change, walk away. GitOps is cruise control with lane-keeping: you set the <em>desired</em> state ("stay at 70 in this lane"), and a controller continuously corrects toward it — if the car drifts, it nudges back automatically. Your job becomes <em>declaring intent in Git</em>, not hand-driving servers; the system keeps reality matching the declaration.
+</Callout>
+
+## CI vs CD
+
+Two linked disciplines that get a commit safely to production:
+
+- **CI (Continuous Integration)** — merge often; every change is automatically **built and tested** so integration breakage surfaces immediately. Answers *"does it work?"*
+- **CD** — **Continuous Delivery** keeps the build always releasable (produces a deployable artifact, manual gate to prod); **Continuous Deployment** ships every passing build to prod automatically. Answers *"get it released."*
+
+<Mermaid code={String.raw`graph LR
+  Dev["git push"] --> CI
+  subgraph CI["CI pipeline"]
+    B["go build"] --> T["go test -race"] --> V["vet · lint · govulncheck"] --> I["build & push image@digest"]
+  end
+  I --> G["commit new digest to config repo (Git)"]
+  G --> R["GitOps controller reconciles"]
+  R --> K["cluster runs exact artifact"]`} />
+
+## A Go CI pipeline
+
+The steps are fast because Go's toolchain is (sandbox-fenced example):
+
+```yaml
+# .github/workflows/ci.yml (excerpt)
+steps:
+  - uses: actions/checkout@v4
+  - uses: actions/setup-go@v5
+    with: { go-version: '1.22' }
+  - run: go build ./...
+  - run: go test -race -cover ./...        # tests + race detector
+  - run: go vet ./...
+  - run: golangci-lint run                 # linters
+  - run: govulncheck ./...                 # known-CVE scan
+  - run: docker build -t app:$GITHUB_SHA .   # image tagged by commit
+```
+
+Each step **gates** the merge: a failure stops the line. (See [supply-chain security](/security/supply-chain-security/) for why `govulncheck` belongs here.)
+
+## GitOps: Git as the source of truth
+
+In **GitOps**, the *desired state* of the cluster lives in a Git repo (Kubernetes manifests, Helm values). An in-cluster controller — **Argo CD** or **Flux** — continuously compares live state to Git and **reconciles** any difference. Deploys become commits/PRs: auditable, reviewable, and revertable with `git revert`.
+
+## See it: the reconcile loop at the heart of GitOps
+
+The whole idea is a control loop that drives *actual* toward *desired*, correcting drift each tick. This runs here:
+
+<Playground client:visible title="reconcile.go" code={String.raw`package main
+
+import "fmt"
+
+// desired state declared in Git
+type Desired struct {
+	Image    string
+	Replicas int
+}
+
+// actual state observed in the cluster
+type Actual struct {
+	Image    string
+	Replicas int
+}
+
+// reconcile nudges actual toward desired and reports what it changed.
+func reconcile(d Desired, a *Actual) []string {
+	var actions []string
+	if a.Image != d.Image {
+		actions = append(actions, fmt.Sprintf("set image %s -> %s", a.Image, d.Image))
+		a.Image = d.Image
+	}
+	for a.Replicas < d.Replicas {
+		a.Replicas++
+		actions = append(actions, fmt.Sprintf("scale up -> %d", a.Replicas))
+	}
+	for a.Replicas > d.Replicas {
+		a.Replicas--
+		actions = append(actions, fmt.Sprintf("scale down -> %d", a.Replicas))
+	}
+	return actions
+}
+
+func main() {
+	desired := Desired{Image: "app@sha256:abc", Replicas: 3}
+	actual := Actual{Image: "app@sha256:old", Replicas: 1}
+
+	// Tick 1: Git changed; controller converges the cluster.
+	for _, a := range reconcile(desired, &actual) {
+		fmt.Println("apply:", a)
+	}
+	// Tick 2: nothing changed in Git -> nothing to do (idempotent).
+	fmt.Println("second reconcile actions:", len(reconcile(desired, &actual)))
+
+	// Drift! Someone hand-edited the cluster. Next tick reverts it.
+	actual.Replicas = 5
+	fmt.Println("drift detected, correcting:", reconcile(desired, &actual))
+}`} />
+
+The loop is **idempotent** (a no-op when already converged) and **self-healing** (drift gets reverted). That's exactly what Argo CD/Flux do against a real cluster.
+
+<Callout type="go" title="🐹 Go services are a natural fit for this pipeline">
+Go makes CI/CD pleasant: <code>go build</code>/<code>go test -race</code> are fast and built-in (no external test runner), the output is a single static binary, and <a href="/cloud/dockerizing-go/">a tiny container</a> drops straight into a registry. Stamp the build with version info via <code>-ldflags "-X main.version=$GIT_SHA"</code> so the running service can report exactly which commit it is. Then reference that image <strong>by digest</strong> in your Git-tracked manifest — full traceability, and rollback is a one-line <code>git revert</code> that the GitOps controller reconciles back to the previous known-good image. The same reconcile loop you saw above is also how Kubernetes itself works.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Mutable tags and push-from-CI undercut the model">
+Two anti-patterns erase GitOps' benefits. Deploying <code>:latest</code> (or any mutable tag) means you can't tell what's actually running and rollback is ambiguous — always pin by <strong>digest</strong> or unique commit tag. And having CI <em>push</em> with <code>kubectl apply</code> using cluster-admin credentials is both less secure (an external system holds the keys) and not self-healing (it applies once and forgets drift). Prefer the <em>pull</em> model: CI's job ends at "build image + commit the new digest to the config repo," and the in-cluster controller takes it from there.
+</Callout>
+
+## See also
+
+- [Deployment strategies](/cloud/deployment-strategies/) — rolling, blue-green, canary releases this delivers.
+- [Dockerizing Go](/cloud/dockerizing-go/) — building the image the pipeline ships.
+- [Supply-chain security](/security/supply-chain-security/) — why govulncheck & signing belong in CI.
+- [Argo CD](https://argo-cd.readthedocs.io/) & [Flux](https://fluxcd.io/) — the GitOps controllers.
+
+Next: how that image actually rolls out without dropping traffic — [deployment strategies](/cloud/deployment-strategies/).
