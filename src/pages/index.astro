@@ -21,9 +21,11 @@ const funCount = fundamentals.filter((p) => p.data.kind === 'topic').length;
 const stdlibCount = stdlib.filter((p) => p.data.kind === 'topic').length;
 const webCount = web.filter((p) => p.data.kind === 'topic').length;
 const internalsCount = internals.filter((p) => p.data.kind === 'topic').length;
-const systemsCount = systems.filter((p) => p.data.kind === 'topic').length;
-const securityCount = security.filter((p) => p.data.kind === 'topic').length;
-const cloudCount = cloud.filter((p) => p.data.kind === 'topic').length;
+// these tracks open with a kind:"guide" intro page (a real page in the track),
+// so count guide + topic — not just topic — to reflect the true page count.
+const systemsCount = systems.filter((p) => p.data.kind !== 'pattern').length;
+const securityCount = security.filter((p) => p.data.kind !== 'pattern').length;
+const cloudCount = cloud.filter((p) => p.data.kind !== 'pattern').length;
 
 // unified progress across every page in the reference
 const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web, ...internals, ...systems, ...security, ...cloud].map((p) => p.id).join(',');

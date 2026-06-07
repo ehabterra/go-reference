@@ -5,7 +5,7 @@ import CategorySection from '../../components/CategorySection.astro';
 import { CLOUD_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('cloud');
-const slugs = topics.filter((t) => t.data.kind === 'topic').map((t) => t.id).join(',');
+const slugs = topics.filter((t) => t.data.kind !== 'pattern').map((t) => t.id).join(',');
 ---
 <BaseLayout title="Cloud-Native Go" description="A Go-first guide to running services in production — containers and Kubernetes, health probes and graceful shutdown, 12-factor config, structured logging, Prometheus metrics and OpenTelemetry tracing, message queues and event-driven architecture, the outbox pattern, Redis caching, gRPC, and resilience patterns (timeouts, retries, circuit breakers, sagas), with diagrams and runnable code.">
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Cloud-Native</span></nav>
