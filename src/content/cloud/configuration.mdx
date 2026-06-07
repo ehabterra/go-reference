@@ -1,0 +1,173 @@
+---
+title: "Configuration"
+category: containers
+kind: topic
+order: 5
+difficulty: "Beginner"
+status: ready
+intent: "Feeding a service its config the 12-factor way — environment variables and flags, precedence and defaults, fail-fast validation, and how ConfigMaps and Secrets map onto it in Kubernetes."
+related:
+  - why-cloud-native
+  - kubernetes-basics
+  - secrets-management
+quiz:
+  - q: "What is the 12-factor rule for configuration?"
+    options:
+      - text: "Store config in the environment, strictly separated from code, so one built artifact runs in every environment unchanged"
+        correct: true
+      - text: "Keep a separate compiled build per environment"
+        correct: false
+      - text: "Put all config in a committed YAML file"
+        correct: false
+      - text: "Hardcode config and override with comments"
+        correct: false
+    explain: "Config is everything that varies between deploys (ports, URLs, credentials, flags). 12-factor says it lives in the environment, never in code, so the same image is promoted dev→staging→prod with different env vars. No per-environment builds, no committed secrets, no 'if env == prod' branches in the code."
+  - q: "What's a sensible precedence order for config sources?"
+    options:
+      - text: "Explicit flags override environment variables, which override built-in defaults (most specific wins)"
+        correct: true
+      - text: "Defaults always win over everything"
+        correct: false
+      - text: "Whichever source is read last silently wins, randomly"
+        correct: false
+      - text: "Only flags are allowed; env vars are forbidden"
+        correct: false
+    explain: "A common, predictable order is defaults < config file < environment < command-line flags — the more explicit/operator-controlled the source, the higher its priority. The key is that the order is documented and deterministic, so operators know that setting a flag (or env var) reliably overrides the default."
+  - q: "Why should a service validate its config at startup and fail fast?"
+    options:
+      - text: "A missing/invalid required value should crash the process immediately with a clear message — not surface as a confusing error on the first request hours later"
+        correct: true
+      - text: "Validation makes the app start faster"
+        correct: false
+      - text: "Config never needs validation"
+        correct: false
+      - text: "To avoid using environment variables"
+        correct: false
+    explain: "Fail-fast config validation turns 'DB_URL was empty' into an immediate, obvious crash at boot (which a readiness probe catches and Kubernetes reports), instead of a nil-deref or auth failure on the first user request. Parse, validate types/ranges, and require mandatory values up front; a Pod that can't be configured correctly should never report ready."
+  - q: "How do ConfigMaps and Secrets relate to a 12-factor Go app?"
+    options:
+      - text: "They're the Kubernetes mechanism for injecting env vars / mounted files into Pods — the app still just reads os.Getenv or files, unaware of the source"
+        correct: true
+      - text: "The app must call the Kubernetes API to read them"
+        correct: false
+      - text: "They replace the need for any config code"
+        correct: false
+      - text: "Secrets are encrypted end-to-end by default"
+        correct: false
+    explain: "ConfigMaps (non-secret) and Secrets (sensitive) are how operators supply config in Kubernetes; the Pod spec maps their keys to env vars or mounted files. The Go code stays portable — it reads os.Getenv/files exactly as it would locally with a .env. (Note: Kubernetes Secrets are only base64-encoded at rest by default — enable encryption-at-rest / use a real secrets manager for strong protection.)"
+  - q: "Why avoid committing a .env file with real values to the repo?"
+    options:
+      - text: "It leaks secrets into git history and couples the artifact to one environment — config (especially secrets) must come from the environment at runtime"
+        correct: true
+      - text: "It makes the repo larger"
+        correct: false
+      - text: ".env files can't be read by Go"
+        correct: false
+      - text: "It is required to commit them"
+        correct: false
+    explain: "A committed .env with real credentials is a secret leak (git history is forever) and ties the build to one environment. Commit a .env.example with placeholder keys for documentation, gitignore the real .env, and supply real values via the environment / ConfigMaps / Secrets / a secrets manager. See secrets management."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎚️ Analogy">
+A well-designed appliance has its settings on the outside — dials and switches anyone can adjust — not soldered into the circuit board. Config should be the same: the dials live in the environment, and the same appliance (your image) behaves differently depending on how they're set, without opening it up and rewiring. Soldering a setting into the code means a new board for every kitchen; reading it from the environment means one board, many kitchens.
+</Callout>
+
+## Config comes from the environment
+
+The 12-factor rule: **config lives in the environment, separated from code.** The same image runs everywhere; env vars supply the differences. A typical precedence, most-specific wins:
+
+<Mermaid code={String.raw`graph LR
+  D["built-in defaults"] --> F["config file"]
+  F --> E["environment variables"]
+  E --> FL["command-line flags"]
+  FL --> CFG["resolved config<br/>(validated at startup)"]
+  style CFG fill:#0ea5e9,color:#fff`} />
+
+## See it: a config loader with defaults, env, and validation
+
+A small, dependency-free loader: defaults, env overrides, type parsing, and **fail-fast validation**. This runs here (env vars simulate the platform):
+
+<Playground client:visible title="config.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
+
+type Config struct {
+	Port     int
+	LogLevel string
+	DBURL    string // required, no default
+}
+
+func getenv(k, def string) string {
+	if v, ok := os.LookupEnv(k); ok {
+		return v
+	}
+	return def
+}
+
+func Load() (Config, error) {
+	port, err := strconv.Atoi(getenv("PORT", "8080"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORT must be an integer: %w", err)
+	}
+	cfg := Config{
+		Port:     port,
+		LogLevel: getenv("LOG_LEVEL", "info"),
+		DBURL:    os.Getenv("DB_URL"), // no default — must be supplied
+	}
+	// Fail fast: a misconfigured app should crash now, not on request #1.
+	if cfg.DBURL == "" {
+		return Config{}, fmt.Errorf("DB_URL is required")
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return Config{}, fmt.Errorf("PORT out of range: %d", cfg.Port)
+	}
+	return cfg, nil
+}
+
+func main() {
+	os.Setenv("PORT", "9000")
+	os.Setenv("DB_URL", "postgres://db:5432/app")
+
+	cfg, err := Load()
+	if err != nil {
+		fmt.Println("config error:", err)
+		return
+	}
+	fmt.Printf("loaded: %+v\n", cfg)
+
+	// Show fail-fast: clear the required value and reload.
+	os.Unsetenv("DB_URL")
+	if _, err := Load(); err != nil {
+		fmt.Println("missing required:", err)
+	}
+}`} />
+
+The loader parses types, applies defaults for optional values, and **requires** `DB_URL` — crashing at boot with a clear message rather than failing mysteriously on the first request. For larger apps, libraries like `kelseyhightower/envconfig` or Viper map a struct to env vars, but the stdlib gets you far.
+
+## How this maps to Kubernetes
+
+In Kubernetes, operators supply these values via **ConfigMaps** (non-secret) and **Secrets** (sensitive), which the Pod spec injects as env vars or mounted files — the [Deployment manifest](/cloud/kubernetes-basics/) showed both. Your Go code doesn't change: it still reads `os.Getenv` / files, unaware whether the value came from a local `.env`, a ConfigMap, or a [secrets manager](/security/secrets-management/).
+
+<Callout type="go" title="🐹 Validate once, pass a struct around">
+Load and validate config <strong>once at startup</strong> into a typed <code>Config</code> struct, then pass that struct (or the values it holds) explicitly to the components that need them. Don't sprinkle <code>os.Getenv</code> calls throughout the codebase — that hides dependencies, makes testing painful, and defers config errors to runtime. One <code>Load()</code> at <code>main</code>, fail fast on anything missing or malformed, and the rest of the program works with validated, typed values it can trust. Wrap secret fields in a redacting type (see <a href="/security/secrets-management/">secrets management</a>) so a logged config can't leak them.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Kubernetes Secrets are base64, not encryption">
+A common, dangerous assumption: that a Kubernetes <code>Secret</code> protects your credentials. By default it's only <strong>base64-encoded</strong> at rest in etcd — trivially decoded by anyone with cluster/etcd access. For real protection, enable <em>encryption at rest</em> for Secrets, restrict access with RBAC, and for high-value secrets use an external manager (Vault, cloud KMS, External Secrets Operator) that injects short-lived credentials. Treat a plain Secret as "kept out of the image," not "encrypted." See <a href="/security/secrets-management/">secrets management</a>.
+</Callout>
+
+## See also
+
+- [Why cloud-native Go](/cloud/why-cloud-native/) — the 12-factor principles.
+- [Kubernetes basics](/cloud/kubernetes-basics/) — ConfigMaps and Secrets in the Pod spec.
+- [Secrets management](/security/secrets-management/) — protecting the sensitive half of config.
+- [CLI with flag (stdlib)](/stdlib/cli-with-flag/) — the flag layer of precedence.
+
+Next: making the running service observable, starting with logs — [structured logging in production](/cloud/structured-logging-in-prod/).

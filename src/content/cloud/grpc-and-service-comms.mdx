@@ -1,0 +1,184 @@
+---
+title: "gRPC & Service Communication"
+category: resilience
+kind: topic
+order: 15
+difficulty: "Intermediate"
+status: ready
+intent: "How Go services talk — gRPC vs REST, protobuf contracts and code generation, the four call types, and choosing synchronous calls vs asynchronous messaging."
+related:
+  - microservices-basics
+  - distributed-tracing
+  - resilience-patterns
+quiz:
+  - q: "What does gRPC use for its contract and wire format?"
+    options:
+      - text: "Protocol Buffers (protobuf) — a typed schema (.proto) that generates client/server code, serialized as compact binary over HTTP/2"
+        correct: true
+      - text: "JSON over HTTP/1.1, like REST"
+        correct: false
+      - text: "Plain text over TCP"
+        correct: false
+      - text: "XML over SOAP"
+        correct: false
+    explain: "gRPC defines services and messages in a .proto file; protoc generates strongly-typed Go client and server stubs. Messages are serialized as compact binary protobuf and sent over HTTP/2 (enabling multiplexing and streaming). The .proto is the single source of truth for the contract — both sides generate from it, so they can't drift apart on field types."
+  - q: "When is gRPC a better fit than a JSON/REST API?"
+    options:
+      - text: "Internal service-to-service calls where you want strong typing, code generation, low latency, and streaming — REST/JSON is better for public, browser-facing, human-debuggable APIs"
+        correct: true
+      - text: "gRPC is always better than REST everywhere"
+        correct: false
+      - text: "Only for database access"
+        correct: false
+      - text: "REST is faster than gRPC in every case"
+        correct: false
+    explain: "gRPC shines inside a system: typed contracts, generated clients, compact binary, HTTP/2 multiplexing, and built-in streaming make it great for high-volume internal calls. REST/JSON wins for public APIs (browser support without grpc-web, human-readable, curl-able, universally supported, easy versioning). Many systems use gRPC internally and expose REST at the edge."
+  - q: "What are the four gRPC call types?"
+    options:
+      - text: "Unary (one request → one response), server-streaming, client-streaming, and bidirectional streaming"
+        correct: true
+      - text: "GET, POST, PUT, DELETE"
+        correct: false
+      - text: "Sync, async, batch, and lazy"
+        correct: false
+      - text: "Only request/response"
+        correct: false
+    explain: "gRPC over HTTP/2 supports: unary (the familiar one-to-one RPC), server-streaming (one request, a stream of responses — e.g. a feed), client-streaming (a stream of requests, one response — e.g. an upload), and bidirectional streaming (both stream independently — e.g. a chat). Go maps these to method signatures with stream parameters. REST realistically only does the unary shape."
+  - q: "What's the key trade-off between synchronous (gRPC/REST) and asynchronous (queue) communication?"
+    options:
+      - text: "Sync gives an immediate response but couples caller to callee's availability and latency; async (events/queues) decouples and absorbs load but is eventually consistent"
+        correct: true
+      - text: "Async is always better"
+        correct: false
+      - text: "They are interchangeable with no trade-offs"
+        correct: false
+      - text: "Sync can't return errors"
+        correct: false
+    explain: "A synchronous call (gRPC/REST) is simple and gives an answer now, but the caller fails if the callee is down or slow (and must handle timeouts/retries). Asynchronous messaging decouples them — the producer doesn't wait, bursts are buffered, either can be down — at the cost of added latency and eventual consistency. Use sync for 'I need the answer to continue', async for 'react to this when you can'."
+  - q: "Why must every synchronous remote call carry a context with a timeout/deadline?"
+    options:
+      - text: "Without one, a slow or hung callee blocks the caller indefinitely and can cascade failures upstream; the deadline bounds the wait and propagates cancellation"
+        correct: true
+      - text: "It makes the call encrypted"
+        correct: false
+      - text: "Timeouts are only needed for databases"
+        correct: false
+      - text: "gRPC has no concept of deadlines"
+        correct: false
+    explain: "A remote call inherits the network fallacies — it can hang forever. Passing a context.Context with a deadline (gRPC propagates it to the server automatically) bounds the wait, frees the caller's goroutine, and signals the server to stop wasted work. Without deadlines, one slow dependency causes pile-ups that cascade into upstream outages — the failure mode resilience patterns address."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📞 Analogy">
+REST/JSON is writing a letter in plain language: anyone can read it, it works everywhere, but it's verbose and you parse it by hand. gRPC is a phone call on a private line with a shared, precise vocabulary you both agreed on in advance (the .proto): fast, compact, impossible to misunderstand a field's type — but not something a stranger with a browser can just pick up. Inside your own organization, the private line is great; at the public front door, the universally-readable letter wins.
+</Callout>
+
+## gRPC vs REST
+
+Both are ways for services to call each other; they suit different places:
+
+| | gRPC | REST / JSON |
+|---|---|---|
+| Contract | `.proto` → generated typed stubs | OpenAPI (optional), hand-written |
+| Wire format | compact binary (protobuf) over HTTP/2 | text JSON over HTTP/1.1+ |
+| Streaming | yes (4 call types) | no (request/response) |
+| Best for | internal service-to-service | public, browser-facing, human-debuggable |
+
+The common pattern: **gRPC internally**, **REST at the edge**.
+
+## The contract is the .proto
+
+A gRPC service starts from a schema that generates both sides — they can't drift apart on types (fenced — needs protoc and the gRPC runtime):
+
+```protobuf
+service Orders {
+  rpc GetOrder(GetOrderRequest) returns (Order);            // unary
+  rpc WatchOrders(WatchRequest) returns (stream Order);     // server-streaming
+}
+message GetOrderRequest { string id = 1; }
+message Order { string id = 1; string status = 2; int64 total_cents = 3; }
+```
+
+```go
+// Generated client; ctx carries the deadline gRPC propagates to the server.
+ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+defer cancel()
+order, err := client.GetOrder(ctx, &pb.GetOrderRequest{Id: "42"})
+```
+
+gRPC supports four call types over HTTP/2: **unary**, **server-streaming**, **client-streaming**, and **bidirectional streaming**. See [gRPC in the web track](/web/grpc/) for the full setup.
+
+## See it: a typed contract with validation
+
+The essence — a typed request/response with validation — is plain Go. This runs here, modeling the contract boundary every service call crosses:
+
+<Playground client:visible title="contract.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// The "contract": typed request, typed response, explicit errors.
+type GetOrderRequest struct{ ID string }
+type Order struct {
+	ID         string
+	Status     string
+	TotalCents int64
+}
+
+var ErrNotFound = errors.New("order not found")
+
+func GetOrder(req GetOrderRequest) (*Order, error) {
+	if req.ID == "" {
+		return nil, errors.New("id is required") // validate at the boundary
+	}
+	db := map[string]*Order{"42": {ID: "42", Status: "shipped", TotalCents: 1999}}
+	o, ok := db[req.ID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return o, nil
+}
+
+func main() {
+	for _, id := range []string{"42", "99", ""} {
+		o, err := GetOrder(GetOrderRequest{ID: id})
+		switch {
+		case errors.Is(err, ErrNotFound):
+			fmt.Printf("id=%q -> not found\n", id)
+		case err != nil:
+			fmt.Printf("id=%q -> invalid: %v\n", id, err)
+		default:
+			fmt.Printf("id=%q -> %+v\n", id, *o)
+		}
+	}
+}`} />
+
+Typed request, typed response, validated input, explicit errors — gRPC and REST both just put this contract on the wire. The discipline (validate at the boundary, return typed errors) is the same whichever transport you choose.
+
+## Synchronous or asynchronous?
+
+The deeper choice isn't gRPC-vs-REST, it's **sync vs async**:
+
+- **Synchronous** (gRPC/REST) — you get an answer *now*, but you're coupled to the callee's availability and latency, and must handle timeouts/retries. Use when you need the result to continue.
+- **Asynchronous** ([messaging](/cloud/message-queues/)) — fire an event and move on; decoupled and load-absorbing, but eventually consistent. Use when others should *react* to something.
+
+<Callout type="go" title="🐹 Every remote call needs a deadline and an error path">
+The moment a function call becomes a network call, it can hang, fail, or return slowly — so wrap each one in a <a href="/concurrency/context/">context with a timeout</a> (gRPC propagates the deadline to the server and cancels its work), and handle the error explicitly (you can't pretend a remote call always succeeds). Go's <code>ctx</code>-first convention exists for exactly this: the deadline and cancellation flow through the call graph. A synchronous call without a timeout is a future outage — one slow dependency backs up goroutines until the whole service falls over (see <a href="/cloud/resilience-patterns/">resilience patterns</a>).
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Don't build a distributed monolith of synchronous calls">
+A tempting anti-pattern: split into microservices but wire them with long chains of <em>synchronous</em> calls (A calls B calls C calls D, all blocking). Now a single request's latency is the sum of every hop, and any one service being down fails the whole chain — you've kept the coupling of a monolith but added network fragility (a 'distributed monolith'). Prefer asynchronous events where a service only needs to <em>react</em> (not block on a result), fan out independent calls in parallel rather than in series, and keep synchronous chains short. The goal of splitting was independence — don't re-couple it over the network.
+</Callout>
+
+## See also
+
+- [Microservices basics](/cloud/microservices-basics/) — when to split and how to bound services.
+- [gRPC (web track)](/web/grpc/) — the full protobuf + gRPC server/client setup.
+- [Message queues](/cloud/message-queues/) — the asynchronous alternative to synchronous calls.
+- [Distributed tracing](/cloud/distributed-tracing/) — following calls across service boundaries.
+
+Next: keeping the system up when a dependency fails — [resilience patterns](/cloud/resilience-patterns/).

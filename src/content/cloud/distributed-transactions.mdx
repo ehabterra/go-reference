@@ -1,0 +1,162 @@
+---
+title: "Distributed Transactions & Sagas"
+category: resilience
+kind: topic
+order: 18
+difficulty: "Advanced"
+status: ready
+intent: "Keeping data consistent across services without a global transaction — why two-phase commit doesn't fit microservices, the saga pattern with compensating actions, and orchestration vs choreography."
+related:
+  - the-outbox-pattern
+  - event-driven-architecture
+  - resilience-patterns
+quiz:
+  - q: "Why can't you use a normal database transaction across microservices?"
+    options:
+      - text: "Each service owns its own database; there's no shared transaction to ACID-commit across them, so a multi-service operation can't be atomic the way a single-DB transaction is"
+        correct: true
+      - text: "Transactions are disabled in the cloud"
+        correct: false
+      - text: "Microservices don't use databases"
+        correct: false
+      - text: "It would be too fast"
+        correct: false
+    explain: "A core rule of microservices is database-per-service: Orders, Payments, and Inventory each own their data. A single ACID transaction spans one database, so there's no built-in way to atomically commit a change across three services. A booking that charges a card AND reserves stock AND creates an order needs a different consistency mechanism than BEGIN/COMMIT."
+  - q: "Why is two-phase commit (2PC) usually avoided in microservices?"
+    options:
+      - text: "It's a blocking, synchronous protocol with a coordinator: it locks resources across services, scales poorly, and a coordinator failure can leave participants blocked — fragile at microservice scale"
+        correct: true
+      - text: "It is illegal"
+        correct: false
+      - text: "It only works with NoSQL"
+        correct: false
+      - text: "It's too fast to be safe"
+        correct: false
+    explain: "2PC gives atomicity by having a coordinator ask all participants to prepare, then commit — but it holds locks across services for the whole protocol (terrible for availability and throughput), and if the coordinator dies after 'prepare' participants are stuck holding locks. It couples services tightly and scales badly, so cloud-native systems prefer eventual consistency via sagas over distributed ACID."
+  - q: "What is the saga pattern?"
+    options:
+      - text: "A multi-service operation modeled as a sequence of local transactions, each with a COMPENSATING action that undoes it; if a step fails, run the compensations for completed steps to roll back"
+        correct: true
+      - text: "A single giant transaction across all services"
+        correct: false
+      - text: "A way to lock all databases at once"
+        correct: false
+      - text: "A caching strategy"
+        correct: false
+    explain: "A saga breaks a distributed operation into local transactions (reserve stock, charge card, create order), each committed independently. If a later step fails, the saga executes compensating actions for the already-completed steps in reverse (refund the card, release the stock) — a semantic rollback. It gives eventual consistency without distributed locks, at the cost of writing and reasoning about compensations."
+  - q: "What is a 'compensating action' and why isn't it the same as a rollback?"
+    options:
+      - text: "It's a NEW transaction that semantically undoes a committed one (refund a charge, release a reservation) — because the original already committed and was visible, you can't just roll it back"
+        correct: true
+      - text: "It's an automatic database ROLLBACK across services"
+        correct: false
+      - text: "It deletes the database"
+        correct: false
+      - text: "It's the same as a retry"
+        correct: false
+    explain: "Each saga step already committed locally and may have been observed, so there's nothing to ROLLBACK — you compensate with a forward action that undoes the effect (a refund undoes a charge, releasing stock undoes a reservation). Compensations must be idempotent and designed per step, and some effects (an email sent) can't be fully undone — so order steps so the hardest-to-compensate come last."
+  - q: "Orchestration vs choreography for a saga?"
+    options:
+      - text: "Orchestration: a central coordinator drives each step and triggers compensations (explicit, easier to follow). Choreography: services react to each other's events with no coordinator (decoupled, but the flow is implicit and harder to debug)"
+        correct: true
+      - text: "They produce different data"
+        correct: false
+      - text: "Choreography needs two-phase commit"
+        correct: false
+      - text: "Orchestration can't handle failures"
+        correct: false
+    explain: "An orchestrated saga has a coordinator that calls each service in turn and, on failure, invokes the right compensations — the flow is centralized and visible, at the cost of a coordinator component. A choreographed saga has each service emit events that trigger the next step, fully decoupled but with the end-to-end flow (and compensation logic) scattered across services and harder to trace. Pick based on how complex the workflow is and how much you value visibility vs decoupling."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="✈️ Analogy">
+Booking a trip touches three companies — flight, hotel, car — none of which share a cash register, so there's no single "commit it all or nothing" button. A saga is how a good travel agent handles it: book the flight, then the hotel, then the car, one at a time. If the car falls through, they don't have a magic undo — they phone the hotel to cancel and void the flight (compensating actions). The trip is consistent in the end, achieved by a sequence of bookings and, if needed, cancellations — not one atomic transaction.
+</Callout>
+
+## Why not a normal transaction?
+
+Microservices follow **database-per-service**, so a single operation that spans Orders, Payments, and Inventory has **no shared transaction** to ACID-commit. And **two-phase commit** (a coordinator locking all participants to prepare-then-commit) fits badly: it holds locks across services, scales poorly, and a coordinator crash can leave participants blocked. Cloud-native systems accept **eventual consistency** via sagas instead of chasing distributed ACID.
+
+## The saga: local transactions + compensations
+
+A saga models the operation as a sequence of **local transactions**, each with a **compensating action** that undoes it. If a step fails, you run the compensations for completed steps in reverse.
+
+<Mermaid code={String.raw`graph LR
+  S1["reserve stock"] --> S2["charge card"]
+  S2 --> S3["create order ✗ fails"]
+  S3 -.compensate.-> C2["refund card"]
+  C2 -.compensate.-> C1["release stock"]
+  style S3 fill:#dc2626,color:#fff`} />
+
+## See it: a saga with compensation
+
+This runs here — a saga runs steps in order; when one fails, it executes the compensations for the already-completed steps in reverse. Output is deterministic:
+
+<Playground client:visible title="saga.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Step struct {
+	name       string
+	do         func() error
+	compensate func()
+}
+
+// RunSaga executes steps; on failure, compensates completed steps in reverse.
+func RunSaga(steps []Step) error {
+	var done []Step
+	for _, s := range steps {
+		if err := s.do(); err != nil {
+			fmt.Printf("step %q FAILED: %v\n", s.name, err)
+			// Roll back forward: compensate completed steps, newest first.
+			for i := len(done) - 1; i >= 0; i-- {
+				fmt.Printf("  compensating %q\n", done[i].name)
+				done[i].compensate()
+			}
+			return fmt.Errorf("saga aborted at %q", s.name)
+		}
+		fmt.Printf("step %q ok\n", s.name)
+		done = append(done, s)
+	}
+	return nil
+}
+
+func main() {
+	steps := []Step{
+		{"reserve-stock", func() error { return nil }, func() { fmt.Println("    stock released") }},
+		{"charge-card", func() error { return nil }, func() { fmt.Println("    card refunded") }},
+		{"create-order", func() error { return errors.New("db down") }, func() {}},
+	}
+	if err := RunSaga(steps); err != nil {
+		fmt.Println("result:", err)
+	}
+}`} />
+
+`create-order` fails, so the saga compensates `charge-card` (refund) then `reserve-stock` (release) — a **semantic rollback** that leaves the system consistent without any distributed lock. Note compensations run newest-first, and each is a *new* forward action: the charge already committed, so you refund rather than "un-charge."
+
+## Orchestration vs choreography
+
+- **Orchestrated saga** — a central coordinator calls each step and triggers compensations on failure. The flow is explicit and easy to follow/debug (at the cost of a coordinator component). The runnable above is orchestrated.
+- **Choreographed saga** — each service emits events that trigger the next step ([event-driven](/cloud/event-driven-architecture/)), with no coordinator. Maximally decoupled, but the end-to-end flow and compensation logic are scattered and harder to trace.
+
+<Callout type="go" title="🐹 Design compensations and idempotency up front">
+A saga is only as good as its compensations, so design them with each step: every action needs an <em>undo</em> (refund, release, cancel), and both the action and its compensation must be <strong>idempotent</strong> — sagas retry, and a compensation may run after a partial failure, so running it twice must be safe (see <a href="/cloud/the-outbox-pattern/">idempotency</a>). Order steps so the <strong>hardest-to-compensate effects come last</strong> (do the reversible reservations before the irreversible email/shipment). Persist saga state (which steps completed) so a crashed coordinator can resume or compensate on restart — often via the <a href="/cloud/the-outbox-pattern/">outbox</a>. Libraries like Temporal/Cadence manage this state for you.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Eventual consistency means designing for the in-between">
+A saga is not atomic: there's a real window where stock is reserved and the card is charged but the order doesn't exist yet — and another where a compensation hasn't run. Other parts of the system <em>will</em> observe these intermediate states. You must design for them: show the user 'processing', make downstream reads tolerate not-yet-finalized data, guard against acting on a half-complete saga, and accept that some effects (a sent email, a shipped package) can't be cleanly compensated — so make those steps last or build human-in-the-loop handling. Distributed consistency is eventual and messy; pretending it's atomic is how sagas corrupt data.
+</Callout>
+
+## See also
+
+- [The outbox pattern](/cloud/the-outbox-pattern/) — reliably emitting saga events and persisting state.
+- [Event-driven architecture](/cloud/event-driven-architecture/) — the basis of choreographed sagas.
+- [Resilience patterns](/cloud/resilience-patterns/) — retries and idempotency the saga depends on.
+- [database/sql & transactions](/web/sql-transactions/) — the local transactions a saga is built from.
+
+That completes the Cloud-Native track — from [containers](/cloud/why-cloud-native/) through observability, messaging, and resilience. You now have the full toolkit to run Go services in production.

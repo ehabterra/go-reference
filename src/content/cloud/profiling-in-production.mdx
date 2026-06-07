@@ -1,0 +1,158 @@
+---
+title: "Profiling in Production"
+category: observability
+kind: topic
+order: 9
+difficulty: "Advanced"
+status: ready
+intent: "Finding why a service is slow or leaking — Go's built-in pprof (CPU, heap, goroutine, block profiles), the net/http/pprof endpoints, and continuous profiling, when metrics say 'slow' but not 'where in the code'."
+related:
+  - metrics-with-prometheus
+  - distributed-tracing
+  - profiling-pprof
+quiz:
+  - q: "When metrics show a service is slow or using too much memory, what does profiling add?"
+    options:
+      - text: "It points to the exact functions/call paths consuming CPU or allocating memory — the 'where in the code', which metrics and traces don't show"
+        correct: true
+      - text: "It restarts the service"
+        correct: false
+      - text: "It scales up the replicas automatically"
+        correct: false
+      - text: "It encrypts the heap"
+        correct: false
+    explain: "Metrics say 'p99 latency is high'; a trace says 'the orders service is the slow hop'. A profile says 'json.Marshal in formatOrder is 60% of CPU' or 'these buffers are 2 GB of live heap'. Profiling is the within-process, function-level view that turns 'it's slow' into 'optimize this line'."
+  - q: "What does Go's net/http/pprof package give you?"
+    options:
+      - text: "HTTP endpoints (/debug/pprof/...) that serve live CPU, heap, goroutine, block, and mutex profiles you analyze with `go tool pprof`"
+        correct: true
+      - text: "A faster HTTP server"
+        correct: false
+      - text: "Automatic performance fixes"
+        correct: false
+      - text: "A replacement for metrics"
+        correct: false
+    explain: "Importing net/http/pprof registers handlers under /debug/pprof/ on the default mux. You can pull a 30-second CPU profile, a heap snapshot, a goroutine dump, etc., then visualize them (flame graphs, top functions) with `go tool pprof`. It's built into the stdlib — no agent needed — though you must protect the endpoints in production."
+  - q: "A goroutine profile shows the count climbing steadily and never dropping. What does that indicate?"
+    options:
+      - text: "A goroutine leak — goroutines are blocked forever (e.g. on a channel or a request with no timeout) and never returning, holding memory"
+        correct: true
+      - text: "Healthy concurrency"
+        correct: false
+      - text: "The GC is working well"
+        correct: false
+      - text: "The CPU is idle"
+        correct: false
+    explain: "A monotonically rising goroutine count is the classic leak signature: goroutines block forever (on a channel that never receives, an unbounded wait, a request with no context timeout) and never return, so they're never garbage-collected and they pile up — eventually exhausting memory. The goroutine profile's stacks show exactly where they're stuck. See goroutines/leaks."
+  - q: "Which profile finds excessive memory allocation?"
+    options:
+      - text: "The heap (memory) profile — it shows which call sites allocate the most, guiding you to reduce allocations and GC pressure"
+        correct: true
+      - text: "The CPU profile only"
+        correct: false
+      - text: "The block profile"
+        correct: false
+      - text: "There is no memory profile in Go"
+        correct: false
+    explain: "The heap profile attributes live (and total) allocations to the functions that made them. Combined with `-benchmem` benchmarks, it's how you cut allocation/GC pressure: find the hot allocating call site, then keep values on the stack, preallocate slices, or reuse buffers with sync.Pool. CPU and block/mutex profiles target different bottlenecks."
+  - q: "What is the main caution when exposing pprof in production?"
+    options:
+      - text: "The /debug/pprof endpoints leak internals and a CPU profile adds overhead — protect them (separate port, auth, internal-only) and don't expose them publicly"
+        correct: true
+      - text: "pprof deletes your data"
+        correct: false
+      - text: "It only works in tests"
+        correct: false
+      - text: "It requires disabling the GC"
+        correct: false
+    explain: "pprof endpoints reveal code structure, memory, and goroutine stacks (useful to an attacker) and a CPU profile imposes some overhead while running. Don't expose /debug/pprof on the public listener: bind it to a separate internal port, require auth, or gate it behind the cluster network. Continuous-profiling tools (Pyroscope, Parca, cloud profilers) scrape it safely on a low duty cycle."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔬 Analogy">
+Metrics are the patient's vital signs — temperature high, pulse fast. A trace is the triage that says "the problem is in the chest." A profile is the MRI: it shows the exact tissue that's inflamed. When the dashboard says "slow" and the trace says "this service," profiling is how you see <em>which function, which allocation, which blocked goroutine</em> is the culprit — the resolution no other tool gives you.
+</Callout>
+
+## The four profiles
+
+Go has profiling built into the runtime — no agent, no rebuild. Each profile answers a different "why":
+
+<Mermaid code={String.raw`graph TD
+  Q["service is unhealthy"] --> CPU["CPU profile<br/>which functions burn CPU?"]
+  Q --> HEAP["heap profile<br/>what allocates / leaks memory?"]
+  Q --> GR["goroutine profile<br/>are goroutines leaking / stuck?"]
+  Q --> BLK["block / mutex profile<br/>where do goroutines wait on locks?"]`} />
+
+- **CPU** — samples where the program spends CPU time → flame graph of hot functions.
+- **Heap** — attributes allocations to call sites → find allocation/GC pressure and leaks.
+- **Goroutine** — a snapshot of every goroutine's stack → spot leaks (count only grows) and deadlocks.
+- **Block / Mutex** — where goroutines wait on channels/locks → contention.
+
+## See it: a cheap runtime health snapshot
+
+You don't need a profiler running to read the basics — `runtime` exposes goroutine count and allocation stats live. This runs here and prints stable facts (booleans/deltas, so it's deterministic):
+
+<Playground client:visible title="runtime.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime"
+)
+
+func main() {
+	var m1 runtime.MemStats
+	runtime.ReadMemStats(&m1)
+	g0 := runtime.NumGoroutine()
+
+	// Allocate ~100k short-lived objects (the kind a heap profile would flag).
+	sink := make([][]byte, 0, 100_000)
+	for i := 0; i < 100_000; i++ {
+		sink = append(sink, make([]byte, 16))
+	}
+
+	var m2 runtime.MemStats
+	runtime.ReadMemStats(&m2)
+	fmt.Println("goroutines stable:", runtime.NumGoroutine() == g0)
+	fmt.Println("allocations happened:", m2.Mallocs-m1.Mallocs >= 100_000)
+	fmt.Println("GC ran at least 0 times:", m2.NumGC >= m1.NumGC)
+	_ = sink
+}`} />
+
+In production you expose the real profiler. Importing `net/http/pprof` registers endpoints you pull profiles from (fenced — needs a server):
+
+```go
+import _ "net/http/pprof" // registers /debug/pprof/* on the default mux
+
+// Expose it on a SEPARATE, internal-only port — never the public listener.
+go func() { log.Println(http.ListenAndServe("localhost:6060", nil)) }()
+
+// Then, against a running service:
+//   go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30   # CPU
+//   go tool pprof http://localhost:6060/debug/pprof/heap                  # memory
+//   curl http://localhost:6060/debug/pprof/goroutine?debug=2             # stacks
+```
+
+`go tool pprof` then shows top functions, call graphs, and flame graphs. The [pprof page in the stdlib track](/stdlib/profiling-pprof/) covers the analysis workflow in depth.
+
+## Continuous profiling
+
+A one-off profile catches a problem you're already chasing. **Continuous profiling** (Pyroscope, Parca, Grafana/Datadog profilers) scrapes the pprof endpoints on a low duty cycle and stores profiles over time — so you can compare "before vs after a deploy," find a slow regression, and profile an incident *after* it happened. It's the profiling equivalent of always-on metrics.
+
+<Callout type="go" title="🐹 Go's profiler is a superpower — reach for it before guessing">
+Performance work without a profile is guessing. Go's built-in pprof is exceptional: zero-dependency, low-overhead, and able to pinpoint CPU hot spots, allocation sources, goroutine leaks, and lock contention with flame graphs. The workflow: a <a href="/cloud/metrics-with-prometheus/">metric</a> alerts, a <a href="/cloud/distributed-tracing/">trace</a> localizes the service, then a <strong>profile</strong> finds the function. Pair the heap profile with <code>go test -bench -benchmem</code> to cut allocations (see <a href="/concurrency/gc-and-stacks/">GC &amp; stacks</a>), and the goroutine profile with the <a href="/concurrency/goroutines/">leak rules</a>.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Don't expose /debug/pprof to the world">
+Importing <code>net/http/pprof</code> registers its handlers on the <strong>default ServeMux</strong> — so if your public server uses <code>http.DefaultServeMux</code>, you've just published <code>/debug/pprof/</code> to the internet, leaking memory layout, goroutine stacks, and source structure to anyone (and letting them trigger expensive CPU profiles as a mini-DoS). Bind pprof to a separate, internal-only listener (or a non-default mux behind auth), and keep it off the public route. The profiler is for you and your continuous-profiling tool — not for attackers.
+</Callout>
+
+## See also
+
+- [Profiling with pprof (stdlib)](/stdlib/profiling-pprof/) — the `go tool pprof` analysis workflow.
+- [GC & stacks (concurrency)](/concurrency/gc-and-stacks/) — reducing the allocations the heap profile finds.
+- [Goroutines](/concurrency/goroutines/) — the leaks the goroutine profile catches.
+- [Metrics with Prometheus](/cloud/metrics-with-prometheus/) — the alert that sends you to profile.
+
+Next: decoupling services with asynchronous messaging — [message queues](/cloud/message-queues/).

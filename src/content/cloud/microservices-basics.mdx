@@ -1,0 +1,141 @@
+---
+title: "Microservices Basics"
+category: resilience
+kind: topic
+order: 14
+difficulty: "Intermediate"
+status: ready
+intent: "When (and when not) to split a system into services — bounded contexts and service boundaries, API contracts, the fallacies of distributed computing, and why 'monolith first' is usually right."
+related:
+  - grpc-and-service-comms
+  - resilience-patterns
+  - distributed-transactions
+quiz:
+  - q: "What primarily justifies splitting a system into microservices?"
+    options:
+      - text: "Independent deployment, scaling, and team ownership of well-bounded pieces — organizational and scaling needs, not a desire for 'modern' architecture"
+        correct: true
+      - text: "Microservices are always faster than a monolith"
+        correct: false
+      - text: "They remove the need for a database"
+        correct: false
+      - text: "They make code simpler"
+        correct: false
+    explain: "Microservices trade in-process simplicity for the ability to deploy, scale, and own pieces independently — valuable when teams step on each other in a monolith, parts need very different scaling, or you need fault isolation. They are not inherently faster or simpler; they add network latency, partial failure, and operational complexity. Split for organizational/scaling reasons, not fashion."
+  - q: "How should you draw service boundaries?"
+    options:
+      - text: "Around bounded contexts / business capabilities that change together and own their data — high cohesion inside, loose coupling between"
+        correct: true
+      - text: "One service per database table"
+        correct: false
+      - text: "One service per developer"
+        correct: false
+      - text: "Split by technical layer (a UI service, a logic service, a DB service)"
+        correct: false
+    explain: "Good boundaries follow business capabilities (bounded contexts in DDD terms): Orders, Inventory, Payments — each cohesive, owning its own data, and changing for one reason. Splitting by technical layer (UI/logic/data tiers) creates chatty, tightly-coupled services that must deploy together — the worst of both worlds. Aim for services you can change and deploy without coordinating with others."
+  - q: "Why is 'monolith first' usually the right starting point?"
+    options:
+      - text: "Boundaries are hard to get right early; a well-structured monolith is simpler to build/refactor, and you extract services once the seams and scaling needs are clear"
+        correct: true
+      - text: "Monoliths can never be split"
+        correct: false
+      - text: "Microservices are illegal for new projects"
+        correct: false
+      - text: "Monoliths are always better in every way"
+        correct: false
+    explain: "Premature microservices lock in boundaries you don't yet understand, and wrong boundaries are far costlier to fix across a network than across packages. A modular monolith lets you learn the domain, refactor freely, and ship fast; once a seam proves stable and a part genuinely needs independent scaling/ownership, you extract it. Distributed systems are a tax you pay when the benefits are real, not upfront."
+  - q: "What do the 'fallacies of distributed computing' warn about?"
+    options:
+      - text: "Assumptions that fail across a network — that it's reliable, latency is zero, bandwidth is infinite, it's secure, topology is stable — each must be designed for"
+        correct: true
+      - text: "That distributed systems are impossible"
+        correct: false
+      - text: "That networks are always fast"
+        correct: false
+      - text: "Only that you need more servers"
+        correct: false
+    explain: "The eight fallacies (Deutsch et al.) list false assumptions developers make: the network is reliable, latency is zero, bandwidth is infinite, the network is secure, topology doesn't change, there's one admin, transport cost is zero, the network is homogeneous. Every in-process call you turn into a network call inherits all of these — so each remote call needs timeouts, retries, error handling, and security. Forgetting them is how distributed systems fail in production."
+  - q: "Why does an explicit, versioned API contract matter between services?"
+    options:
+      - text: "Services are deployed independently, so the contract (protobuf/OpenAPI) is the agreement that lets each side evolve without breaking the other — change it carefully and version it"
+        correct: true
+      - text: "Contracts make requests faster"
+        correct: false
+      - text: "Only monoliths need contracts"
+        correct: false
+      - text: "The contract is just documentation, not enforced"
+        correct: false
+    explain: "Because you can't deploy all services atomically, the network API is the durable coupling point. A typed, versioned contract (protobuf for gRPC, OpenAPI for REST) lets a provider add fields and a consumer ignore unknown ones without coordinated releases. Break the contract carelessly and you break every consumer at deploy time. Treat backward compatibility as a hard rule and version when you must break it."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏗️ Analogy">
+A monolith is one big house: rooms share walls and plumbing, and remodeling the kitchen risks the bathroom — but everything is a few steps away. Microservices are a street of separate houses: each can be rebuilt without touching the others, but now every conversation is a walk down the road in the rain, and the road sometimes floods. Separate houses are worth it when families need their own space and schedules — not because a street is inherently better than a house. Choose based on who lives there, not on fashion.
+</Callout>
+
+## Split for reasons, not fashion
+
+Microservices trade in-process simplicity for **independent deployment, scaling, and team ownership**. That's worth it when teams collide in a shared codebase, parts need wildly different scaling, or you need fault isolation. It is *not* inherently faster or simpler — every split adds network latency, partial failure, and operational overhead. So **monolith first**: a well-structured modular monolith lets you learn the domain and refactor freely, and you extract a service only once a seam is stable and the benefit is real.
+
+## Boundaries follow business capabilities
+
+Draw boundaries around **bounded contexts** — cohesive business capabilities that change together and own their data:
+
+<Mermaid code={String.raw`graph TD
+  GW["API gateway"] --> ORD["Orders<br/>(owns orders DB)"]
+  GW --> INV["Inventory<br/>(owns stock DB)"]
+  GW --> PAY["Payments<br/>(owns payments DB)"]
+  ORD -.->|event: OrderPlaced| INV
+  ORD -.->|event: OrderPlaced| PAY
+  style ORD fill:#10b981,color:#fff`} />
+
+High cohesion inside each service, loose coupling between them. Splitting by *technical layer* (a UI service, a logic service, a DB service) instead creates chatty, tightly-coupled services that must deploy together — avoid it. Each service owning its own data is what lets it deploy independently.
+
+## See it: the network is not free
+
+Every in-process call you turn into a network call inherits the **fallacies of distributed computing** — latency isn't zero, the network isn't reliable. This runs here, modeling how a "chatty" request that fans across many sequential hops accumulates latency (and failure risk):
+
+<Playground client:visible title="hops.go" code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	// In-process method calls are ~nanoseconds. A network hop is ~1ms+.
+	const hopLatencyMs = 2
+	const perHopFailure = 0.01 // 1% chance each hop fails
+
+	for _, hops := range []int{1, 5, 20} {
+		// Sequential hops add up; failure compounds.
+		totalLatency := hops * hopLatencyMs
+		// P(all succeed) = (1 - p)^hops, so P(request fails) = 1 - that.
+		success := 1.0
+		for i := 0; i < hops; i++ {
+			success *= (1 - perHopFailure)
+		}
+		fmt.Printf("%2d hops: ~%dms latency, ~%.1f%% chance the request fails\n",
+			hops, totalLatency, (1-success)*100)
+	}
+	fmt.Println("-> chatty service graphs are slow AND fragile;")
+	fmt.Println("   batch calls, fan out in parallel, and bound every hop with a timeout.")
+}`} />
+
+Twenty sequential hops turn negligible per-call cost into real latency and an ~18% chance *something* failed — which is why chatty service graphs are both slow and fragile. The defenses (timeouts, retries, circuit breakers, parallel fan-out) are the rest of this cluster.
+
+<Callout type="go" title="🐹 Treat the network API as the contract it is">
+Because services deploy independently, the network API between them is the durable coupling point — so make it explicit, typed, and versioned (protobuf for <a href="/cloud/grpc-and-service-comms/">gRPC</a>, OpenAPI for REST). Evolve it backward-compatibly: add fields, never repurpose or remove them, and have consumers ignore unknown fields. Go's structs + protobuf/JSON make this natural. The golden rule: you cannot deploy all services at once, so a provider and its consumers must always be compatible across versions — break the contract carelessly and you break production at deploy time.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Microservices move complexity, they don't remove it">
+Splitting a monolith doesn't delete complexity — it relocates it from your code into the network and operations: now you have distributed transactions (<a href="/cloud/distributed-transactions/">sagas</a>), eventual consistency, service discovery, distributed tracing, partial failure, and N deployment pipelines instead of one. A poorly-bounded set of microservices (a 'distributed monolith' that must deploy together) is strictly worse than the monolith it replaced. Make sure the organizational/scaling benefit is real and the boundaries are right before you pay the distributed-systems tax — and keep the option to merge services back.
+</Callout>
+
+## See also
+
+- [gRPC & service comms](/cloud/grpc-and-service-comms/) — the typed contracts services talk over.
+- [Resilience patterns](/cloud/resilience-patterns/) — surviving the partial failures splitting introduces.
+- [Distributed transactions](/cloud/distributed-transactions/) — consistency across service boundaries.
+- [REST APIs (web track)](/web/rest-apis/) — the other common inter-service protocol.
+
+Next: how services actually talk — [gRPC & service communication](/cloud/grpc-and-service-comms/).

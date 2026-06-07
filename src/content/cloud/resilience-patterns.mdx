@@ -1,0 +1,192 @@
+---
+title: "Resilience Patterns"
+category: resilience
+kind: topic
+order: 16
+difficulty: "Advanced"
+status: ready
+intent: "Keeping a service up when its dependencies fail — timeouts, retries with exponential backoff and jitter, the circuit breaker, bulkheads, and graceful fallback."
+related:
+  - grpc-and-service-comms
+  - rate-limiting-and-load
+  - distributed-transactions
+quiz:
+  - q: "Why is a timeout on every remote call the most fundamental resilience pattern?"
+    options:
+      - text: "Without one, a slow/hung dependency blocks the caller's goroutine indefinitely; under load these pile up and cascade into a full outage. A deadline bounds the wait and frees resources"
+        correct: true
+      - text: "Timeouts make calls faster"
+        correct: false
+      - text: "They encrypt the connection"
+        correct: false
+      - text: "They are only needed for databases"
+        correct: false
+    explain: "An unbounded call is the root of cascading failure: one slow dependency causes callers to wait, their goroutines/connections pile up, they slow down, their callers pile up, and the outage propagates upstream. A context deadline on every remote call caps the wait, releases the goroutine/connection, and turns a hang into a fast, handleable error. Every other pattern assumes timeouts are already in place."
+  - q: "Why add exponential backoff AND jitter to retries?"
+    options:
+      - text: "Backoff increases the wait between attempts so you don't hammer a struggling service; jitter randomizes it so many clients don't retry in synchronized waves (the thundering herd)"
+        correct: true
+      - text: "Jitter makes retries faster"
+        correct: false
+      - text: "Backoff is only for the first retry"
+        correct: false
+      - text: "They prevent the need for timeouts"
+        correct: false
+    explain: "Immediate, fixed retries hammer an already-struggling dependency and can keep it down. Exponential backoff (1s, 2s, 4s…) gives it room to recover. But if every client backs off on the same schedule, they retry in synchronized spikes — so add jitter (randomize the delay) to spread them out. Backoff + jitter + a retry cap is the standard safe retry."
+  - q: "What should you NOT retry?"
+    options:
+      - text: "Non-idempotent operations (unless guarded by an idempotency key) and non-transient errors (4xx like 400/401/404) — retrying those duplicates effects or wastes attempts on permanent failures"
+        correct: true
+      - text: "Any failed request — always retry everything"
+        correct: false
+      - text: "Read-only requests"
+        correct: false
+      - text: "Requests that timed out"
+        correct: false
+    explain: "Retry only transient failures (timeouts, 503s, connection resets) on idempotent operations. Retrying a 400/401/404 just wastes attempts — the input is wrong, not the timing. Retrying a non-idempotent write (a payment) without an idempotency key can charge twice. So: classify errors (retry transient, fail fast on permanent), and only retry writes that are idempotent."
+  - q: "What does a circuit breaker do?"
+    options:
+      - text: "After N consecutive failures it 'opens' and fails fast (rejecting calls without trying) for a cooldown, then 'half-opens' to test recovery — protecting both the caller and the failing dependency"
+        correct: true
+      - text: "It retries forever until the dependency recovers"
+        correct: false
+      - text: "It load-balances across replicas"
+        correct: false
+      - text: "It caches responses"
+        correct: false
+    explain: "A circuit breaker tracks failures to a dependency. Closed = calls flow normally. After a failure threshold it trips Open = calls fail fast immediately (no waiting on a known-dead service, giving it room to recover). After a cooldown it goes Half-Open = lets a trial call through; success closes it, failure re-opens it. It stops a dead dependency from tying up the caller and stops the caller from pummeling it."
+  - q: "What is the bulkhead pattern?"
+    options:
+      - text: "Isolating resources (separate connection pools / concurrency limits per dependency) so one failing/slow dependency can't consume all resources and sink the whole service"
+        correct: true
+      - text: "Encrypting traffic between services"
+        correct: false
+      - text: "A type of load balancer"
+        correct: false
+      - text: "Storing data in multiple databases"
+        correct: false
+    explain: "Named after a ship's watertight compartments: partition resources so a flood in one doesn't sink the ship. If all dependencies share one goroutine/connection pool, a slow one exhausts it and starves calls to healthy dependencies too. Give each dependency its own bounded pool / concurrency limit (a semaphore) so a failure stays contained to that one path."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="⚡ Analogy">
+Resilience patterns are the electrical safety in your house. A <strong>timeout</strong> is not leaving the tap running forever. <strong>Retries with backoff</strong> are flipping a tripped switch — but waiting, and not slamming it on and off. The <strong>circuit breaker</strong> is exactly that: when a circuit keeps faulting, it trips and stays off so the fault can't burn the house down, then lets you test it later. <strong>Bulkheads</strong> are separate fuses per room, so a short in the kitchen doesn't kill the lights everywhere. None of it prevents faults — it stops one fault from becoming a fire.
+</Callout>
+
+## The layered defenses
+
+In a distributed system, dependencies *will* fail. Resilience is layering defenses so one failure stays contained:
+
+<Mermaid code={String.raw`graph TD
+  CALL["remote call"] --> TO["1. timeout — bound every wait"]
+  TO --> RT["2. retry (backoff + jitter) — transient errors only"]
+  RT --> CB["3. circuit breaker — fail fast when it's down"]
+  CB --> BH["4. bulkhead — isolate per dependency"]
+  BH --> FB["5. fallback — degrade gracefully"]`} />
+
+- **Timeout** — the foundation: every remote call gets a [context deadline](/concurrency/context/) so a hang can't tie up a goroutine.
+- **Retry with backoff + jitter** — retry *transient* errors on *idempotent* ops, with growing, randomized delays.
+- **Circuit breaker** — after repeated failures, stop calling a dead dependency and fail fast.
+- **Bulkhead** — give each dependency its own bounded pool so one slow one can't starve the rest.
+- **Fallback** — when all else fails, degrade gracefully (cached value, default, partial response).
+
+## See it: a circuit breaker
+
+This runs here — a breaker that opens after 3 consecutive failures (failing fast instead of calling a dead dependency), then half-opens to test recovery. Output is deterministic:
+
+<Playground client:visible title="breaker.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+type State int
+
+const (
+	Closed State = iota // calls flow normally
+	Open                // failing fast — dependency is down
+	HalfOpen            // trial call to test recovery
+)
+
+type Breaker struct {
+	state     State
+	failures  int
+	threshold int
+}
+
+var ErrOpen = errors.New("circuit open: failing fast")
+
+// Call runs fn unless the circuit is open.
+func (b *Breaker) Call(fn func() error) error {
+	if b.state == Open {
+		b.state = HalfOpen // (a real breaker uses a cooldown timer here)
+		return ErrOpen
+	}
+	err := fn()
+	if err != nil {
+		b.failures++
+		if b.failures >= b.threshold {
+			b.state = Open
+		}
+		return err
+	}
+	b.failures = 0 // success resets
+	b.state = Closed
+	return nil
+}
+
+func main() {
+	b := &Breaker{threshold: 3}
+	dependencyDown := func() error { return errors.New("connection refused") }
+	dependencyUp := func() error { return nil }
+
+	for i := 1; i <= 4; i++ {
+		err := b.Call(dependencyDown)
+		fmt.Printf("call %d: state=%d err=%v\n", i, b.state, err)
+	}
+	// Circuit is now open → next call fails fast WITHOUT hitting the dependency.
+	fmt.Println("open → fail fast:", b.Call(dependencyDown))
+	// Half-open trial succeeds → circuit closes.
+	fmt.Println("recovery:", b.Call(dependencyUp), "state now Closed")
+}`} />
+
+After 3 failures the breaker opens and the next call returns `ErrOpen` *without* touching the dead dependency — protecting both sides. A successful trial in half-open closes it. Production breakers (e.g. `sony/gobreaker`) add timers, success ratios, and metrics.
+
+## Safe retries
+
+```go
+// Exponential backoff + jitter, transient errors only, bounded attempts.
+for attempt := 0; attempt < maxRetries; attempt++ {
+	err := callWithTimeout(ctx) // each attempt has its own deadline
+	if err == nil || !isTransient(err) {
+		return err // success, or a permanent error (4xx) — don't retry
+	}
+	backoff := time.Duration(1<<attempt) * time.Second   // 1s, 2s, 4s
+	jitter := time.Duration(rand.Int63n(int64(backoff)))  // spread the herd
+	select {
+	case <-time.After(backoff/2 + jitter):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+```
+
+<Callout type="go" title="🐹 Timeouts first, then layer up — and retry only what's safe">
+Get <strong>timeouts</strong> on every remote call before anything else; without them no other pattern helps, because the failure mode (goroutines piling up on a hung dependency) is already fatal. Then add retries — but only for <strong>transient</strong> errors (timeouts, 503s) on <strong>idempotent</strong> operations, with backoff + jitter and a cap. Wrap flaky dependencies in a <strong>circuit breaker</strong> so you stop hammering a dead one, and isolate them with <strong>bulkheads</strong> (a per-dependency semaphore / pool). Go's <code>context</code>, channels, and goroutines make all of these a few lines — the discipline is applying them to every external call, not the implementation.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Naive retries amplify an outage (retry storms)">
+Retries are the pattern most likely to <em>cause</em> the outage they're meant to survive. When a dependency slows down, every caller retrying immediately multiplies the load on it — 1 request becomes 3, across thousands of clients, and the extra traffic keeps it down (a 'retry storm'). Worse, retries stack across layers: A retries B which retries C, so one user request becomes dozens of backend calls. Defend with backoff + jitter, a strict retry cap, a circuit breaker to halt retries when a dependency is clearly down, and ideally retry budgets (cap retries as a fraction of total traffic). Retrying harder is not retrying smarter.
+</Callout>
+
+## See also
+
+- [gRPC & service comms](/cloud/grpc-and-service-comms/) — the calls these patterns protect.
+- [Rate limiting & load shedding](/cloud/rate-limiting-and-load/) — protecting yourself from too much traffic.
+- [Distributed transactions](/cloud/distributed-transactions/) — resilience for multi-step workflows.
+- [context (concurrency)](/concurrency/context/) — the timeouts and cancellation underneath.
+
+Next: protecting a service from too much load — [rate limiting & load shedding](/cloud/rate-limiting-and-load/).

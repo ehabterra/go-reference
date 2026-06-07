@@ -1,0 +1,169 @@
+---
+title: "Dockerizing Go"
+category: containers
+kind: topic
+order: 2
+difficulty: "Beginner"
+status: ready
+intent: "Packaging a Go service into a tiny, secure image — multi-stage builds, scratch/distroless bases, static linking, non-root users, and the version stamping that makes images traceable."
+related:
+  - why-cloud-native
+  - kubernetes-basics
+  - supply-chain-security
+quiz:
+  - q: "Why use a multi-stage Dockerfile for a Go service?"
+    options:
+      - text: "Build the binary in a full Go-toolchain image, then COPY just the binary into a tiny runtime image — so the final image has no compiler, source, or build deps"
+        correct: true
+      - text: "It makes the build faster only"
+        correct: false
+      - text: "It is required to run go build"
+        correct: false
+      - text: "It encrypts the binary"
+        correct: false
+    explain: "A multi-stage build uses a heavy builder stage (the golang image with the toolchain) and a minimal final stage that COPYs only the compiled binary. The shipped image contains none of the build tooling or source — smaller (tens of MB vs ~1 GB), faster to pull, and a far smaller attack surface."
+  - q: "What does a 'scratch' or 'distroless' base image give you?"
+    options:
+      - text: "A near-empty image with no shell, package manager, or OS utilities — minimal size and attack surface, ideal for a static Go binary"
+        correct: true
+      - text: "A faster CPU"
+        correct: false
+      - text: "Automatic HTTPS"
+        correct: false
+      - text: "A full Ubuntu environment"
+        correct: false
+    explain: "scratch is literally empty; distroless adds just CA certs, timezone data, and (optionally) a non-root user but still no shell or package manager. A static Go binary needs almost nothing else, so these bases produce tiny images with a tiny attack surface — and no shell means an attacker who gets RCE can't drop into bash."
+  - q: "What must be true for a Go binary to run on a scratch image?"
+    options:
+      - text: "It must be statically linked (CGO_ENABLED=0), and you must add CA certificates if it makes TLS calls"
+        correct: true
+      - text: "Nothing special; any Go binary works"
+        correct: false
+      - text: "It must be compiled inside the scratch image"
+        correct: false
+      - text: "It must include a copy of bash"
+        correct: false
+    explain: "scratch has no libc, so the binary must be static — set CGO_ENABLED=0 (cgo would dynamically link libc and fail). It also has no CA bundle, so HTTPS calls fail with x509 errors unless you COPY /etc/ssl/certs (or use distroless, which includes them). Those two gotchas account for most 'works locally, breaks in scratch' issues."
+  - q: "Why run the container as a non-root user?"
+    options:
+      - text: "Least privilege — if the process is compromised, a non-root user limits what the attacker can do, and many clusters reject root containers"
+        correct: true
+      - text: "Root containers run slower"
+        correct: false
+      - text: "Non-root is required to open port 80"
+        correct: false
+      - text: "It reduces image size"
+        correct: false
+    explain: "Defense in depth: a compromised root process can do far more damage (escape attempts, writing anywhere a volume is mounted). Set USER to a non-root UID; hardened clusters enforce runAsNonRoot and will refuse to start root containers. Bind to a port >1024 since non-root can't bind privileged ports (or use setcap / a service that maps it)."
+  - q: "How do you stamp a version into the image for traceability?"
+    options:
+      - text: "Pass it at build time with -ldflags '-X main.version=...' (or read it from runtime/debug.ReadBuildInfo / VCS stamping) and tag the image with the same value"
+        correct: true
+      - text: "Hardcode a version string and never change it"
+        correct: false
+      - text: "Versions can't be embedded in Go binaries"
+        correct: false
+      - text: "Use the image creation timestamp as the only identifier"
+        correct: false
+    explain: "Build with -ldflags=\"-X main.version=$GIT_SHA\" to bake a version variable, or rely on Go's automatic VCS stamping in debug.ReadBuildInfo. Expose it on a /version endpoint and tag the image identically (not just :latest). Then a running pod can tell you exactly which commit it is — essential for debugging and rollbacks."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+Shipping a Go service in a full Linux image is mailing a screwdriver inside a packed toolbox inside a shipping container — heavy, slow, and full of things a thief could use. A multi-stage build unpacks the screwdriver and mails just that: the single static binary in a near-empty box. Smaller to send, nothing extra to steal, and it does exactly one job. Go's static binaries make this minimalism trivial in a way few other languages can match.
+</Callout>
+
+## The multi-stage build
+
+The standard pattern: compile in a heavy builder stage, then copy only the binary into a minimal final image.
+
+<Mermaid code={String.raw`graph LR
+  SRC["source + go.mod"] --> B["builder stage<br/>golang:1.x (toolchain)"]
+  B -->|CGO_ENABLED=0 go build| BIN["static binary"]
+  BIN -->|COPY --from=builder| F["final stage<br/>distroless / scratch"]
+  F --> IMG["tiny image (~10–20 MB)<br/>no shell · no compiler · non-root"]`} />
+
+```dockerfile
+# --- builder ---
+FROM golang:1.23 AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download          # cached layer: deps change rarely
+COPY . .
+# static, stripped, version-stamped:
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(git rev-parse --short HEAD)" \
+    -trimpath -o /app ./cmd/server
+
+# --- final ---
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /app /app
+USER nonroot:nonroot         # least privilege
+EXPOSE 8080
+ENTRYPOINT ["/app"]
+```
+
+Order the `COPY go.mod`/`go mod download` *before* `COPY . .` so dependency downloads cache across builds. Add a `.dockerignore` (`.git`, `*_test.go`, local artifacts) so the build context stays small.
+
+## scratch vs distroless
+
+| Base | Contains | Use when |
+|---|---|---|
+| `scratch` | nothing | Pure static binary, no TLS to external hosts (or you COPY certs) |
+| `distroless/static` | CA certs, tzdata, nonroot user | The common default — TLS works, still no shell |
+| `alpine` | musl libc, shell, apk | You need a shell/tools (bigger, larger attack surface) |
+
+Two classic "works locally, breaks in the container" traps both come from scratch being empty: a **cgo-linked binary** won't run (set `CGO_ENABLED=0`), and **HTTPS calls fail** with x509 errors unless CA certs are present (distroless includes them; for scratch, `COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/`).
+
+## See it: read the embedded build info
+
+Go automatically stamps VCS and module info into the binary — readable at runtime, perfect for a `/version` endpoint that reports exactly which build a pod is running. This runs here:
+
+<Playground client:visible title="version.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"runtime/debug"
+)
+
+// version can be overridden at build time with:
+//   go build -ldflags "-X main.version=$(git rev-parse --short HEAD)"
+var version = "dev"
+
+func main() {
+	fmt.Println("app version:", version)
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		fmt.Println("no build info")
+		return
+	}
+	fmt.Println("go:", info.GoVersion)
+	fmt.Println("dependencies:", len(info.Deps))
+	// In a VCS build, Go also records settings like vcs.revision and vcs.time:
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" || s.Key == "GOARCH" {
+			fmt.Printf("  %s = %s\n", s.Key, s.Value)
+		}
+	}
+}`} />
+
+Expose `version` on `/version`, tag the image with the same commit SHA (never rely on `:latest` in production), and a misbehaving pod can tell you exactly which commit to roll back.
+
+<Callout type="go" title="🐹 Small images are a security and speed win">
+A distroless Go image is often <strong>10–20 MB</strong> versus ~1 GB for a naive <code>FROM golang</code> image that ships the whole toolchain and your source. Smaller images pull faster (quicker scaling and deploys), have a dramatically smaller attack surface (no shell, no package manager, no CVEs in utilities you never use), and pair with <a href="/security/supply-chain-security/">supply-chain scanning</a> for a tight, auditable artifact. The static binary is what makes this minimalism possible — lean into it.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ No shell means you debug differently">
+The flip side of distroless/scratch: there's no <code>sh</code>, so <code>kubectl exec -it pod -- sh</code> fails, and you can't poke around inside a running container. That's intentional (an attacker can't either), but it changes your workflow: debug via <strong>logs, metrics, and traces</strong> (the <a href="/cloud/structured-logging-in-prod/">observability</a> cluster), use <code>kubectl debug</code> ephemeral containers to attach a toolbox image, and add a <code>/healthz</code>/<code>/debug</code> endpoint to the app itself. Build the binary so it explains itself, because you can't shell in to ask.
+</Callout>
+
+## See also
+
+- [Why cloud-native Go](/cloud/why-cloud-native/) — why the static binary matters here.
+- [Kubernetes basics](/cloud/kubernetes-basics/) — running the image you just built.
+- [Supply-chain security](/security/supply-chain-security/) — scanning and signing the image.
+- [The go toolchain (stdlib)](/stdlib/go-toolchain/) — build flags and cross-compilation.
+
+Next: running the image in a cluster — [Kubernetes basics](/cloud/kubernetes-basics/).

@@ -1,0 +1,160 @@
+---
+title: "Rate Limiting & Load Shedding"
+category: resilience
+kind: topic
+order: 17
+difficulty: "Advanced"
+status: ready
+intent: "Protecting a service from too much traffic — rate limiting vs load shedding vs backpressure, graceful degradation under overload, and why dropping some requests beats collapsing under all of them."
+related:
+  - resilience-patterns
+  - rate-limiting
+  - message-queues
+quiz:
+  - q: "What's the difference between rate limiting and load shedding?"
+    options:
+      - text: "Rate limiting caps a client's request RATE (a policy: 100/sec each); load shedding drops requests when the server is OVERLOADED right now (self-protection based on current capacity)"
+        correct: true
+      - text: "They are the same mechanism"
+        correct: false
+      - text: "Load shedding speeds up requests"
+        correct: false
+      - text: "Rate limiting only applies to databases"
+        correct: false
+    explain: "Rate limiting is a proactive policy — 'each client gets N req/sec' — enforced regardless of current load (the token bucket). Load shedding is reactive self-preservation — 'I'm at capacity, so reject excess now' — based on real-time signals (in-flight count, queue depth, latency). You use both: rate-limit per client for fairness, and shed load globally to survive a surge that slips past the limits."
+  - q: "Why is shedding (rejecting) some requests better than accepting all of them under overload?"
+    options:
+      - text: "Accepting more than you can handle makes EVERY request slow/fail (collapse); shedding excess keeps the requests you do accept fast and successful — partial availability beats total failure"
+        correct: true
+      - text: "Shedding makes the server faster permanently"
+        correct: false
+      - text: "Rejected requests never happened"
+        correct: false
+      - text: "It's not better; always accept everything"
+        correct: false
+    explain: "Past a server's capacity, accepting more work doesn't do more work — queues grow, latency explodes, memory fills, and eventually everything times out or the process dies (congestion collapse). Shedding the excess (fast 429/503) keeps the accepted requests within capacity and succeeding. Serving 80% well beats serving 100% so badly that all of it fails."
+  - q: "What is backpressure?"
+    options:
+      - text: "A signal that flows UPSTREAM telling producers to slow down because a downstream is at capacity — instead of silently buffering unbounded work"
+        correct: true
+      - text: "Pushing more requests downstream faster"
+        correct: false
+      - text: "Restarting the server under load"
+        correct: false
+      - text: "A type of database index"
+        correct: false
+    explain: "Backpressure propagates 'slow down' from an overloaded component back to its callers, so the system as a whole throttles instead of one stage buffering unboundedly until it bursts. In Go a bounded channel is natural backpressure (a full channel blocks the sender); at an API boundary it's a 429 with Retry-After; in messaging it's bounded queues and consumer lag signals. The opposite — unbounded buffering — just delays and worsens the collapse."
+  - q: "What does graceful degradation mean under overload?"
+    options:
+      - text: "Shedding non-critical work first and serving a reduced-but-functional experience (cached/partial results, disabled extras) rather than failing everything equally"
+        correct: true
+      - text: "Shutting the whole service down"
+        correct: false
+      - text: "Returning errors for every request"
+        correct: false
+      - text: "Ignoring the overload"
+        correct: false
+    explain: "Graceful degradation prioritizes: when overloaded, protect core functionality by shedding or simplifying non-essential work — serve stale cache instead of recomputing, skip recommendations to keep checkout working, drop low-priority background jobs first. The user gets a degraded but working service instead of a uniform outage. It requires classifying requests by importance ahead of time."
+  - q: "Where should you reject excess load — early or deep in the stack?"
+    options:
+      - text: "As EARLY as possible (at the edge/admission) — rejecting a request after it's consumed CPU, a DB connection, and downstream calls wastes the very resources you're trying to protect"
+        correct: true
+      - text: "As deep as possible, after doing most of the work"
+        correct: false
+      - text: "It doesn't matter where"
+        correct: false
+      - text: "Only in the database"
+        correct: false
+    explain: "Shedding cheaply at admission (a fast 429/503 before allocating expensive resources) protects capacity; shedding after the request has already taken a DB connection and made downstream calls wastes exactly what's scarce and can still topple the service. So enforce limits and admission control at the edge, fail fast, and make the rejection itself cheap."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛟 Analogy">
+A lifeboat holds twelve. With thirty people in the water, the humane-sounding instinct is to let everyone climb in — and then the boat swamps and <em>everyone</em> drowns. Load shedding is the hard, correct call: take twelve, keep them alive, and signal for more boats. Accepting load you can't carry doesn't help the extra people; it sinks the ones you could have saved. A service past capacity is that lifeboat — shedding excess is how you keep anyone afloat.
+</Callout>
+
+## Three related tools
+
+- **Rate limiting** — a *policy*: each client gets N requests/sec, enforced always (the [token bucket](/concurrency/rate-limiting/)). Ensures fairness and protects you from any one client.
+- **Load shedding** — *self-preservation*: when the server is at capacity *right now*, reject excess (fast 429/503) based on live signals (in-flight count, latency, queue depth).
+- **Backpressure** — a *signal upstream*: tell producers to slow down rather than buffering unbounded work.
+
+<Mermaid code={String.raw`graph LR
+  REQ["incoming requests"] --> RL["rate limit<br/>(per-client fairness)"]
+  RL --> ADM{"at capacity?"}
+  ADM -->|yes| SHED["shed: fast 429/503<br/>(graceful degradation)"]
+  ADM -->|no| WORK["process within capacity<br/>(fast & successful)"]
+  WORK -.full queue → backpressure.-> RL`} />
+
+## See it: load shedding with an admission limit
+
+This runs here — a semaphore caps concurrent work; requests over the limit are **shed** immediately instead of piling up. Output is deterministic:
+
+<Playground client:visible title="shed.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+func main() {
+	const capacity = 5 // max concurrent requests we can handle well
+	sem := make(chan struct{}, capacity)
+
+	var served, shed int
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// 12 requests arrive at once; we can only handle 5 concurrently.
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}: // admitted
+				mu.Lock()
+				served++
+				mu.Unlock()
+				<-sem // (work happens here, then release)
+			default: // at capacity — shed immediately, don't queue
+				mu.Lock()
+				shed++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	fmt.Printf("served: %d, shed (fast 429): %d\n", served, shed)
+	fmt.Println("-> accepted work stays within capacity and succeeds;")
+	fmt.Println("   excess is rejected fast instead of collapsing the service.")
+}`} />
+
+Excess requests get a fast rejection (a 429/503 to the client) rather than queueing until everything times out. The accepted ones stay within capacity and succeed — **partial availability beats total collapse**.
+
+## Shed early, degrade gracefully
+
+Two principles make shedding effective:
+
+- **Reject early.** Shed at admission (the edge), *before* a request consumes a DB connection and downstream calls — otherwise you waste the very resources you're protecting. Make the rejection itself cheap.
+- **Degrade gracefully.** Don't fail everything equally; shed *non-critical* work first. Serve a stale [cache](/cloud/caching-with-redis/) instead of recomputing, skip recommendations to keep checkout alive, drop low-priority background jobs before user-facing ones. The user gets a reduced-but-working service.
+
+In Go, a **bounded channel is natural backpressure** — a full jobs channel blocks the producer, throttling the whole [pipeline](/patterns/pipeline/) instead of buffering unboundedly.
+
+<Callout type="go" title="🐹 Combine per-client limits with global shedding">
+The robust setup uses both axes: <strong>rate-limit per client</strong> (a token bucket keyed by API key/IP) so no single caller is unfair, <em>and</em> <strong>shed globally</strong> when total load exceeds capacity so a legitimate surge across many clients can't sink you. Express capacity with a bounded <a href="/concurrency/rate-limiting/">semaphore/worker pool</a>, set a hard cap on in-flight requests, return <code>429</code> with <code>Retry-After</code> so well-behaved clients back off, and classify requests by priority so degradation sheds the least-important work first. See <a href="/concurrency/rate-limiting/">rate limiting</a> for the token-bucket and semaphore mechanics.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Unbounded queues turn overload into collapse">
+The instinct to 'just queue the extra requests' is how overload becomes catastrophe. An unbounded queue under sustained overload grows without limit — latency climbs until every queued request has already timed out by the time it's served (you do all the work for nothing), memory fills, and the process dies. This is congestion collapse. <strong>Bound every queue</strong>, and when it's full, shed (reject) rather than accept — a fast failure the client can retry beats a slow failure that takes the whole service down. A queue is a shock absorber, not infinite storage; past its bound, the only safe answer is 'no'.
+</Callout>
+
+## See also
+
+- [Rate limiting (concurrency)](/concurrency/rate-limiting/) — token buckets and semaphores in depth.
+- [Resilience patterns](/cloud/resilience-patterns/) — timeouts and circuit breakers alongside shedding.
+- [Message queues](/cloud/message-queues/) — backpressure and bounded queues in messaging.
+- [Pipeline (patterns)](/patterns/pipeline/) — bounded channels as natural backpressure.
+
+Next: keeping data consistent across services without a global transaction — [distributed transactions](/cloud/distributed-transactions/).

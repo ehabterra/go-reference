@@ -361,6 +361,10 @@ img { max-width: 100%; }
   --dp-offensive:       #e11d48;
   --dp-cryptography:    #7c3aed;
   --dp-defense:         #059669;
+  --dp-containers:      #0ea5e9;
+  --dp-observability:   #8b5cf6;
+  --dp-messaging:       #f59e0b;
+  --dp-resilience:      #10b981;
 }
 .dp-badge[data-cat="building-blocks"] { color: var(--dp-building-blocks); }
 .dp-badge[data-cat="coordination"]    { color: var(--dp-coordination); }
@@ -393,6 +397,10 @@ img { max-width: 100%; }
 .dp-badge[data-cat="offensive"]       { color: var(--dp-offensive); }
 .dp-badge[data-cat="cryptography"]    { color: var(--dp-cryptography); }
 .dp-badge[data-cat="defense"]         { color: var(--dp-defense); }
+.dp-badge[data-cat="containers"]      { color: var(--dp-containers); }
+.dp-badge[data-cat="observability"]   { color: var(--dp-observability); }
+.dp-badge[data-cat="messaging"]       { color: var(--dp-messaging); }
+.dp-badge[data-cat="resilience"]      { color: var(--dp-resilience); }
 .dp-card[data-cat="building-blocks"]  { --c: var(--dp-building-blocks); }
 .dp-card[data-cat="coordination"]     { --c: var(--dp-coordination); }
 .dp-card[data-cat="runtime"]          { --c: var(--dp-runtime); }
@@ -424,6 +432,10 @@ img { max-width: 100%; }
 .dp-card[data-cat="offensive"]        { --c: var(--dp-offensive); }
 .dp-card[data-cat="cryptography"]     { --c: var(--dp-cryptography); }
 .dp-card[data-cat="defense"]          { --c: var(--dp-defense); }
+.dp-card[data-cat="containers"]       { --c: var(--dp-containers); }
+.dp-card[data-cat="observability"]    { --c: var(--dp-observability); }
+.dp-card[data-cat="messaging"]        { --c: var(--dp-messaging); }
+.dp-card[data-cat="resilience"]       { --c: var(--dp-resilience); }
 
 /* hub topic cards */
 .dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
@@ -444,6 +456,7 @@ img { max-width: 100%; }
 .dp-topic[data-cat="memory"]          { --c: var(--dp-memory); }
 .dp-topic[data-cat="syscalls"]        { --c: var(--dp-syscalls); }
 .dp-topic[data-cat="offensive"]       { --c: var(--dp-offensive); }
+.dp-topic[data-cat="containers"]      { --c: var(--dp-containers); }
 .dp-topic:not(.dp-topic--soon):hover { transform: translateY(-3px); border-color: var(--c); box-shadow: var(--dp-shadow-sm); color: #fff; text-decoration: none; }
 .dp-topic__icon { font-size: 2rem; }
 .dp-topic h3 { margin: .2rem 0 0; font-size: 1.4rem; }

@@ -21,6 +21,7 @@ const web = await getCollection('web');
 const internals = await getCollection('internals');
 const systems = await getCollection('systems');
 const security = await getCollection('security');
+const cloud = await getCollection('cloud');
 const searchIndex = [
   ...patterns.map((p) => ({ t: p.data.title, u: `/patterns/${p.id}/`, c: p.data.category, s: 'Design Patterns', i: p.data.intent })),
   ...concurrency.map((p) => ({ t: p.data.title, u: `/concurrency/${p.id}/`, c: p.data.category, s: 'Concurrency', i: p.data.intent })),
@@ -31,6 +32,7 @@ const searchIndex = [
   ...internals.map((p) => ({ t: p.data.title, u: `/internals/${p.id}/`, c: p.data.category, s: 'Go Internals', i: p.data.intent })),
   ...systems.map((p) => ({ t: p.data.title, u: `/systems/${p.id}/`, c: p.data.category, s: 'Systems', i: p.data.intent })),
   ...security.map((p) => ({ t: p.data.title, u: `/security/${p.id}/`, c: p.data.category, s: 'Security', i: p.data.intent })),
+  ...cloud.map((p) => ({ t: p.data.title, u: `/cloud/${p.id}/`, c: p.data.category, s: 'Cloud-Native', i: p.data.intent })),
 ];
 ---
 <!doctype html>

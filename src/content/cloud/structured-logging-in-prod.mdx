@@ -1,0 +1,156 @@
+---
+title: "Structured Logging in Production"
+category: observability
+kind: topic
+order: 6
+difficulty: "Beginner"
+status: ready
+intent: "Logs you can actually query — structured JSON with slog, levels, request-scoped fields and correlation IDs, and the rules (no secrets, log to stdout) that make logs work in a cluster."
+related:
+  - metrics-with-prometheus
+  - distributed-tracing
+  - secrets-management
+quiz:
+  - q: "Why structured (JSON) logs instead of formatted text strings in production?"
+    options:
+      - text: "Machines can parse, index, filter, and aggregate key/value fields — so you can query 'all errors for user X with status 500' instead of grepping prose"
+        correct: true
+      - text: "JSON logs are smaller"
+        correct: false
+      - text: "Text logs can't include timestamps"
+        correct: false
+      - text: "JSON is required by Go"
+        correct: false
+    explain: "A log aggregator (Loki, Elasticsearch, Datadog) ingests structured logs as queryable fields. fmt.Printf prose forces brittle regex grepping; slog's key/value JSON lets you filter and group by level, request_id, user, status, latency, etc. In a fleet of replicas emitting thousands of lines/sec, queryability is the whole point."
+  - q: "What does Go's standard slog package give you?"
+    options:
+      - text: "A structured, leveled logger in the stdlib — slog.Info(msg, key, val) with pluggable JSON/text handlers and contextual sub-loggers"
+        correct: true
+      - text: "Only printf-style formatting"
+        correct: false
+      - text: "Automatic log shipping to the cloud"
+        correct: false
+      - text: "Encryption of log files"
+        correct: false
+    explain: "slog (Go 1.21+) is the standard structured logger: levels (Debug/Info/Warn/Error), typed key/value attributes, JSON or text handlers, and With() to build sub-loggers that carry common fields. No third-party dependency needed for production-grade structured logging."
+  - q: "How do you tie all the log lines from one request together?"
+    options:
+      - text: "Generate a request/correlation ID at the edge, store it in the context, and attach it to every log line (and pass it to downstream services)"
+        correct: true
+      - text: "Sort logs by timestamp and hope"
+        correct: false
+      - text: "Use a global mutable variable for the current request"
+        correct: false
+      - text: "It's impossible across goroutines"
+        correct: false
+    explain: "A correlation/request ID created at the entry point and carried in the context lets you filter the aggregator to one request's entire journey — across handlers, goroutines, and even other services (propagate it in a header). A request-scoped logger (logger.With('request_id', id)) attaches it automatically to every line, so you never pass it by hand."
+  - q: "Where should a containerized service write its logs?"
+    options:
+      - text: "To stdout/stderr — the container runtime and cluster collect them; the app shouldn't manage log files or rotation"
+        correct: true
+      - text: "To a local file the app rotates itself"
+        correct: false
+      - text: "Directly to a database"
+        correct: false
+      - text: "Nowhere; logging is optional in production"
+        correct: false
+    explain: "12-factor logs are an event stream: write to stdout/stderr and let the platform (Docker, Kubernetes + Fluent Bit/Vector) collect, route, and store them. App-managed log files break in ephemeral containers (they vanish with the Pod), complicate rotation, and couple the app to the filesystem. Emit the stream; let the infrastructure handle the rest."
+  - q: "What must you NOT put in logs?"
+    options:
+      - text: "Secrets and sensitive PII — tokens, passwords, full auth headers, card numbers — because logs are retained and widely readable"
+        correct: true
+      - text: "The log level"
+        correct: false
+      - text: "Timestamps"
+        correct: false
+      - text: "The request path"
+        correct: false
+    explain: "Logs flow to aggregators, get retained for months, and are visible to far more people than your database. Logging a token, password, full Authorization header, or PII leaks it broadly and persistently. Redact sensitive fields (slog.LogValuer / a redacting type), and never log raw request bodies or configs that contain secrets. See secrets management."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗂️ Analogy">
+A text log is a pile of handwritten notes; a structured log is a spreadsheet. With notes, finding "every failed payment for user 42 last Tuesday" means reading the whole pile. With a spreadsheet, it's a filter. In production — dozens of replicas emitting thousands of lines a second into one aggregator — you live and die by that filter. slog turns your notes into spreadsheet rows for free.
+</Callout>
+
+## Structured, leveled, queryable
+
+In a cluster, logs from every replica stream into one aggregator (Loki, Elasticsearch, Datadog). To be useful they must be **structured** — key/value fields a machine can index — not prose you grep. Go's standard `log/slog` does this with no dependency.
+
+<Mermaid code={String.raw`graph LR
+  APP["Go app<br/>slog → JSON → stdout"] --> RT["container runtime"]
+  RT --> COL["collector<br/>(Fluent Bit / Vector)"]
+  COL --> AGG["aggregator<br/>(Loki / ELK / Datadog)"]
+  AGG --> Q["query by field:<br/>level=error request_id=… status=500"]`} />
+
+## See it: slog with JSON, levels, and request-scoped fields
+
+A JSON logger, a level, and a sub-logger carrying a `request_id` on every line. This runs here (the timestamp is dropped so the output is deterministic — in production you keep it):
+
+<Playground client:visible title="slog.go" code={String.raw`package main
+
+import (
+	"log/slog"
+	"os"
+)
+
+func main() {
+	// JSON handler → stdout. ReplaceAttr drops "time" for reproducible output.
+	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{} // omit time in the demo
+			}
+			return a
+		},
+	})
+	logger := slog.New(h)
+
+	// A request-scoped logger: every line it emits carries these fields.
+	reqLog := logger.With("request_id", "req-abc123", "user", 42)
+
+	reqLog.Info("handling request", "method", "POST", "path", "/orders")
+	reqLog.Warn("slow dependency", "dep", "payments", "latency_ms", 820)
+	reqLog.Error("request failed", "status", 500, "err", "payment declined")
+
+	logger.Debug("not shown — below the Info level") // filtered out
+}`} />
+
+Each line is JSON with `level`, `msg`, `request_id`, `user`, and event-specific fields — exactly what an aggregator indexes. The `Debug` line is filtered by the level. `With()` builds the request-scoped logger so you never repeat the `request_id`.
+
+## Correlation IDs across the request
+
+The one field that makes logs powerful is a **correlation/request ID**: generate it at the edge (or read an incoming `X-Request-ID`), stash it in the `context`, and attach it to every log line. Then the aggregator can show one request's entire journey — across handlers, goroutines, and downstream services (propagate the ID in a header). This is the logging half of what [distributed tracing](/cloud/distributed-tracing/) formalizes.
+
+```go
+// Middleware: derive a request-scoped logger and put it in the context.
+func withLogger(base *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" { id = newID() }
+		l := base.With("request_id", id, "method", r.Method, "path", r.URL.Path)
+		ctx := context.WithValue(r.Context(), loggerKey{}, l)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+```
+
+<Callout type="go" title="🐹 Log to stdout, let the platform route it">
+Don't open log files or manage rotation in a containerized app — write the event stream to <strong>stdout/stderr</strong> and let Kubernetes + a collector (Fluent Bit, Vector) ship it. App-managed files vanish with the Pod and couple you to a filesystem you don't own. Set the <strong>level via config</strong> (env var) so you can turn on debug logging without a redeploy, use a single JSON handler app-wide, and pass the request-scoped logger through the <code>context</code> rather than a global. See <a href="/stdlib/structured-logging/">slog in the stdlib track</a> for the full API.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Logs are not metrics — and they can leak secrets">
+Two traps. First, <strong>don't count with logs</strong>: parsing log lines to compute request rates or error percentages is slow and expensive — that's what <a href="/cloud/metrics-with-prometheus/">metrics</a> are for. Logs are for individual events you investigate; metrics are for aggregates you alert on. Second, logs are <strong>retained and widely readable</strong>, so never log secrets or sensitive PII — tokens, passwords, full <code>Authorization</code> headers, card numbers. Redact with a <code>slog.LogValuer</code> type, and never dump a raw request or config that contains them.
+</Callout>
+
+## See also
+
+- [Structured logging (stdlib)](/stdlib/structured-logging/) — the full slog API and handlers.
+- [Metrics with Prometheus](/cloud/metrics-with-prometheus/) — aggregates and alerting, not events.
+- [Distributed tracing](/cloud/distributed-tracing/) — correlation IDs taken to the next level.
+- [Secrets management](/security/secrets-management/) — keeping secrets out of the log stream.
+
+Next: counting and timing with metrics — [metrics with Prometheus](/cloud/metrics-with-prometheus/).
