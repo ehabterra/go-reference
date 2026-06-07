@@ -682,3 +682,13 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 
 /* Arabic alignment for quiz option buttons (text-align doesn't inherit dir) */
 [dir="rtl"] .dp-opt { text-align: right; }
+
+/* ---------- glossary ---------- */
+.dp-gloss-sec { margin: 2.2rem 0; }
+.dp-gloss { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); margin: 1rem 0 0; }
+.dp-gloss__item { border: 1px solid var(--dp-border); border-radius: var(--dp-radius); padding: .85rem 1rem; background: var(--dp-surface); }
+.dp-gloss__term { font-weight: 700; color: var(--dp-text); display: flex; align-items: center; gap: .4rem; }
+.dp-gloss__link { color: var(--dp-accent); text-decoration: none; font-weight: 700; }
+.dp-gloss__link:hover { text-decoration: underline; }
+.dp-gloss__def { margin: .35rem 0 0; color: var(--dp-muted); font-size: .92rem; line-height: 1.5; }
+.dp-gloss__def code { font-size: .85em; }
