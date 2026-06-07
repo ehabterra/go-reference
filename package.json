@@ -6,7 +6,7 @@
   "description": "The Go Reference — a visual, Go-first guide to design patterns and concurrency.",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/write-assetsignore.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },
