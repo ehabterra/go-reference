@@ -81,7 +81,7 @@ Microservices trade in-process simplicity for **independent deployment, scaling,
 
 ## Boundaries follow business capabilities
 
-Draw boundaries around **bounded contexts** — cohesive business capabilities that change together and own their data:
+Draw boundaries around **bounded contexts** — a core idea from **Domain-Driven Design (DDD)**. A bounded context is a self-contained slice of the business with its own model and vocabulary (an `Order` means something specific inside *Orders*, something else inside *Shipping*): cohesive within, loosely coupled to others, owning its own data. DDD is a deep topic in its own right and well worth reading up on — start with <a href="https://martinfowler.com/bliki/BoundedContext.html" target="_blank" rel="noopener">Martin Fowler's "Bounded Context"</a> and his <a href="https://martinfowler.com/tags/domain%20driven%20design.html" target="_blank" rel="noopener">DDD writing</a>, or Eric Evans's book *Domain-Driven Design*. Draw service boundaries to follow these contexts:
 
 <Mermaid code={String.raw`graph TD
   GW["API gateway"] --> ORD["Orders<br/>(owns orders DB)"]

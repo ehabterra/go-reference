@@ -77,7 +77,7 @@ Shipping a Go service in a full Linux image is mailing a screwdriver inside a pa
 
 ## What Docker actually is
 
-A **container** packages your application together with everything it needs to run — the binary, files, and a minimal OS userland — into one **image** that runs identically on any machine with a container runtime. **Docker** is the standard tool for building and running them; you describe the image in a **`Dockerfile`** (a recipe of steps), run `docker build` to produce the image, push it to a **registry**, and Kubernetes (or `docker run`) pulls and runs it. New to it? Think "a `go build` that also packages the OS around your binary."
+A **container** packages your application together with everything it needs to run — the binary, files, and a minimal OS userland — into one **image** that runs identically on any machine with a container runtime. **Docker** is the standard tool for building and running them; you describe the image in a **`Dockerfile`** (a recipe of steps), run `docker build` to produce the image, push it to a **registry**, and Kubernetes (or `docker run`) pulls and runs it. New to it? Think "a `go build` that also packages the OS around your binary." To learn Docker and Kubernetes themselves (they're whole topics beyond this Go-focused page), see the official <a href="https://docs.docker.com/get-started/" target="_blank" rel="noopener">Docker</a> and <a href="https://kubernetes.io/docs/home/" target="_blank" rel="noopener">Kubernetes</a> docs.
 
 ## The multi-stage build
 

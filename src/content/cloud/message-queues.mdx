@@ -77,7 +77,7 @@ A synchronous call is handing a colleague a task and standing at their desk unti
 
 ## Why a queue
 
-A **message broker** is middleware that receives messages from producers, stores them durably, and delivers them to consumers — decoupling the two. Putting a broker (**NATS** and **Kafka** are popular cloud-native ones; RabbitMQ and cloud SQS are others) between services turns a synchronous, fragile call into **asynchronous, decoupled** communication:
+A **message broker** is middleware that receives messages from producers, stores them durably, and delivers them to consumers — decoupling the two. Putting a broker (**NATS** — <a href="https://docs.nats.io/" target="_blank" rel="noopener">nats.io</a> — and **Kafka** — <a href="https://kafka.apache.org/documentation/" target="_blank" rel="noopener">kafka.apache.org</a> — are popular cloud-native ones; RabbitMQ and cloud SQS are others) between services turns a synchronous, fragile call into **asynchronous, decoupled** communication:
 
 - **Decoupling** — the producer publishes and moves on; it doesn't wait for, or depend on, the consumer being up.
 - **Buffering** — the queue absorbs bursts so the consumer works at a steady rate.

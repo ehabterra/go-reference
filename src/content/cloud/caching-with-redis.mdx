@@ -77,7 +77,7 @@ A cache is the stack of frequently-used files on your desk versus the filing cab
 
 ## Cache-aside: the default pattern
 
-**Redis** is an in-memory key–value store — data lives in RAM, so reads and writes are sub-millisecond — commonly used as a cache in front of a slower database (and also for sessions, rate limiters, and queues). The most common caching pattern is **cache-aside (lazy loading)**: the app checks the cache, and on a miss loads from the database and populates the cache.
+**Redis** is an in-memory key–value store — data lives in RAM, so reads and writes are sub-millisecond — commonly used as a cache in front of a slower database (and also for sessions, rate limiters, and queues); learn it at <a href="https://redis.io/docs/latest/" target="_blank" rel="noopener">redis.io</a>. The most common caching pattern is **cache-aside (lazy loading)**: the app checks the cache, and on a miss loads from the database and populates the cache.
 
 <Mermaid code={String.raw`graph TD
   R["read(key)"] --> C{"in cache?"}

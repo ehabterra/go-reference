@@ -27,7 +27,10 @@ function initScroll() {
 /* ---------- scroll reveal ---------- */
 function initReveal() {
   if (reduceMotion || !('IntersectionObserver' in window)) return;
-  const sel = '.dp-card, .dp-feature, .dp-callout, .dp-topic, .dp-section-head, .dp-tradeoffs, .dp-quiz, .dp-overall, .dp-mermaid, .dp-pg';
+  // NOTE: .dp-pg is intentionally excluded — it is the root of a hydrated React
+  // island (the Playground). Mutating it here (adding classes / inline style)
+  // before hydration causes a React hydration mismatch, so leave it alone.
+  const sel = '.dp-card, .dp-feature, .dp-callout, .dp-topic, .dp-section-head, .dp-tradeoffs, .dp-quiz, .dp-overall, .dp-mermaid';
   const els = Array.from(document.querySelectorAll(`main ${sel}`));
   if (!els.length) return;
   const io = new IntersectionObserver((entries) => {

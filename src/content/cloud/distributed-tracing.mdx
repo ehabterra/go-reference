@@ -132,7 +132,7 @@ Every span shares the one `trace=trace-7f3a` because the ID propagates through `
 
 ## OpenTelemetry does this for real
 
-You don't hand-roll tracers. **OpenTelemetry** is the vendor-neutral standard: instrument once, export to any backend (Jaeger, Tempo, Datadog). Its Go libraries auto-instrument `net/http`, gRPC, and `database/sql` (fenced — third-party SDK):
+You don't hand-roll tracers. **OpenTelemetry** (<a href="https://opentelemetry.io/docs/languages/go/" target="_blank" rel="noopener">opentelemetry.io</a>) is the vendor-neutral standard: instrument once, export to any backend (Jaeger, Tempo, Datadog). Its Go libraries auto-instrument `net/http`, gRPC, and `database/sql` (fenced — third-party SDK):
 
 ```go
 // otelhttp wraps a handler: it extracts traceparent, starts a server span,
