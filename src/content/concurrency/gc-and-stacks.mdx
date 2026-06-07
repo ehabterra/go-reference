@@ -193,24 +193,53 @@ Fewer escapes means fewer heap allocations means less GC work — which is why e
 
 ## sync.Pool: reuse instead of re-allocate
 
-When you *must* allocate repeatedly on a hot path (per-request buffers, encoders), `sync.Pool` lets goroutines **reuse** objects instead of minting new garbage each time, cutting GC pressure. Pooled objects can be reclaimed by the GC between cycles, so it's a cache, not a guarantee — always reset state on `Get`.
+When you *must* allocate repeatedly on a hot path (per-request buffers, encoders), `sync.Pool` lets goroutines **reuse** objects instead of minting new garbage each time, cutting GC pressure. Pooled objects can be reclaimed by the GC between cycles, so it's a cache, not a guarantee — always reset state on `Get`. This runs here, and the allocation counts tell the whole story:
 
-```go
-var bufPool = sync.Pool{
-	New: func() any { return new(bytes.Buffer) },
+<Playground client:visible title="pool.go" code={String.raw`package main
+
+import (
+	"bytes"
+	"fmt"
+	"runtime"
+	"sync"
+)
+
+var bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func mallocs() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.Mallocs // cumulative count of heap objects allocated
 }
 
-func handle(w io.Writer, data []byte) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	buf.Reset()             // pooled objects are dirty — reset!
-	defer bufPool.Put(buf)  // return for the next caller
+func main() {
+	const n = 100_000
 
-	buf.Write(data)
-	buf.WriteTo(w)
-}
-```
+	// Without a pool: a fresh buffer every call → n allocations.
+	a := mallocs()
+	for i := 0; i < n; i++ {
+		buf := new(bytes.Buffer)
+		buf.WriteString("hello")
+		_ = buf.Len()
+	}
+	fmt.Printf("no pool: ~%d heap allocations\n", mallocs()-a)
 
-See the [`sync` package](/concurrency/sync-package/) for the full API and when pooling actually pays off (it can *hurt* for cheap or rarely-reused objects).
+	// With a pool: reuse buffers → near-zero allocations after warmup.
+	for i := 0; i < 1000; i++ { // warm the pool
+		bufPool.Put(bufPool.Get())
+	}
+	c := mallocs()
+	for i := 0; i < n; i++ {
+		buf := bufPool.Get().(*bytes.Buffer)
+		buf.Reset()             // pooled objects are dirty — reset!
+		buf.WriteString("hello")
+		_ = buf.Len()
+		bufPool.Put(buf)        // return for the next caller
+	}
+	fmt.Printf("pooled:  ~%d heap allocations (same %d calls)\n", mallocs()-c, n)
+}`} />
+
+The pooled loop does the same work with **near-zero** allocations — that's the GC pressure you've removed. See the [`sync` package](/concurrency/sync-package/) for the full API and when pooling actually pays off (it can *hurt* for cheap or rarely-reused objects).
 
 ## Watch the GC work — deterministically
 
