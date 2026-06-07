@@ -1,0 +1,200 @@
+---
+title: "Input Validation & Injection Defense"
+category: defense
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "The bug class behind most breaches — why injection happens (mixing data with code), and the structural fixes: parameterized queries, html/template auto-escaping, allowlist validation, and safe path handling."
+related:
+  - fuzzing-for-bugs
+  - authentication-and-authorization
+  - secrets-management
+quiz:
+  - q: "What is the root cause shared by SQL injection, command injection, and XSS?"
+    options:
+      - text: "Untrusted data is mixed into a command/query/markup string, so the data is interpreted as code or control"
+        correct: true
+      - text: "The server is too slow"
+        correct: false
+      - text: "Using HTTPS incorrectly"
+        correct: false
+      - text: "Weak passwords"
+        correct: false
+    explain: "Every injection is the same bug: data crosses into a context where it's interpreted as instructions. A username becomes part of a SQL statement, a filename becomes part of a shell command, a comment becomes part of HTML. The structural fix is to keep data and code separate — parameterized queries, argument arrays, and context-aware escaping — never string concatenation."
+  - q: "What is the correct defense against SQL injection in Go?"
+    options:
+      - text: "Parameterized queries — db.Query(\"... WHERE id = ?\", id) — so the driver sends the SQL and the values separately and the value is never parsed as SQL"
+        correct: true
+      - text: "Escaping quotes in the user input with strings.Replace"
+        correct: false
+      - text: "Rejecting any input containing the word SELECT"
+        correct: false
+      - text: "Base64-encoding the query"
+        correct: false
+    explain: "Parameterized (prepared) queries with placeholders (? or $1) send the query structure and the parameter values over separate channels, so the value can never change the query's meaning. Manual quote-escaping is fragile and bypassable; blocklisting keywords breaks legitimate input and misses encodings. database/sql parameterizes by default — just never fmt.Sprintf user data into SQL."
+  - q: "Why use html/template instead of text/template (or string concatenation) to render web pages?"
+    options:
+      - text: "html/template is context-aware: it auto-escapes data differently inside HTML, attributes, JS, and URLs, neutralizing XSS automatically"
+        correct: true
+      - text: "html/template is faster"
+        correct: false
+      - text: "text/template cannot render HTML at all"
+        correct: false
+      - text: "It encrypts the output"
+        correct: false
+    explain: "html/template understands where each value lands — HTML body, an attribute, a <script>, a URL — and applies the right escaping for that context, so <script>alert(1)</script> becomes inert text. text/template does no escaping (XSS waiting to happen), and manual escaping inevitably misses a context. Always render HTML with html/template."
+  - q: "What is the right way to validate untrusted input — allowlist or blocklist?"
+    options:
+      - text: "Allowlist — define exactly what IS permitted (format, length, charset, range) and reject everything else"
+        correct: true
+      - text: "Blocklist — list the bad patterns and allow the rest"
+        correct: false
+      - text: "Neither; rely on the database to reject bad input"
+        correct: false
+      - text: "Always trust input from authenticated users"
+        correct: false
+    explain: "Blocklists are a losing game: attackers find encodings, cases, and patterns you didn't list. An allowlist defines the small set of valid inputs (e.g. 'a UUID', 'an int 1–100', 'these enum values') and rejects everything else — secure by default. Validate type, length, format, and range as early as possible, and re-validate at trust boundaries."
+  - q: "How do you safely build a file path from a user-supplied name (avoid path traversal)?"
+    options:
+      - text: "Clean the joined path and verify it still lives under the intended base directory; reject if it escapes (e.g. via ../)"
+        correct: true
+      - text: "Just concatenate base + '/' + userInput"
+        correct: false
+      - text: "Trust it if it doesn't start with /"
+        correct: false
+      - text: "Replace only the first ../ occurrence"
+        correct: false
+    explain: "Path traversal (../../etc/passwd) escapes the intended directory. The fix: filepath.Join then filepath.Clean the result and confirm it's still prefixed by the cleaned base directory; reject otherwise. Naive concatenation or single-pass ../ stripping is bypassable (....// collapses to ../). Better still, map user input to an ID and look up the real path server-side."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎭 Analogy">
+Injection is a con artist slipping a forged instruction into a stack of paperwork you'll act on without reading. "Name: Robert'); DROP TABLE students;" only works because the clerk pastes the name straight into a command. The fix isn't to scan for suspicious names — it's to never let the data into the instruction slot at all: hand the form and the values to the processor separately, so a value can never become a command. Every injection defense is a version of that one move.
+</Callout>
+
+## One bug, many names
+
+SQL injection, command injection, XSS, LDAP injection, path traversal, header injection — they're the **same vulnerability** wearing different clothes: **untrusted data crosses into a context where it's interpreted as code or control.**
+
+<Mermaid code={String.raw`graph TD
+  U["untrusted input"] --> MIX{"mixed into…"}
+  MIX -->|SQL string| SQLI["SQL injection"]
+  MIX -->|shell command| CMDI["command injection"]
+  MIX -->|HTML markup| XSS["cross-site scripting"]
+  MIX -->|file path| TRAV["path traversal"]
+  SQLI --> FIX["FIX: separate data from code"]
+  CMDI --> FIX
+  XSS --> FIX
+  TRAV --> FIX`} />
+
+The cure is structural and the same everywhere: **keep data out of the code channel.** Parameterized queries for SQL, argument arrays for commands, context-aware escaping for HTML, validated paths for files.
+
+## SQL injection → parameterized queries
+
+Never build SQL by concatenation. `database/sql` placeholders send the query and the values on separate channels, so a value can't change the query:
+
+```go
+// ❌ VULNERABLE: user input becomes part of the SQL.
+q := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", name) // name = "' OR '1'='1"
+db.Query(q)
+
+// ✅ SAFE: the driver sends ? and the value separately; the value is never parsed as SQL.
+db.Query("SELECT * FROM users WHERE name = ?", name)
+```
+
+That's the whole fix — the `?` placeholder. No escaping, no blocklist. (See [database/sql](/web/sql-transactions/).)
+
+## Command injection → no shell, argument arrays
+
+```go
+// ❌ VULNERABLE: a shell parses the whole string. input = "x; rm -rf /"
+exec.Command("sh", "-c", "ping "+input).Run()
+
+// ✅ SAFE: no shell; the argument is one opaque element, never re-parsed.
+exec.Command("ping", "-c", "1", input).Run()
+```
+
+`os/exec` doesn't use a shell unless you invoke one — pass arguments as separate elements and `; | $()` are just literal characters. (See [processes & exec](/systems/processes-and-exec/).)
+
+## See it: XSS defense with html/template
+
+`html/template` is **context-aware** — it escapes data correctly for wherever it lands. This runs here: the `<script>` payload comes out as inert text, not executable markup:
+
+<Playground client:visible title="xss.go" code={String.raw`package main
+
+import (
+	"html/template"
+	"os"
+)
+
+func main() {
+	// html/template knows {{.}} is in an HTML body and escapes accordingly.
+	page := template.Must(template.New("p").Parse("<p>Comment: {{.}}</p>"))
+
+	// A malicious comment a user submitted.
+	evil := "<script>steal(document.cookie)</script>"
+
+	// The script tags are neutralized into harmless text — XSS defused.
+	page.Execute(os.Stdout, evil)
+}`} />
+
+The output escapes `<script>` to `&lt;script&gt;`, so the browser renders it as text instead of running it. `text/template` would emit it raw — an XSS hole. Always render HTML with `html/template`.
+
+## See it: safe path handling
+
+User-supplied filenames invite path traversal (`../../etc/passwd`). The fix is to clean the joined path and confirm it stays under your base directory. This runs here:
+
+<Playground client:visible title="path.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
+
+// safeJoin returns base+name only if the result stays inside base.
+func safeJoin(base, name string) (string, bool) {
+	full := filepath.Clean(filepath.Join(base, name))
+	cleanBase := filepath.Clean(base)
+	if full != cleanBase && !strings.HasPrefix(full, cleanBase+string(filepath.Separator)) {
+		return "", false
+	}
+	return full, true
+}
+
+func main() {
+	base := "/srv/files"
+	for _, name := range []string{"report.pdf", "sub/data.csv", "../../etc/passwd", "../secret"} {
+		if p, ok := safeJoin(base, name); ok {
+			fmt.Printf("%-18s -> serve %s\n", name, p)
+		} else {
+			fmt.Printf("%-18s -> REJECT (escapes base)\n", name)
+		}
+	}
+}`} />
+
+The `../` payloads are rejected because the cleaned path no longer lives under `/srv/files`. Even better when you can: don't take a path from the user at all — map an ID to a server-side path.
+
+## Validate with an allowlist
+
+Beyond the injection-specific fixes, validate every input at the boundary with an **allowlist**: define exactly what's valid (type, length, charset, range, enum) and reject the rest. Blocklists ("strip `<script>`") always lose to an encoding you didn't think of.
+
+<Callout type="go" title="🐹 Defense in depth: validate, parameterize, escape, least-privilege">
+No single layer is enough — stack them. <strong>Validate</strong> input with an allowlist at the edge. <strong>Parameterize</strong> every query and use argument arrays for commands. <strong>Escape</strong> output for its context with <code>html/template</code>. And run with <strong>least privilege</strong> (a DB user that can't DROP, a process that can't write outside its dir) so even a missed bug has a small blast radius. The <a href="/security/fuzzing-for-bugs/">fuzzer</a> finds the inputs you forgot to validate; the parameterized query makes them harmless anyway.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ 'Sanitizing' by stripping bad characters is a trap">
+The instinct to "clean" input by deleting or escaping dangerous characters yourself is how injection bugs survive. Attackers bypass it with double-encoding (<code>%252e%252e</code>), alternate representations (<code>&#x27;</code> for a quote), nested patterns (<code>..../</code> that collapses to <code>../</code>), or a context you didn't handle. The robust answer is never to filter the data but to <em>change the channel</em>: parameterized queries, argument arrays, context-aware templates. Treat input as opaque values, not strings to scrub.
+</Callout>
+
+## See also
+
+- [Fuzzing for bugs](/security/fuzzing-for-bugs/) — find the unvalidated boundaries automatically.
+- [Web security (web track)](/web/web-security/) — XSS, CSRF, security headers in depth.
+- [database/sql & transactions](/web/sql-transactions/) — parameterized queries in practice.
+- [Authentication & authorization](/security/authentication-and-authorization/) — the next defensive layer.
+
+Next: deciding who someone is and what they may do — [authentication & authorization](/security/authentication-and-authorization/).

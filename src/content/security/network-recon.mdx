@@ -1,0 +1,191 @@
+---
+title: "Network Recon & Service Detection"
+category: offensive
+kind: topic
+order: 4.5
+difficulty: "Intermediate"
+status: ready
+intent: "Turning open ports into a picture of a network — service and version detection, OS fingerprinting, banner analysis, and assembling a recon report — plus the defenses that reveal less."
+related:
+  - port-scanning
+  - dns-enumeration
+  - http-recon
+quiz:
+  - q: "What does 'service detection' add on top of knowing a port is open?"
+    options:
+      - text: "It identifies WHICH software and version is listening — turning 'port 22 open' into 'OpenSSH 8.2', which maps to specific known vulnerabilities"
+        correct: true
+      - text: "It closes the port"
+        correct: false
+      - text: "It encrypts the connection"
+        correct: false
+      - text: "It tells you the user's password"
+        correct: false
+    explain: "A port number is only a hint (22 is usually SSH, but anything can listen anywhere). Service/version detection probes the actual software — reading banners, sending protocol-specific requests — to identify it precisely. 'OpenSSH 8.2p1' or 'nginx 1.18' is what an attacker maps to a CVE list and a defender uses to find what needs patching."
+  - q: "How does passive OS fingerprinting guess a host's operating system?"
+    options:
+      - text: "From subtle defaults in its TCP/IP stack — initial TTL, TCP window size, and option ordering differ between Linux, Windows, and BSD"
+        correct: true
+      - text: "By reading the OS name from an HTTP header"
+        correct: false
+      - text: "By asking the host politely"
+        correct: false
+      - text: "It is impossible to guess the OS"
+        correct: false
+    explain: "Different OSes ship different TCP/IP stack defaults: initial TTL (64 for Linux/macOS, 128 for Windows), default TCP window size, and the order of TCP options. Observing these in a host's packets lets tools like p0f/nmap guess the OS without sending anything unusual. It's a fingerprint, not a guarantee — but often accurate."
+  - q: "Why combine multiple recon sources (scan + banners + DNS + passive data)?"
+    options:
+      - text: "Each source has blind spots; together they build a fuller, cross-validated map of the attack surface than any one alone"
+        correct: true
+      - text: "To send more packets"
+        correct: false
+      - text: "Because one source is always wrong"
+        correct: false
+      - text: "It is required by law"
+        correct: false
+    explain: "A port scan finds listening services but not vhosts; DNS finds hostnames but not which are alive; certificate-transparency finds names you'd never guess; banners reveal versions. Correlating them — and noting disagreements — produces a far richer picture and catches things a single technique misses. Good recon is synthesis, not a single tool."
+  - q: "A defender wants to reveal less to service detection. What's the most effective step?"
+    options:
+      - text: "Reduce the attack surface (fewer exposed services) and patch — genericizing banners is minor next to simply having less to find and nothing outdated"
+        correct: true
+      - text: "Change the SSH banner string to 'nope'"
+        correct: false
+      - text: "Block ICMP only"
+        correct: false
+      - text: "Run services on random high ports"
+        correct: false
+    explain: "Banner obfuscation and odd ports are obscurity — they slow a scanner slightly but don't stop version detection (protocol behavior still fingerprints the software). The real wins are reducing exposure (close/firewall services, put them behind a VPN) and patching so that even a perfect fingerprint finds nothing exploitable. Obscurity is a thin extra layer, not the defense."
+  - q: "What is a TCP proxy / port forwarder used for in a network context?"
+    options:
+      - text: "Relaying traffic between a client and a destination — legitimately for tunneling/load-balancing, and by attackers for pivoting through a compromised host"
+        correct: true
+      - text: "Encrypting all network traffic by default"
+        correct: false
+      - text: "Scanning ports faster"
+        correct: false
+      - text: "Generating TLS certificates"
+        correct: false
+    explain: "A TCP proxy copies bytes bidirectionally between two connections (io.Copy in each direction). It's the basis of legitimate tools (tunnels, load balancers, dev proxies) and, for an attacker who's compromised a host, a way to 'pivot' — reach internal systems by relaying through the foothold. Understanding it helps defenders spot pivoting (unexpected internal connections from a DMZ host)."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧭 Analogy">
+A [port scan](/security/port-scanning/) tells you which doors are unlocked. Recon is walking through and figuring out what each room <em>is</em> — this one's a kitchen (SSH 8.2), that one's an old storeroom with a broken latch (an unpatched service), and the whole building smells like a 2018 Linux box. Open ports are data points; recon turns them into a map an attacker (or defender) can reason about.
+</Callout>
+
+## From open ports to a service map
+
+Knowing port 22 is open is barely useful — anything can listen on any port. **Service detection** identifies the actual software and version, which is what maps to vulnerabilities:
+
+<Mermaid code={String.raw`graph LR
+  SCAN["open ports<br/>22, 80, 8080"] --> PROBE["probe each<br/>(banner + protocol)"]
+  PROBE --> ID["identify service+version<br/>OpenSSH 8.2 · nginx 1.18"]
+  ID --> OS["OS fingerprint<br/>(TTL, window, options)"]
+  OS --> MAP["recon report<br/>(hosts → services → risks)"]`} />
+
+Two techniques do most of the work:
+
+- **Banner & protocol probing.** Read what a service announces on connect, or send a protocol-specific request and read the reply. SSH and SMTP greet you with a version; HTTP answers a `HEAD` with a `Server` header. ([port scanning](/security/port-scanning/) showed the raw banner read.)
+- **OS fingerprinting.** A host's TCP/IP stack leaks its OS through defaults: initial **TTL** (≈64 Linux/macOS, ≈128 Windows), default **window size**, and TCP **option ordering**. Observe those and you can often guess the OS — passively, without an unusual packet.
+
+## See it: build a recon report
+
+Recon is synthesis — correlate observations into a picture and flag what's risky. This runs here: it classifies services from (port, banner) observations, infers the OS from a TTL, and reports outdated software, exactly as a recon tool's output stage does:
+
+<Playground client:visible title="recon.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+type obs struct {
+	port   int
+	banner string
+}
+
+func classify(o obs) (service, note string) {
+	b := strings.ToLower(o.banner)
+	switch {
+	case strings.Contains(b, "openssh"):
+		service = "SSH"
+		if strings.Contains(b, "7.") {
+			note = "OUTDATED — upgrade"
+		}
+	case strings.Contains(b, "nginx"), strings.Contains(b, "apache"):
+		service = "HTTP server"
+	case strings.Contains(b, "mysql"):
+		service = "database (EXPOSED!)"
+	default:
+		service = "unknown"
+	}
+	return
+}
+
+func osFromTTL(ttl int) string {
+	switch {
+	case ttl <= 64:
+		return "Linux/macOS (TTL~64)"
+	case ttl <= 128:
+		return "Windows (TTL~128)"
+	default:
+		return "network device (TTL~255)"
+	}
+}
+
+func main() {
+	host := "10.0.0.5"
+	observations := []obs{
+		{22, "SSH-2.0-OpenSSH_7.4"},
+		{80, "nginx/1.18.0"},
+		{3306, "5.7.33-MySQL"},
+	}
+	fmt.Printf("host %s — likely %s\n", host, osFromTTL(64))
+	sort.Slice(observations, func(i, j int) bool { return observations[i].port < observations[j].port })
+	for _, o := range observations {
+		svc, note := classify(o)
+		line := fmt.Sprintf("  %d/tcp  %-18s %s", o.port, svc, o.banner)
+		if note != "" {
+			line += "  <-- " + note
+		}
+		fmt.Println(line)
+	}
+}`} />
+
+The report flags an **outdated OpenSSH** and a **database exposed to the network** — the two findings a defender most wants surfaced. Real tools (nmap with `-sV`/`-O`) automate the probing; the value you add is correlation and prioritization.
+
+## Pivoting and the TCP proxy
+
+A **TCP proxy** copies bytes bidirectionally between two connections — `io.Copy` in each direction. It's a legitimate building block (tunnels, load balancers, dev proxies), and it's also how an attacker who has compromised one host **pivots** to reach internal systems by relaying through their foothold (fenced — needs real sockets):
+
+```go
+// A minimal TCP forwarder: client <-> destination.
+func handle(client net.Conn) {
+	dst, err := net.Dial("tcp", "internal-host:5432")
+	if err != nil { client.Close(); return }
+	go io.Copy(dst, client) // client -> destination
+	io.Copy(client, dst)    // destination -> client
+}
+```
+
+Knowing this shape helps defenders too: an outbound connection from a DMZ web server to an internal database, relayed through a process that shouldn't be proxying, is a classic pivot signature worth alerting on.
+
+<Callout type="go" title="🐹 Good recon is correlation, not a bigger scanner">
+The transferable skill here isn't sending more packets — it's <em>synthesis</em>. Combine your <a href="/security/port-scanning/">scan</a>, <a href="/security/dns-enumeration/">DNS</a>, <a href="/security/http-recon/">HTTP fingerprints</a>, and passive sources (certificate transparency, Shodan), dedupe, cross-validate, and prioritize by risk. A recon report that says "this old service on this internet-facing host has a known CVE" is worth a thousand raw open-port lines. Go's concurrency makes gathering cheap; your judgment makes it useful.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Fingerprints lie, and active probing is intrusive">
+Service and OS fingerprints are <em>guesses</em>: banners can be faked, a reverse proxy hides the real backend, and a hardened host spoofs its TTL. Don't treat a fingerprint as ground truth — verify before acting on it. And remember active version detection (sending protocol probes, OS-detection packets) is louder and more intrusive than a plain connect scan; some probes can even crash fragile embedded services. In authorized testing, throttle, prefer passive techniques first, and stay within your <a href="/security/security-mindset-and-ethics/">rules of engagement</a>.
+</Callout>
+
+## See also
+
+- [Port scanning](/security/port-scanning/) — finding the open ports recon then characterizes.
+- [DNS enumeration](/security/dns-enumeration/) — the hostnames that complete the map.
+- [HTTP recon](/security/http-recon/) — deep service detection for web servers.
+- [Packet analysis](/security/packet-analysis/) — the TTL/window signals behind OS fingerprinting.
+
+Next: discovering the hosts and names that make up a target — [DNS enumeration](/security/dns-enumeration/).

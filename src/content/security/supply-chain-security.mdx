@@ -1,0 +1,167 @@
+---
+title: "Supply-Chain Security"
+category: defense
+kind: topic
+order: 17
+difficulty: "Advanced"
+status: ready
+intent: "Securing everything your code depends on — module integrity via go.sum and the checksum database, govulncheck for known CVEs, minimizing dependencies, pinning, and defending against typosquatting and build-time attacks."
+related:
+  - secrets-management
+  - hashing-and-passwords
+  - building-security-tools
+quiz:
+  - q: "What does go.sum protect against?"
+    options:
+      - text: "Tampering — it records a cryptographic hash of every dependency version, so a modified or swapped module fails verification on download/build"
+        correct: true
+      - text: "Outdated dependencies"
+        correct: false
+      - text: "Slow builds"
+        correct: false
+      - text: "Syntax errors in dependencies"
+        correct: false
+    explain: "go.sum pins the expected hash of each module version (and its go.mod). On download, the Go toolchain verifies the content matches; a mismatch (a tampered proxy, a hijacked version) aborts the build. Combined with the public checksum database (sum.golang.org), it ensures everyone who builds your module gets the exact same, unmodified dependencies. Commit go.sum."
+  - q: "What is the Go checksum database (GOSUMDB / sum.golang.org)?"
+    options:
+      - text: "A global, append-only, transparency-logged record of module hashes the toolchain checks against — so a malicious mirror can't serve you a different module than everyone else got"
+        correct: true
+      - text: "A list of vulnerable packages"
+        correct: false
+      - text: "A faster module download mirror"
+        correct: false
+      - text: "A registry of package authors"
+        correct: false
+    explain: "sum.golang.org is a transparency log (like Certificate Transparency) of every module version's hash. The first time anyone fetches a version, its hash is recorded immutably; later fetches are verified against it. So even a compromised module proxy can't silently serve you a tampered version — it would mismatch the global log. It's a key defense against supply-chain swaps."
+  - q: "What does `govulncheck` do that a plain dependency list doesn't?"
+    options:
+      - text: "It reports known vulnerabilities (from the Go vuln database) AND uses call-graph analysis to flag only the ones your code actually reaches — cutting noise"
+        correct: true
+      - text: "It updates all dependencies automatically"
+        correct: false
+      - text: "It rewrites vulnerable code"
+        correct: false
+      - text: "It encrypts your modules"
+        correct: false
+    explain: "govulncheck cross-references your dependencies against the official Go vulnerability database, then does static call-graph analysis to report only vulnerabilities in code paths you actually call — so you triage real exposure, not every CVE in a transitive dep you never invoke. Run it in CI to catch newly-disclosed vulns in code you already shipped."
+  - q: "What is typosquatting / dependency confusion?"
+    options:
+      - text: "An attacker publishes a malicious package with a name close to a real one (or matching an internal name) hoping you'll import the wrong one"
+        correct: true
+      - text: "A typo in your own variable names"
+        correct: false
+      - text: "Using too many dependencies"
+        correct: false
+      - text: "A misconfigured go.mod file"
+        correct: false
+    explain: "Typosquatting registers names like 'githib.com/...' or a popular package with one letter off. Dependency confusion publishes a public package matching your private/internal module name so a misconfigured resolver pulls the attacker's version. Defenses: verify import paths carefully, use a private proxy/GOPRIVATE for internal modules, and review new dependencies before adding them."
+  - q: "Why is 'minimize your dependencies' itself a security control?"
+    options:
+      - text: "Every dependency (and its transitive deps) is attack surface and trust you can't fully audit — fewer, well-vetted deps means less code that can betray you"
+        correct: true
+      - text: "Fewer dependencies make the binary prettier"
+        correct: false
+      - text: "Dependencies are always malicious"
+        correct: false
+      - text: "It is only about build speed"
+        correct: false
+    explain: "Each import is code you run with your privileges, plus everything it imports — a single popular package can pull in dozens of transitive modules, any of which could be compromised (as happened with event-stream, xz, etc.). The Go stdlib covers a lot, so prefer it; vet what you add; and prune what you don't use. Less third-party code is less that can be subverted."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚚 Analogy">
+You can build the most secure factory in the world, but if a supplier ships you sabotaged parts, your product is compromised before it leaves the door. Your dependencies are that supply chain: code you didn't write, running with your privileges, pulled from servers you don't control. Supply-chain security is checking the parts — verifying they're genuine (<code>go.sum</code>), recalled-free (<code>govulncheck</code>), and from suppliers you trust — because the attacker's easiest path is often through someone you import, not through you.
+</Callout>
+
+## Your dependencies are your attack surface
+
+A modern Go service imports dozens — sometimes hundreds — of modules transitively. Every one runs with your privileges, and recent history (the `xz` backdoor, npm's `event-stream`, countless typosquats) shows attackers increasingly target the *supply chain* rather than your code directly.
+
+<Mermaid code={String.raw`graph TD
+  YOU["your code"] --> D1["direct dep"]
+  D1 --> T1["transitive dep"]
+  D1 --> T2["transitive dep"]
+  T2 --> T3["transitive dep<br/>(who reviewed this?)"]
+  YOU --> GOSUM["go.sum<br/>(integrity)"]
+  YOU --> GVC["govulncheck<br/>(known CVEs)"]
+  GOSUM --> SAFE["verified, vuln-scanned build"]
+  GVC --> SAFE`} />
+
+Go gives you strong built-in defenses; the job is to use them.
+
+## Integrity: go.sum and the checksum database
+
+`go.sum` records a cryptographic hash of every module version (and its `go.mod`). On download, the toolchain verifies the content matches — a tampered or swapped module fails the build. The public **checksum database** (`sum.golang.org`) is a transparency log of those hashes, so even a malicious proxy can't serve you a different module than everyone else got.
+
+This runs here: a tiny model of what `go.sum` does — hash the module content, compare to the expected hash, and reject a tampered dependency:
+
+<Playground client:visible title="integrity.go" code={String.raw`package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+)
+
+// hash models the go.sum content hash of a module version.
+func hash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return "h1:" + hex.EncodeToString(h[:])[:16] // shortened for display
+}
+
+func main() {
+	// The hash recorded in go.sum when the dep was first added.
+	expected := hash("package mathutil; func Add(a,b int) int { return a+b }")
+
+	// What the proxy actually served on this build:
+	good := "package mathutil; func Add(a,b int) int { return a+b }"
+	evil := "package mathutil; func Add(a,b int) int { exfiltrate(); return a+b }"
+
+	for name, served := range map[string]string{"genuine": good, "tampered": evil} {
+		if hash(served) == expected {
+			fmt.Printf("%-9s -> hash OK, build proceeds\n", name)
+		} else {
+			fmt.Printf("%-9s -> HASH MISMATCH, build ABORTS\n", name)
+		}
+	}
+}`} />
+
+The tampered module — with an added `exfiltrate()` call — produces a different hash and is rejected, exactly as the real toolchain aborts on a `go.sum` mismatch. **Commit your `go.sum`**; it's how everyone who builds your code gets byte-identical dependencies.
+
+## Known vulnerabilities: govulncheck
+
+Integrity ensures you got the *intended* dependency — but the intended version may have a disclosed CVE. `govulncheck` cross-references your modules against the official Go vulnerability database and uses **call-graph analysis** to report only the vulnerabilities your code actually reaches:
+
+```bash
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...   # run in CI on every PR and on a schedule
+```
+
+Because it reports *reachable* vulns, you triage real exposure instead of every CVE in a transitive dependency you never call. Run it on a schedule too — a vuln disclosed today may be in code you shipped last month.
+
+## The habits that close the gaps
+
+- **Minimize dependencies.** Prefer the stdlib; vet anything you add; prune what you don't use. Less third-party code is less that can betray you.
+- **Pin and review.** `go.mod` pins versions; review the *diff* on upgrades, and be wary of a sudden maintainer change or a version that adds network/exec calls.
+- **Guard internal modules.** Set `GOPRIVATE`/a private proxy so internal module names can't be hijacked by a public **dependency-confusion** package.
+- **Watch the names.** Typosquats (`githib.com`, one-letter-off package names) rely on a careless import. Read import paths.
+- **Produce an SBOM** and automate updates (Dependabot/Renovate) so patches land fast.
+
+<Callout type="go" title="🐹 Go's supply-chain defenses are strong — turn them all on">
+Go ships more supply-chain security than most ecosystems: <code>go.sum</code> integrity, the <code>sum.golang.org</code> transparency log, minimal version selection (reproducible, no surprise upgrades), and first-party <code>govulncheck</code>. Use every one: commit <code>go.sum</code>, leave the checksum DB enabled, run <code>govulncheck ./...</code> in CI, set <code>GOPRIVATE</code> for internal code, and keep dependencies few and reviewed. Combined with static, dependency-free <a href="/security/building-security-tools/">binaries</a>, Go's distribution story is genuinely hard to attack.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ The build pipeline is part of the supply chain too">
+Integrity checks on dependencies don't help if the <em>build</em> is compromised. A leaked CI token, a malicious GitHub Action, or a developer laptop with a backdoored toolchain can inject code after verification (the SolarWinds pattern). Harden the pipeline: pin Actions to a commit SHA (not a mutable tag), give CI least-privilege scoped tokens, keep <a href="/security/secrets-management/">secrets</a> out of logs and forks, and consider reproducible builds and artifact signing (Sigstore/cosign) so you can prove what you shipped. The chain is only as strong as its weakest hop — and that hop is often CI, not your <code>go.mod</code>.
+</Callout>
+
+## See also
+
+- [Secrets management](/security/secrets-management/) — protecting the CI tokens and keys the pipeline uses.
+- [Building security tools](/security/building-security-tools/) — reproducible, static, signed binaries.
+- [Attacking weak crypto](/security/attacking-weak-crypto/) — govulncheck for vulnerable crypto libraries.
+- [The go toolchain (stdlib)](/stdlib/go-toolchain/) — modules, go.sum, and minimal version selection.
+
+That completes the Security track — from the [hacker mindset](/security/security-mindset-and-ethics/) through recon, cryptography, and defensive engineering. Next, take these practices into production with the [Cloud-native track](/).
