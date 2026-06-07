@@ -11,9 +11,9 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/cloudflare": "^12.6.13",
     "@astrojs/mdx": "^4.0.0",
     "@astrojs/react": "^4.0.0",
-    "@astrojs/vercel": "^8.2.11",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "astro": "^5.0.0",
@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@types/prismjs": "^1.26.6",
-    "cheerio": "^1.2.0"
+    "cheerio": "^1.2.0",
+    "wrangler": "^4.98.0"
   }
 }
