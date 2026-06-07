@@ -16,11 +16,6 @@ type Out = { text: string; kind: 'ok' | 'err' | '' };
 
 const highlight = (code: string) => Prism.highlight(code, Prism.languages.go, 'go');
 
-// Plain, deterministic escaping for the pre-hydration placeholder so the SSR
-// HTML and the first client render are byte-identical (no hydration mismatch).
-const escapeHtml = (s: string) =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
 const editorStyle = { fontFamily: 'var(--font-mono)', fontSize: '.86rem', lineHeight: 1.55 };
 
 export default function Playground({ code, title = 'main.go' }: Props) {
@@ -93,11 +88,18 @@ export default function Playground({ code, title = 'main.go' }: Props) {
           style={editorStyle}
         />
       ) : (
+        // Plain-text children (NOT dangerouslySetInnerHTML): the browser
+        // normalizes a <pre>'s innerHTML when parsing the SSR markup, so a
+        // dangerouslySetInnerHTML string no longer matches on hydration. A
+        // text node round-trips cleanly; suppressHydrationWarning covers any
+        // residual whitespace normalization until the editor mounts.
         <pre
           className="dp-pg__editor dp-pg__pre language-go"
           style={{ ...editorStyle, margin: 0, padding: 16 }}
-          dangerouslySetInnerHTML={{ __html: escapeHtml(src) }}
-        />
+          suppressHydrationWarning
+        >
+          {src}
+        </pre>
       )}
       {out.text && (
         <div className={`dp-pg__out ${out.kind === 'err' ? 'dp-pg__out--err' : out.kind === 'ok' ? 'dp-pg__out--ok' : ''}`}>
