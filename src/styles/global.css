@@ -289,32 +289,20 @@ img { max-width: 100%; }
 .dp-pg__bar { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .8rem; background: var(--dp-surface); border-bottom: 1px solid var(--dp-border); }
 .dp-pg__title { font-size: .8rem; color: var(--dp-muted); font-weight: 700; letter-spacing: .04em; }
 .dp-pg__actions { display: flex; gap: .5rem; }
-/* editable code: a transparent textarea overlaid on a syntax-highlighted layer.
-   Both share identical typography/padding/wrapping so the caret aligns with the
-   colored text underneath. */
-.dp-pg__editwrap { position: relative; }
-.dp-pg__hl, .dp-pg__editor {
-  margin: 0; border: 0; box-sizing: border-box; padding: 1rem;
-  font-family: var(--font-mono); font-size: .86rem; line-height: 1.55; tab-size: 4;
-  white-space: pre-wrap; word-break: keep-all; overflow-wrap: break-word;
-  min-height: 230px;
-}
-.dp-pg__hl { background: var(--dp-bg-2); color: #e9eef6; overflow: hidden; }
-.dp-pg__hl code { font: inherit; background: none; padding: 0; color: inherit; }
-.dp-pg__editor {
-  position: absolute; inset: 0; width: 100%; height: 100%; resize: none;
-  background: transparent; color: transparent; -webkit-text-fill-color: transparent;
-  caret-color: #e9eef6; overflow: auto;
-}
-.dp-pg__editor:focus { outline: none; }
-.dp-pg__editor::selection { background: rgba(120,160,255,.35); }
-/* Go token colors */
-.dp-pg__hl .hl-c  { color: #7c8aa0; font-style: italic; }
-.dp-pg__hl .hl-s  { color: #a5e8c0; }
-.dp-pg__hl .hl-k  { color: #c79bf0; }
-.dp-pg__hl .hl-cn { color: #f0a072; }
-.dp-pg__hl .hl-t  { color: #82aaff; }
-.dp-pg__hl .hl-n  { color: #f0a072; }
+/* editable code via react-simple-code-editor + Prism (Go). The lib overlays a
+   transparent textarea on a Prism-highlighted <pre>; we supply the dark theme. */
+.dp-pg__editor { background: var(--dp-bg-2); color: #e9eef6; min-height: 230px; overflow: auto; caret-color: #e9eef6; }
+.dp-pg__ta { outline: none; }
+.dp-pg__ta, .dp-pg__pre { tab-size: 4; }
+.dp-pg__pre, .dp-pg__pre * { font-family: var(--font-mono) !important; }
+/* Prism token colors (dark, matched to the site palette) */
+.dp-pg .token.comment, .dp-pg .token.prolog, .dp-pg .token.doctype, .dp-pg .token.cdata { color: #7c8aa0; font-style: italic; }
+.dp-pg .token.string, .dp-pg .token.char { color: #a5e8c0; }
+.dp-pg .token.keyword { color: #c79bf0; }
+.dp-pg .token.boolean, .dp-pg .token.number { color: #f0a072; }
+.dp-pg .token.function, .dp-pg .token.builtin, .dp-pg .token.class-name { color: #82aaff; }
+.dp-pg .token.operator, .dp-pg .token.punctuation { color: #9fb0c3; }
+.dp-pg .token.constant, .dp-pg .token.symbol { color: #f0a072; }
 .dp-pg__out { border-top: 1px solid var(--dp-border); padding: .85rem 1rem; font-family: ui-monospace, monospace; font-size: .82rem; white-space: pre-wrap; color: var(--dp-muted); max-height: 280px; overflow: auto; }
 .dp-pg__out--err { color: #fca5a5; }
 .dp-pg__out--ok { color: #b6f0d2; }
