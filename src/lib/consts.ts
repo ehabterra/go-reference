@@ -288,4 +288,20 @@ export const CLOUD_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Architecture categories (the journey on /architecture/). */
+export const ARCHITECTURE_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'arch-principles',
+    title: 'Principles & Modeling',
+    blurb:
+      'How to shape a system — modeling the domain with DDD, aggregates and repositories, and keeping business logic clean with ports & adapters.',
+  },
+  {
+    key: 'arch-structure',
+    title: 'Structure & Boundaries',
+    blurb:
+      'Where the lines go — an idiomatic Go project layout, and the modular-monolith-vs-microservices decision and how to evolve between them.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

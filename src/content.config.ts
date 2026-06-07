@@ -57,6 +57,9 @@ const refSchema = z.object({
     'observability',
     'messaging',
     'resilience',
+    // architecture categories
+    'arch-principles',
+    'arch-structure',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -137,4 +140,9 @@ const cloud = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals, systems, security, cloud };
+const architecture = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/architecture' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals, systems, security, cloud, architecture };

@@ -1,0 +1,170 @@
+---
+title: "Domain-Driven Design"
+category: arch-principles
+kind: guide
+order: 1
+difficulty: "Start here"
+status: ready
+intent: "Modeling software around the business — the ubiquitous language, bounded contexts, entities vs value objects, and when DDD's complexity pays off (and when it doesn't)."
+related:
+  - aggregates-and-repositories
+  - hexagonal-and-clean-architecture
+  - modular-monolith-vs-microservices
+quiz:
+  - q: "What is the 'ubiquitous language' in DDD?"
+    options:
+      - text: "A single shared vocabulary — used by domain experts AND in the code — so the model, conversations, and types all use the same terms"
+        correct: true
+      - text: "A programming language everyone on the team must use"
+        correct: false
+      - text: "English as the default for all code"
+        correct: false
+      - text: "A DSL you invent for configuration"
+        correct: false
+    explain: "The ubiquitous language is the team's shared domain vocabulary, used consistently by business experts and in the code itself (types, methods, packages named for domain concepts). When an analyst says 'a Policy lapses', there's a Policy type with a Lapse() method. Closing the gap between how the business talks and how the code is written is the heart of DDD — it kills the translation errors that breed bugs."
+  - q: "What's the difference between an Entity and a Value Object?"
+    options:
+      - text: "An Entity has a distinct identity that persists through changes (a User with an ID); a Value Object is defined only by its attributes and is interchangeable/immutable (Money, a Date range)"
+        correct: true
+      - text: "Entities are structs; value objects are interfaces"
+        correct: false
+      - text: "Entities are stored in a database; value objects never are"
+        correct: false
+      - text: "They are the same thing"
+        correct: false
+    explain: "An Entity is tracked by identity: two Users with the same name are still different users, and a User stays the same entity as its fields change. A Value Object has no identity — it's defined wholly by its values, so two Money{5,USD} are equal and interchangeable, and it's best made immutable. Modeling value objects (Money, Email, DateRange) as their own types — not bare strings/ints — is one of DDD's biggest practical wins."
+  - q: "What does a bounded context delimit?"
+    options:
+      - text: "A boundary within which a domain model and its ubiquitous language are consistent — the same word can mean different things in different contexts"
+        correct: true
+      - text: "The maximum size of a Go package"
+        correct: false
+      - text: "A database transaction's scope"
+        correct: false
+      - text: "The network boundary of a microservice"
+        correct: false
+    explain: "A bounded context is where one model and its language hold consistently. 'Customer' in the Sales context (a lead with a pipeline stage) is a different model from 'Customer' in Billing (an account with invoices). Forcing one giant shared model across the whole business produces a tangled mess; explicit bounded contexts let each part model its own concept. Contexts often map to packages, modules, or services."
+  - q: "Why model Money as its own value-object type instead of a float64 or int?"
+    options:
+      - text: "It enforces invariants and units in one place (currency, no negative where illegal, rounding), prevents mixing currencies, and gives the concept a name — bare numbers carry no rules"
+        correct: true
+      - text: "It makes arithmetic faster"
+        correct: false
+      - text: "float64 cannot represent money at all"
+        correct: false
+      - text: "Go requires a type for every value"
+        correct: false
+    explain: "A float64 amount has no currency, no rounding rules, and lets you accidentally add USD to EUR or store a negative price. A Money value object holds amount+currency, validates on construction, exposes safe operations (Add returns an error on currency mismatch), and is immutable — so the rules live in one place and the compiler stops misuse. (Also: use integer minor units or a decimal type, never float, for real money.)"
+  - q: "When is DDD's full ceremony NOT worth it?"
+    options:
+      - text: "For simple CRUD or technically-focused software with little business complexity — the modeling overhead outweighs the benefit"
+        correct: true
+      - text: "Whenever the team is large"
+        correct: false
+      - text: "Whenever you use a database"
+        correct: false
+      - text: "DDD is always worth it everywhere"
+        correct: false
+    explain: "DDD pays off where the *business logic* is complex and central (insurance, logistics, finance) — the modeling discipline tames that complexity. For a CRUD app, a thin wrapper over a DB, or infrastructure code, the aggregates/repositories/contexts machinery adds ceremony without much payoff. Borrow the cheap wins everywhere (ubiquitous language, value objects), and reserve the heavy tactical patterns for genuinely complex domains."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗺️ Analogy">
+Most bugs are translation errors. A business expert says "when a policy lapses, stop billing it"; three handoffs later the code has an <code>if status == 2</code> buried in a service, and nobody remembers that <code>2</code> means lapsed. Domain-Driven Design closes that gap: the code speaks the <em>same language</em> as the business — there's a <code>Policy</code> with a <code>Lapse()</code> method — so the model in your head, the conversation in the meeting, and the types in the repo are one and the same.
+</Callout>
+
+## DDD in one idea
+
+**Domain-Driven Design** (Eric Evans, 2003) is about modeling software around the **business domain** rather than around the database or the framework. Its single most valuable practice is the **ubiquitous language**: one shared vocabulary used by domain experts *and* in the code, so there's no lossy translation between them. Read it deeper at <a href="https://martinfowler.com/tags/domain%20driven%20design.html" target="_blank" rel="noopener">Martin Fowler's DDD writing</a> and Evans's book; this page is the Go-flavored orientation.
+
+## The building blocks
+
+<Mermaid code={String.raw`graph TD
+  BC["Bounded Context<br/>(model + language is consistent here)"] --> E["Entity<br/>identity over time (User#42)"]
+  BC --> V["Value Object<br/>defined by value (Money)"]
+  BC --> A["Aggregate<br/>cluster with one root + invariants"]
+  BC --> S["Domain Service<br/>logic that isn't one entity's"]
+  E --> A
+  V --> A`} />
+
+- **Entity** — has a distinct identity that persists through change (a `User` is the same user as its email changes). Equal by ID.
+- **Value Object** — defined *only* by its attributes, interchangeable and best made **immutable** (`Money`, `Email`, `DateRange`). Equal by value.
+- **Bounded Context** — a boundary within which the model and [ubiquitous language](/glossary/) are consistent; the same word can mean different things in different contexts.
+- **[Aggregate](/architecture/aggregates-and-repositories/)** — a cluster of objects with one **root** that guards the cluster's invariants. (Its own page.)
+
+## See it: a Value Object with invariants
+
+Modeling `Money` as a type — not a bare `int`/`float64` — puts the rules in one place: it's immutable, validated on construction, and refuses to mix currencies. This runs here:
+
+<Playground client:visible title="money.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// Money is a value object: immutable, defined by its values, equal by value.
+// Amount is in minor units (cents) — never use float64 for money.
+type Money struct {
+	cents    int64
+	currency string
+}
+
+func NewMoney(cents int64, currency string) (Money, error) {
+	if currency == "" {
+		return Money{}, errors.New("currency required")
+	}
+	return Money{cents: cents, currency: currency}, nil
+}
+
+// Add returns a NEW Money (immutability) and refuses to mix currencies.
+func (m Money) Add(o Money) (Money, error) {
+	if m.currency != o.currency {
+		return Money{}, fmt.Errorf("cannot add %s to %s", o.currency, m.currency)
+	}
+	return Money{cents: m.cents + o.cents, currency: m.currency}, nil
+}
+
+func (m Money) String() string { return fmt.Sprintf("%.2f %s", float64(m.cents)/100, m.currency) }
+
+func main() {
+	five, _ := NewMoney(500, "USD")
+	three, _ := NewMoney(300, "USD")
+	sum, _ := five.Add(three)
+	fmt.Println("5 + 3 =", sum) // 8.00 USD
+
+	// Value equality: two Money with the same values are equal & interchangeable.
+	a, _ := NewMoney(500, "USD")
+	fmt.Println("value equal:", a == five) // true (struct comparison)
+
+	// The type stops a whole class of bugs:
+	eur, _ := NewMoney(500, "EUR")
+	if _, err := five.Add(eur); err != nil {
+		fmt.Println("blocked:", err)
+	}
+}`} />
+
+A bare `float64` has no currency, no rounding rules, and lets you add USD to EUR. The `Money` type makes the illegal states unrepresentable — the compiler and constructor enforce the domain rules. That's DDD's cheapest, highest-value habit.
+
+## Bounded contexts keep models honest
+
+The same word means different things to different parts of the business. "Customer" in **Sales** is a lead with a pipeline stage; in **Billing** it's an account with invoices and a payment method. Forcing one shared `Customer` struct across the whole system produces a bloated, contradictory model. A **bounded context** says: *within this boundary*, `Customer` means this. In Go, contexts usually map to **packages** (in a [modular monolith](/architecture/modular-monolith-vs-microservices/)) or to **services**.
+
+<Callout type="go" title="🐹 Take the cheap wins everywhere, the heavy patterns selectively">
+Two DDD habits cost almost nothing and pay off in <em>any</em> Go codebase: speak the <strong>ubiquitous language</strong> (name types/methods/packages for domain concepts, not <code>Manager</code>/<code>Helper</code>/<code>Data</code>), and model <strong>value objects</strong> as real types (<code>Email</code>, <code>Money</code>, <code>UserID</code>) so invariants live in one place and the compiler catches misuse. Go's type system and tiny structs make value objects almost free. Reserve the heavier tactical patterns — <a href="/architecture/aggregates-and-repositories/">aggregates and repositories</a> — for the parts of the domain that are genuinely complex.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ DDD is for complex domains, not every app">
+The full DDD toolkit — aggregates, repositories, domain events, bounded-context mapping — is overhead, and it's only worth it where the <em>business logic</em> is the hard part (insurance, logistics, trading). For a CRUD app, an admin tool, or infrastructure plumbing, that ceremony buries simple code under layers and indirection for little benefit. Anti-pattern alert: an "anemic domain model" — entities that are just bags of getters/setters with all the logic in fat service classes — gets the structure of DDD with none of the value. Put the behavior <em>on the model</em>, or don't bother with DDD at all.
+</Callout>
+
+## See also
+
+- [Aggregates & repositories](/architecture/aggregates-and-repositories/) — enforcing invariants and persistence.
+- [Hexagonal & clean architecture](/architecture/hexagonal-and-clean-architecture/) — keeping the domain free of I/O.
+- [Microservices basics (cloud)](/cloud/microservices-basics/) — bounded contexts as service boundaries.
+- [Glossary: DDD & bounded context](/glossary/) — quick definitions and external links.
+
+Next: clustering entities and protecting their invariants — [aggregates & repositories](/architecture/aggregates-and-repositories/).

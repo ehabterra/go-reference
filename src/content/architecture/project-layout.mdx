@@ -1,0 +1,107 @@
+---
+title: "Go Project Layout"
+category: arch-structure
+kind: topic
+order: 4
+difficulty: "Beginner"
+status: ready
+intent: "The architecture lens on Go repo structure — organizing by feature/domain (not technical layer) so packages map to bounded contexts, and where the domain↔infrastructure seam goes on disk."
+related:
+  - hexagonal-and-clean-architecture
+  - modular-monolith-vs-microservices
+  - aggregates-and-repositories
+quiz:
+  - q: "Should packages be organized by technical layer (handlers/, models/, services/) or by feature/domain (order/, billing/)?"
+    options:
+      - text: "By feature/domain — related code lives together, packages map to bounded contexts, and a feature isn't scattered across many layer-named folders"
+        correct: true
+      - text: "Always by technical layer"
+        correct: false
+      - text: "Everything in one package"
+        correct: false
+      - text: "Alphabetically"
+        correct: false
+    explain: "Slicing by technical layer (all handlers in one folder, all models in another) scatters a single feature across the tree and creates wide, cycle-prone dependencies. Organizing by feature/domain — an order package that owns the order's types, logic, and storage interface — keeps cohesion high and maps cleanly onto DDD bounded contexts. It's also what makes a later split into services tractable. Go's package-as-unit-of-encapsulation rewards domain-oriented packages."
+  - q: "In a feature package like order/, where should the repository INTERFACE live?"
+    options:
+      - text: "With the domain code in the feature package (it expresses what the domain needs); the concrete DB implementation lives in an infrastructure package"
+        correct: true
+      - text: "In a shared models/ package"
+        correct: false
+      - text: "In the database/Postgres package next to the driver"
+        correct: false
+      - text: "In package main"
+        correct: false
+    explain: "The dependency-inversion seam runs through the package layout: the feature/domain package declares the interface it needs (OrderRepository), and an infrastructure package (e.g. internal/platform/postgres) imports the driver and implements it. So the import arrow points inward — infrastructure depends on the domain, never the reverse. This is hexagonal architecture expressed as directory structure; see that page for the full rule."
+  - q: "Why does a clean by-feature layout make a later monolith→services split easier?"
+    options:
+      - text: "Each feature package is already a candidate service boundary — it owns its data and exposes an interface, so extracting it is a swap of implementation, not a rewrite"
+        correct: true
+      - text: "Because services require alphabetical folders"
+        correct: false
+      - text: "Because it deletes the need for interfaces"
+        correct: false
+      - text: "It doesn't — layout is unrelated to services"
+        correct: false
+    explain: "If a feature package owns its own types, logic, and data, and other packages reach it only through an interface, then that package is already shaped like a service. Lifting it out behind the same interface (now an HTTP/gRPC client) is a refactor of the wiring, not a redesign. A layer-sliced layout, by contrast, has no clean line to cut along — the 'order' logic is smeared across handlers/, models/, and services/. Layout decisions made early are boundary decisions you'll thank yourself for later."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+
+<Callout type="analogy" title="🏠 Analogy">
+A house organized "by material" — all the metal in one room, all the wood in another — is useless; you organize by <em>function</em>: a kitchen, a bathroom, a bedroom, each with the pipes and wiring it needs. Go code is the same. Folders named <code>handlers/</code>, <code>models/</code>, <code>services/</code> scatter a single feature across the house; folders named <code>order/</code>, <code>billing/</code> keep each feature whole. This page is about that architectural choice — <em>how to slice</em> — not the language mechanics.
+</Callout>
+
+<Callout type="go" title="🐹 The mechanics live in Fundamentals — this is the architecture lens">
+The <em>how</em> of Go layout — the <code>cmd/</code> and <code>internal/</code> conventions, package visibility by case, the no-import-cycles rule, <code>go.mod</code>/<code>go.sum</code>, and why the popular <code>golang-standards/project-layout</code> repo isn't an official standard — is all covered in <a href="/fundamentals/packages-and-modules/">Fundamentals → Packages &amp; modules</a>. Read that for the rules. This page assumes them and focuses on the one decision that's genuinely <em>architectural</em>: how you carve the tree so it mirrors your domain.
+</Callout>
+
+## The one rule that's architectural: slice by feature, not by layer
+
+Given the mechanics, the design decision that matters is **what your top-level packages represent**. Two repos can use the exact same `cmd/` + `internal/` conventions and end up with opposite architectures:
+
+<Mermaid code={String.raw`graph TD
+  subgraph By["❌ by technical layer"]
+    H["handlers/"] --- M["models/"] --- S["services/"] --- R["repos/"]
+    note1["one 'order' feature is smeared<br/>across all four folders"]
+  end
+  subgraph Feat["✅ by feature / domain"]
+    O["order/ — types + rules + repo iface"]
+    B["billing/"]
+    P["platform/ — db, http adapters"]
+    note2["each package is a bounded context<br/>and a future service boundary"]
+  end`} />
+
+**Layer-sliced** (`handlers/`, `models/`, `services/`) feels tidy but scatters every feature across the whole tree, produces wide cross-package dependencies, and gives you no clean line to cut when you later want to extract a service. **Feature-sliced** (`order/`, `billing/`) keeps each [bounded context](/architecture/domain-driven-design/) cohesive in one package that owns its types, its rules, **and** the repository interface it needs.
+
+## Where the domain↔infrastructure seam goes on disk
+
+The layout *is* your [hexagonal architecture](/architecture/hexagonal-and-clean-architecture/), expressed as directories:
+
+```text
+myapp/
+├── cmd/server/main.go       # composition root: wire & start (thin)
+└── internal/
+    ├── order/               # feature pkg = bounded context
+    │   ├── order.go         #   domain types + rules
+    │   └── repository.go    #   the repo INTERFACE (what the domain needs)
+    ├── billing/
+    └── platform/
+        ├── postgres/        # adapters: IMPLEMENT the interfaces
+        └── httpapi/         #   (import the driver here, never in order/)
+```
+
+The interface lives with the domain (`order/repository.go`); the implementation lives in infrastructure (`platform/postgres`). So the import arrow points **inward** — infrastructure depends on the domain, never the reverse. (The mechanics of why `internal/` makes this a hard wall, and why cycles can't form, are in [Packages & modules](/fundamentals/packages-and-modules/).)
+
+<Callout type="gotcha" title="⚠️ Layout is a boundary decision — get the slicing right early">
+The cheap-to-change-now, expensive-to-change-later part of layout isn't <code>cmd/</code> vs <code>pkg/</code> — it's <em>by-feature vs by-layer</em>. A feature package that owns its data and exposes an interface is already a candidate <a href="/architecture/modular-monolith-vs-microservices/">service boundary</a>; a layer-sliced tree has no clean line to cut and turns a future extraction into a rewrite. So slice by domain from the start, even in a tiny app — it costs nothing then and is painful to retrofit. (Everything else about growing the tree — start flat, add <code>cmd/</code>/<code>internal/</code> under pressure — is in <a href="/fundamentals/packages-and-modules/">Packages &amp; modules</a>.)
+</Callout>
+
+## See also
+
+- [Packages & modules (fundamentals)](/fundamentals/packages-and-modules/) — **the mechanics**: `cmd/`, `internal/`, cycles, `go.mod`, visibility.
+- [Hexagonal & clean architecture](/architecture/hexagonal-and-clean-architecture/) — the boundaries this layout encodes.
+- [Domain-Driven Design](/architecture/domain-driven-design/) — feature packages as bounded contexts.
+- [Modular monolith vs microservices](/architecture/modular-monolith-vs-microservices/) — when these packages become services.
+
+Next: when those packages should stay together vs split apart — [modular monolith vs microservices](/architecture/modular-monolith-vs-microservices/).

@@ -1,0 +1,172 @@
+---
+title: "SSRF & Request Forgery"
+category: defense
+kind: topic
+order: 13.5
+difficulty: "Intermediate"
+status: ready
+intent: "Server-Side Request Forgery and its cousin CSRF — how an attacker turns your server (or your user's browser) into a confused deputy, and the allowlist / token defenses in Go."
+related:
+  - input-validation-and-injection
+  - owasp-top-10
+  - authentication-and-authorization
+quiz:
+  - q: "What is Server-Side Request Forgery (SSRF)?"
+    options:
+      - text: "An attacker tricks the server into making HTTP (or other) requests to a destination the attacker chooses — often internal services or cloud metadata the attacker couldn't reach directly"
+        correct: true
+      - text: "An attacker forges a TLS certificate"
+        correct: false
+      - text: "An attacker floods the server with requests"
+        correct: false
+      - text: "An attacker steals a session cookie via XSS"
+        correct: false
+    explain: "In SSRF, the app takes a user-supplied URL (a webhook, an 'import from URL', an image fetcher, a PDF renderer) and makes a request to it server-side. The attacker supplies a URL pointing at something they shouldn't reach — http://169.254.169.254/ (cloud metadata), http://localhost:6379 (internal Redis), or an internal admin panel — and the server, trusted on the internal network, fetches it for them. The server becomes a 'confused deputy'."
+  - q: "Why is SSRF especially dangerous in cloud environments?"
+    options:
+      - text: "The cloud instance metadata endpoint (e.g. 169.254.169.254) can hand out temporary credentials/IAM tokens, so an SSRF can be escalated to stealing cloud access"
+        correct: true
+      - text: "Cloud servers have slower networks"
+        correct: false
+      - text: "Cloud providers disable all firewalls"
+        correct: false
+      - text: "It only matters on-premises"
+        correct: false
+    explain: "Cloud platforms expose a link-local metadata service (169.254.169.254 on AWS/GCP/Azure) that returns instance info — and on older/IMDSv1 setups, temporary IAM credentials — to anything that can make a local request. An SSRF that reaches it can exfiltrate those credentials and pivot into the cloud account. This is exactly how several high-profile breaches happened. Mitigations: enforce IMDSv2, and block link-local/private ranges in your outbound allowlist."
+  - q: "What is the most reliable defense against SSRF?"
+    options:
+      - text: "An allowlist of permitted destinations (validate the resolved IP against allowed hosts and block private/loopback/link-local ranges), rather than a blacklist of bad ones"
+        correct: true
+      - text: "Blocking the string 'localhost' in the URL"
+        correct: false
+      - text: "Using HTTPS for outbound requests"
+        correct: false
+      - text: "Rate-limiting the endpoint"
+        correct: false
+    explain: "Allowlist the destinations you actually need to reach, and reject everything else — including by resolving the hostname and checking the resulting IP against private (RFC1918), loopback, and link-local ranges. Blacklisting strings like 'localhost' is trivially bypassed (127.0.0.1, 0.0.0.0, 2130706433 decimal, IPv6 ::1, DNS names that resolve to internal IPs, redirects). You must validate the final IP after DNS resolution, and guard against redirects and DNS rebinding."
+  - q: "What is the DNS rebinding bypass that naive SSRF filters miss?"
+    options:
+      - text: "An attacker's domain resolves to a safe IP when you validate it, then re-resolves to an internal IP when you actually connect — so validation and use must target the same resolved address"
+        correct: true
+      - text: "Changing the URL scheme to FTP"
+        correct: false
+      - text: "Using a longer domain name"
+        correct: false
+      - text: "Caching DNS forever"
+        correct: false
+    explain: "If you resolve the hostname to check it's safe, then make a separate HTTP call that resolves it again, an attacker can return a public IP during validation and an internal IP (127.0.0.1) at connect time — a TOCTOU race called DNS rebinding. Robust defenses resolve once and dial that exact IP (e.g. a custom DialContext / control function that re-checks the IP at connection time), and also block redirects to disallowed hosts."
+  - q: "How does CSRF (Cross-Site Request Forgery) differ from SSRF, and what stops it?"
+    options:
+      - text: "CSRF abuses the USER's browser to send authenticated requests to your site; it's stopped by anti-CSRF tokens and SameSite cookies — whereas SSRF abuses the SERVER and is stopped by destination allowlists"
+        correct: true
+      - text: "They are the same attack with different names"
+        correct: false
+      - text: "CSRF is stopped by HTTPS alone"
+        correct: false
+      - text: "CSRF abuses the server, SSRF abuses the browser"
+        correct: false
+    explain: "CSRF and SSRF are different 'confused deputy' attacks. CSRF tricks a logged-in user's browser into submitting a state-changing request to your site (the browser auto-attaches the session cookie), so a malicious page can act as the user. Defenses: unpredictable anti-CSRF tokens tied to the session, and SameSite=Lax/Strict cookies. SSRF tricks the server into making requests; defenses are outbound allowlists and IP validation. Don't confuse the two — they share a shape but need different fixes."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🕴️ Analogy">
+Both attacks here are the "confused deputy." Imagine a security guard who'll fetch any file you name from the locked archive — you can't get in, but he can, so you just ask him for the secret files. <strong>SSRF</strong> is that: your server has access to the internal network, so the attacker asks <em>it</em> to fetch the internal thing. <strong>CSRF</strong> is the mirror image — the deputy is the victim's <em>browser</em>, which carries their login cookie, so a malicious page asks the browser to perform actions as the user. Same trick, different deputy.
+</Callout>
+
+## SSRF: making your server the attacker
+
+Many apps take a **user-supplied URL** and fetch it server-side — webhooks, "import from URL," avatar fetchers, link previews, PDF/screenshot renderers. **Server-Side Request Forgery** abuses that: the attacker supplies a URL pointing somewhere they couldn't reach themselves, and your server — trusted on the internal network — fetches it for them.
+
+<Mermaid code={String.raw`sequenceDiagram
+  participant A as Attacker
+  participant S as Your server (trusted inside)
+  participant M as 169.254.169.254 (cloud metadata)
+  A->>S: POST /fetch  url=http://169.254.169.254/latest/...
+  S->>M: GET (server can reach link-local!)
+  M-->>S: temporary IAM credentials
+  S-->>A: response body (creds leaked)`} />
+
+The classic target is the **cloud metadata endpoint** `169.254.169.254`, which can hand out temporary credentials — turning an innocent URL fetcher into cloud-account compromise. Other targets: `localhost`/`127.0.0.1` internal services, private `10.x`/`192.168.x` admin panels, and `file://` schemes.
+
+## See it: an allowlist-style SSRF guard
+
+The reliable defense is to **validate the resolved IP** and reject private/loopback/link-local ranges (an allowlist of *what's permitted* is even stronger). This runs here:
+
+<Playground client:visible title="ssrf_guard.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net"
+	"net/url"
+)
+
+// blocked returns true if an IP is in a range a public fetcher must never reach.
+func blocked(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsUnspecified()
+}
+
+// safeHost validates the host of a user-supplied URL. In production you'd
+// resolve the name and dial THAT exact IP to avoid DNS rebinding (TOCTOU).
+func safeHost(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("bad url: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme %q not allowed", u.Scheme)
+	}
+	ip := net.ParseIP(u.Hostname())
+	if ip == nil {
+		return fmt.Errorf("must resolve+check IP for host %q (see note)", u.Hostname())
+	}
+	if blocked(ip) {
+		return fmt.Errorf("destination %s is in a blocked range", ip)
+	}
+	return nil
+}
+
+func main() {
+	for _, raw := range []string{
+		"https://93.184.216.34/data",        // public — OK
+		"http://169.254.169.254/latest/meta", // cloud metadata — BLOCK
+		"http://127.0.0.1:6379",              // internal Redis — BLOCK
+		"http://10.0.0.5/admin",              // private net — BLOCK
+		"file:///etc/passwd",                 // bad scheme — BLOCK
+	} {
+		if err := safeHost(raw); err != nil {
+			fmt.Printf("REJECT %-38s %v\n", raw, err)
+		} else {
+			fmt.Printf("ALLOW  %-38s\n", raw)
+		}
+	}
+}`} />
+
+Notice the function insists on checking the **resolved IP**, not the string. Blacklisting the word `localhost` is useless — `127.0.0.1`, `0.0.0.0`, `2130706433` (decimal), `::1`, and DNS names that resolve internally all bypass it.
+
+<Callout type="gotcha" title="⚠️ DNS rebinding and redirects break naive guards">
+Validating the hostname and <em>then</em> making a separate request that resolves it again is a TOCTOU bug: an attacker's domain can return a public IP during your check and <code>127.0.0.1</code> at connect time (<strong>DNS rebinding</strong>). Robust SSRF defenses resolve once and dial that exact IP — in Go, a custom <code>net.Dialer</code> with a <code>Control</code> func (or <code>http.Transport.DialContext</code>) that re-checks the IP at the moment of connection — and they also disable or re-validate <strong>redirects</strong> (set <code>http.Client.CheckRedirect</code>), since a 302 to <code>http://169.254.169.254/</code> sidesteps the front-door check.
+</Callout>
+
+## CSRF: making the user's browser the attacker
+
+**Cross-Site Request Forgery** is the mirror image. The victim is logged into your site; a malicious page they visit triggers a request to your site, and the browser **automatically attaches the session cookie** — so the request runs *as the user* (transfer funds, change email). The defenses:
+
+- **Anti-CSRF tokens** — an unpredictable, per-session token required on state-changing requests; a cross-site page can't read it (same-origin policy), so it can't forge a valid request.
+- **`SameSite` cookies** — `SameSite=Lax` (a good default) or `Strict` stops the browser from sending the cookie on cross-site requests, neutralizing most CSRF.
+- Treat **GET as safe/idempotent** — never change state on GET.
+
+<Callout type="go" title="🐹 The Go toolbox: stdlib IP checks + a token middleware">
+For SSRF, the standard library gives you everything: <code>net.ParseIP</code> with <code>IsPrivate</code>/<code>IsLoopback</code>/<code>IsLinkLocalUnicast</code>, and a custom <code>http.Transport</code> with a dialer <code>Control</code> func to enforce the IP at connect time. For CSRF, set your session <code>http.Cookie</code> with <code>SameSite: http.SameSiteLaxMode</code> plus <code>HttpOnly</code> and <code>Secure</code>, and add token middleware — <a href="https://github.com/gorilla/csrf" target="_blank" rel="noopener">gorilla/csrf</a> is the well-worn choice. Both attacks are "confused deputy" problems, so the fix is the same shape: don't trust where a request is told to go, and prove the request really came from your own front-end.
+</Callout>
+
+## See also
+
+- [Input validation & injection](/security/input-validation-and-injection/) — the sibling untrusted-input class.
+- [The OWASP Top 10](/security/owasp-top-10/) — SSRF is A10; this is its detail page.
+- [Authentication & authorization](/security/authentication-and-authorization/) — sessions & cookies CSRF abuses.
+- [OWASP SSRF cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html) — the authoritative defense guide.
+
+Next: locking down what your service ships and runs as — [container image security](/security/container-image-security/).

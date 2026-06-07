@@ -1,0 +1,180 @@
+---
+title: "Modular Monolith vs Microservices"
+category: arch-structure
+kind: topic
+order: 5
+difficulty: "Intermediate"
+status: ready
+intent: "When to keep one deployable with clean internal module boundaries vs splitting into services — the real trade-offs, the distributed-monolith anti-pattern, and the strangler-fig path between them."
+related:
+  - project-layout
+  - domain-driven-design
+  - hexagonal-and-clean-architecture
+quiz:
+  - q: "What is a 'modular monolith'?"
+    options:
+      - text: "A single deployable application internally divided into well-isolated modules with explicit boundaries — modular code, one process and one deploy"
+        correct: true
+      - text: "A monolith with no structure at all"
+        correct: false
+      - text: "Many services sharing one database"
+        correct: false
+      - text: "A monolith that can't be changed"
+        correct: false
+    explain: "A modular monolith keeps the operational simplicity of one deployable (one process, one build, in-process calls, easy transactions) while enforcing clean module boundaries inside — modules communicate through explicit interfaces, not by reaching into each other's internals. It's often the best default: you get most of the design benefits of microservices (clear boundaries, separation of concerns) without the distributed-systems tax. And it keeps a future split tractable."
+  - q: "Which is a genuine reason to split a module into a separate service?"
+    options:
+      - text: "It needs independent scaling, independent deployment cadence, a different runtime/tech, or strong team/fault isolation — organizational and operational forces"
+        correct: true
+      - text: "The codebase has more than 10,000 lines"
+        correct: false
+      - text: "Microservices are the modern way"
+        correct: false
+      - text: "To use more interfaces"
+        correct: false
+    explain: "Splitting buys *independent* deployment, scaling, failure isolation, and tech choice — at the cost of network calls, distributed transactions, eventual consistency, and operational overhead. So the justification should be a real force: this part must scale separately, a separate team must ship on its own cadence, it needs a different runtime, or its failures must be isolated. 'It's modern' and raw line count are not reasons. Conway's Law matters: service boundaries tend to mirror team boundaries."
+  - q: "What is the 'distributed monolith' anti-pattern?"
+    options:
+      - text: "Services that are split physically but still tightly coupled — they must be deployed together, share a database, or chatter synchronously — getting microservices' costs with none of the benefits"
+        correct: true
+      - text: "A monolith deployed to many servers"
+        correct: false
+      - text: "A monolith with too many modules"
+        correct: false
+      - text: "Microservices that scale independently"
+        correct: false
+    explain: "A distributed monolith is the worst of both worlds: you've paid the network/ops tax of splitting, but the services are still coupled — a shared database, synchronous call chains, or lock-step releases mean you can't deploy or scale them independently. You get latency, partial failure, and deployment complexity without the autonomy that justifies them. It usually comes from splitting along the wrong boundaries (or too early), before the domain boundaries are understood."
+  - q: "What is the 'strangler fig' pattern for evolving architecture?"
+    options:
+      - text: "Incrementally extract functionality from a monolith into new services behind a routing layer, growing the new system around the old until the old is gone"
+        correct: true
+      - text: "Rewriting the whole system at once"
+        correct: false
+      - text: "Deleting old code immediately"
+        correct: false
+      - text: "Merging all services back into one"
+        correct: false
+    explain: "Named after a vine that grows around a tree until it replaces it, the strangler-fig pattern (Martin Fowler) extracts pieces of a monolith one at a time: a facade/router sends some requests to the new service and the rest to the old monolith, and you migrate functionality incrementally until the monolith can be retired. It avoids the catastrophic risk of a big-bang rewrite and lets you learn the right boundaries as you go."
+  - q: "Why is a well-bounded modular monolith a good STARTING point even if you expect to need services later?"
+    options:
+      - text: "Boundaries are cheap to move while in one process; clean module seams (clear interfaces, no shared internals) make a later extraction into services straightforward"
+        correct: true
+      - text: "Monoliths can never be split"
+        correct: false
+      - text: "It avoids ever writing interfaces"
+        correct: false
+      - text: "Services are always slower"
+        correct: false
+    explain: "Early on you don't yet know the correct boundaries — splitting prematurely freezes guesses into expensive-to-change network APIs. In a monolith, moving a boundary is a refactor, not a cross-service migration. If you keep modules cleanly separated (communicate via interfaces, no reaching into another module's internals, ideally separate schemas), each module is already shaped like a service and can be lifted out when a real force demands it. 'Modular monolith first, extract when justified' is the low-regret path."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏢 Analogy">
+A modular monolith is an open-plan office with clearly marked departments — everyone's in one building (cheap to walk over and talk, one set of doors to lock), but each team has its own area and you don't rummage through another team's desks. Microservices are separate buildings across town: real autonomy (each can renovate or grow independently) but now every conversation is a phone call that can drop, and shipping a parcel between them is a logistics problem. You move to separate buildings when a team genuinely needs to — not because separate buildings are fashionable.
+</Callout>
+
+## The real trade-off
+
+The choice is **not** "monolith = bad, microservices = good." It's a trade of **simplicity** for **autonomy**:
+
+<Mermaid code={String.raw`graph LR
+  subgraph Mono["Modular monolith (one deploy)"]
+    A["order module"] -->|in-process call| B["billing module"]
+  end
+  subgraph Micro["Microservices (many deploys)"]
+    C["order service"] -->|network call| D["billing service"]
+  end
+  Mono -->|"split only under real force"| Micro`} />
+
+| | Modular monolith | Microservices |
+|---|---|---|
+| Calls between modules | in-process (fast, reliable) | network (latency, partial failure) |
+| Transactions | easy (one DB, ACID) | hard (sagas, eventual consistency) |
+| Deploy | one unit | independent per service |
+| Scaling | whole app | per service |
+| Ops complexity | low | high (discovery, tracing, mesh) |
+| Team autonomy | shared codebase | independent ownership |
+| Moving a boundary | a refactor | a migration |
+
+A **modular monolith** keeps the operational simplicity of one deployable while enforcing clean internal boundaries: modules talk through **explicit interfaces**, never by reaching into each other's internals (Go's [`internal/` and package encapsulation](/architecture/project-layout/) enforce this). It's the right *default* for most systems.
+
+## When to actually split
+
+Split a module into a [service](/cloud/microservices-basics/) when there's a **real force**, not fashion:
+
+- **Independent scaling** — one part has wildly different load (e.g. image processing).
+- **Independent deploy cadence / team autonomy** — a separate team must ship on its own schedule (Conway's Law: boundaries mirror org structure).
+- **Fault isolation** — that subsystem's failures must not take down the rest.
+- **Different runtime/tech** — it genuinely needs another language or specialized infra.
+
+Raw line count and "microservices are modern" are **not** reasons.
+
+## See it: modules talk through an interface (split-ready)
+
+If modules already communicate through a small interface — not by importing each other's internals — extracting one into a service later is a swap of the implementation, not a rewrite. Here `order` depends on a `Billing` port; today it's an in-process module, tomorrow an HTTP client. The `order` code doesn't change:
+
+<Playground client:visible title="modules.go" code={String.raw`package main
+
+import "fmt"
+
+// order module depends on this PORT, not on billing's internals.
+type Billing interface {
+	Charge(orderID string, cents int64) (string, error)
+}
+
+// --- today: in-process module (a method call) ---
+type localBilling struct{}
+
+func (localBilling) Charge(orderID string, cents int64) (string, error) {
+	return "txn_local_" + orderID, nil
+}
+
+// --- tomorrow: a remote service, SAME interface ---
+type remoteBilling struct{ baseURL string }
+
+func (r remoteBilling) Charge(orderID string, cents int64) (string, error) {
+	// would POST to r.baseURL/charge over the network; faked deterministically
+	return "txn_remote_" + orderID, nil
+}
+
+type OrderService struct{ billing Billing }
+
+func (s OrderService) Place(orderID string, cents int64) error {
+	txn, err := s.billing.Charge(orderID, cents)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("order %s placed, charged via %s\n", orderID, txn)
+	return nil
+}
+
+func main() {
+	// Modular monolith: wire the in-process module.
+	mono := OrderService{billing: localBilling{}}
+	_ = mono.Place("A1", 1999)
+
+	// Extracted to a service later: ONLY this wiring line changes.
+	micro := OrderService{billing: remoteBilling{baseURL: "http://billing"}}
+	_ = micro.Place("A2", 1999)
+}`} />
+
+The lesson: **clean module seams make extraction cheap**. The boundary you'd cut for a service is the same interface you'd define in a monolith — so design the boundary first, deploy it separately only when justified.
+
+<Callout type="go" title="🐹 Start as a modular monolith — Go makes it natural">
+Go is unusually good at the modular-monolith sweet spot: <a href="/architecture/project-layout/"><code>internal/</code> and package encapsulation</a> give you compiler-enforced module walls inside one binary, fast in-process calls, and a single deploy — without a service mesh, distributed tracing, or sagas to operate. Build feature packages (<a href="/architecture/domain-driven-design/">one per bounded context</a>) that communicate through interfaces, give each its own data ownership, and you have a system that's simple to run <em>today</em> and shaped to extract <em>tomorrow</em>. When a real force appears, lift that package out behind the same interface as an HTTP/<a href="/web/grpc/">gRPC</a> client. Don't pay the distributed-systems tax before you have to.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Beware the distributed monolith">
+The worst outcome is splitting into services that are still tightly coupled — a <strong>shared database</strong>, synchronous call chains where one request fans out to five services, or releases that must go out in lock-step. You've paid microservices' full cost (network latency, partial failure, ops overhead) and bought none of the autonomy. It usually comes from splitting <em>too early</em> or along the <em>wrong</em> boundaries, before the domain is understood. If you must evolve a monolith, use the <a href="https://martinfowler.com/bliki/StranglerFigApplication.html" target="_blank" rel="noopener">strangler-fig pattern</a>: extract one capability at a time behind a router, growing the new system around the old until the old can be retired — never a big-bang rewrite.
+</Callout>
+
+## See also
+
+- [Project layout](/architecture/project-layout/) — module boundaries with `internal/` and packages.
+- [Microservices basics (cloud)](/cloud/microservices-basics/) — what a service looks like once extracted.
+- [Resilience patterns (cloud)](/cloud/resilience-patterns/) — the failure handling distribution forces on you.
+- [Domain-Driven Design](/architecture/domain-driven-design/) — bounded contexts as the split lines.
+
+That's the Architecture track — head back to the [index](/architecture/) or explore the [Cloud-Native track](/cloud/).

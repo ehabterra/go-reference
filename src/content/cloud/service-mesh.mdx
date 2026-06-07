@@ -1,0 +1,163 @@
+---
+title: "Service Mesh"
+category: resilience
+kind: topic
+order: 16.5
+difficulty: "Advanced"
+status: ready
+intent: "Moving retries, timeouts, mTLS, and traffic routing out of every service and into the platform — the sidecar/proxy model, what a mesh gives you, and when its complexity is worth it."
+related:
+  - resilience-patterns
+  - grpc-and-service-comms
+  - microservices-basics
+quiz:
+  - q: "What is a service mesh?"
+    options:
+      - text: "A dedicated infrastructure layer that handles service-to-service communication — typically via sidecar proxies — providing traffic management, security (mTLS), and observability without changing app code"
+        correct: true
+      - text: "A mesh network of physical servers"
+        correct: false
+      - text: "A database replication topology"
+        correct: false
+      - text: "A frontend UI framework"
+        correct: false
+    explain: "A service mesh is an infrastructure layer for service-to-service traffic. It moves cross-cutting concerns — retries, timeouts, load balancing, mutual TLS, traffic splitting, and telemetry — out of each application and into proxies that sit alongside your services. Your app just makes a normal call to another service; the mesh intercepts it and applies the policies. Examples: Istio, Linkerd."
+  - q: "What is the 'sidecar' pattern that most meshes use?"
+    options:
+      - text: "A proxy container deployed alongside each service instance that intercepts all its inbound/outbound traffic, applying mesh policies transparently"
+        correct: true
+      - text: "A backup copy of the service"
+        correct: false
+      - text: "A second database for each service"
+        correct: false
+      - text: "A CLI tool run during deploys"
+        correct: false
+    explain: "A sidecar is a helper container that runs in the same pod as your service and intercepts its network traffic (via iptables rules or eBPF). All requests in and out flow through the sidecar proxy (e.g. Envoy), which transparently applies retries, timeouts, mTLS, and routing — so the application code is unchanged and unaware. The mesh's control plane configures all the sidecars centrally. (Some newer meshes use a per-node proxy instead of per-pod to cut overhead.)"
+  - q: "What does a mesh's mutual TLS (mTLS) provide that's hard to do per-service?"
+    options:
+      - text: "Automatic, uniform encryption AND identity verification of BOTH sides of every service-to-service call, with certificate issuance/rotation handled by the mesh"
+        correct: true
+      - text: "Faster networking"
+        correct: false
+      - text: "A way to skip authentication entirely"
+        correct: false
+      - text: "Encryption only of the client side"
+        correct: false
+    explain: "mTLS encrypts traffic and authenticates both peers (each presents a certificate proving its identity), giving you zero-trust service-to-service security. Doing this by hand in every service — issuing, distributing, rotating, and validating certs consistently — is tedious and error-prone. A mesh automates the whole PKI lifecycle and enforces mTLS uniformly across the fleet, so 'service A may call service B' becomes an identity-based policy rather than network-location trust."
+  - q: "Since Go already has timeouts, retries, and TLS in the stdlib, why might a team still adopt a mesh?"
+    options:
+      - text: "To get those behaviors uniformly across many services (including ones in other languages), centrally configurable and observable, without re-implementing and maintaining them in each codebase"
+        correct: true
+      - text: "Because Go's net/http can't do timeouts"
+        correct: false
+      - text: "Because a mesh makes Go run faster"
+        correct: false
+      - text: "Because Go can't make outbound calls"
+        correct: false
+    explain: "A single Go service can absolutely do timeouts, retries with backoff, and TLS itself (and should at the library level). The mesh's value appears at fleet scale: enforcing consistent policy across dozens of services and multiple languages, changing a timeout or rollout rule centrally without redeploying apps, and getting uniform golden-signal telemetry and mTLS everywhere for free. For a handful of Go services, in-code resilience may be simpler; the mesh earns its keep with polyglot, large-scale estates."
+  - q: "What's the main downside of a service mesh?"
+    options:
+      - text: "Significant operational complexity and added latency/resource overhead from the extra proxy hops — it's often overkill for small systems"
+        correct: true
+      - text: "It makes services impossible to deploy"
+        correct: false
+      - text: "It removes all observability"
+        correct: false
+      - text: "It only works with one programming language"
+        correct: false
+    explain: "A mesh is a substantial distributed system in its own right: a control plane plus a proxy next to every workload. That adds operational burden (another thing to run, upgrade, and debug), per-hop latency, and CPU/memory overhead for the sidecars. For a small number of services, this complexity usually outweighs the benefit — start with in-code resilience and adopt a mesh only when fleet size, polyglot needs, or zero-trust requirements justify it. Newer sidecar-less/per-node designs aim to reduce the overhead."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏢 Analogy">
+Imagine every employee in a company having their own personal assistant who sits beside them, handles all their calls — verifying who's on the line (mTLS), redialing if it drops (retries), hanging up if it rings too long (timeouts), logging every call (observability), and routing some calls to the new office (traffic splitting). The employees (your services) just "make a call"; the assistants (sidecars) do the cross-cutting work, all coordinated by one head office (the control plane). That's a service mesh — the communication smarts live beside each service, not inside it.
+</Callout>
+
+## What a mesh moves out of your code
+
+In a [microservices](/cloud/microservices-basics/) system, every service needs the same cross-cutting plumbing for talking to others: **retries, timeouts, load balancing, mutual TLS, traffic routing, and telemetry**. A **service mesh** (Istio, Linkerd) provides these as an infrastructure layer so the application doesn't re-implement them.
+
+<Mermaid code={String.raw`graph LR
+  subgraph PodA["Pod: service A"]
+    A["app A"] --> PA["sidecar proxy"]
+  end
+  subgraph PodB["Pod: service B"]
+    PB["sidecar proxy"] --> B["app B"]
+  end
+  PA -->|"mTLS + retries + timeout + routing"| PB
+  CP["control plane"] -. configures .-> PA
+  CP -. configures .-> PB`} />
+
+Most meshes use the **sidecar** pattern: a proxy (often Envoy) runs beside each service instance and transparently intercepts all its traffic. A central **control plane** configures every sidecar, so you change a timeout or a canary split *centrally* without touching or redeploying the apps.
+
+## See it: the sidecar idea, in miniature
+
+A sidecar is conceptually a wrapper that adds retries/timeouts around a call the app makes "plainly." This in-process model shows the shape — the app calls `Get`, unaware the proxy is applying policy. This runs here:
+
+<Playground client:visible title="sidecar.go" code={String.raw`package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+// The app makes a "plain" call through this interface, unaware of policy.
+type Caller interface{ Get() (string, error) }
+
+// app is the real service logic — no resilience code in it.
+type app struct{ attempt int }
+
+func (a *app) Get() (string, error) {
+	a.attempt++
+	if a.attempt < 3 { // flaky upstream for the first 2 tries
+		return "", errors.New("connection reset")
+	}
+	return "200 OK from service B", nil
+}
+
+// sidecar WRAPS the caller and adds mesh policy (retries) transparently.
+type sidecar struct {
+	inner      Caller
+	maxRetries int
+}
+
+func (s sidecar) Get() (string, error) {
+	var err error
+	for i := 0; i <= s.maxRetries; i++ {
+		var resp string
+		if resp, err = s.inner.Get(); err == nil {
+			fmt.Printf("[sidecar] success on attempt %d\n", i+1)
+			return resp, nil
+		}
+		fmt.Printf("[sidecar] retry %d after: %v\n", i+1, err)
+	}
+	return "", err
+}
+
+func main() {
+	// The mesh injects the sidecar; app code is unchanged.
+	var svc Caller = sidecar{inner: &app{}, maxRetries: 3}
+	resp, err := svc.Get()
+	fmt.Println("app sees:", resp, err)
+}`} />
+
+The application has *zero* resilience code — the sidecar supplies it. A real mesh does this at the network layer (so it works for any language) and adds mTLS, routing, and telemetry the same transparent way.
+
+<Callout type="go" title="🐹 Go can do resilience in-code — decide where the line is">
+Go's stdlib already gives you the building blocks a mesh provides per-call: <code>context</code> deadlines for <a href="/cloud/resilience-patterns/">timeouts</a>, retry-with-backoff loops, <code>crypto/tls</code> for encryption, and connection pooling in <code>http.Transport</code>. For a <strong>few</strong> Go services, doing this in a shared internal library is often simpler and lower-overhead than running a mesh. The mesh wins when you have <strong>many</strong> services (especially polyglot), want to change policy centrally without redeploys, or need fleet-wide mTLS and uniform telemetry. Rule of thumb: start with in-code resilience (<a href="/cloud/grpc-and-service-comms/">gRPC interceptors</a> are a great place for it), and adopt a mesh when fleet scale or zero-trust makes per-service maintenance the bigger cost.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A mesh is a distributed system you now also operate">
+The sidecar model isn't free: an extra proxy beside every workload adds <strong>latency per hop</strong> and <strong>CPU/memory overhead</strong>, and the control plane is one more complex system to run, upgrade, and debug (now your outage might be in the mesh, not your code). For small systems this complexity usually outweighs the payoff — don't adopt a mesh for three services. Also: the mesh handles <em>transport</em> resilience, not <em>business</em> correctness — it can retry a request, but making retries safe still requires <a href="/cloud/the-outbox-pattern/">idempotency</a> in your handlers. Newer sidecar-less / per-node (ambient) designs aim to cut the overhead.
+</Callout>
+
+## See also
+
+- [Resilience patterns](/cloud/resilience-patterns/) — the timeouts/retries/circuit-breakers a mesh applies (and you can do in-code).
+- [gRPC & service communication](/cloud/grpc-and-service-comms/) — interceptors are the in-code alternative for cross-cutting concerns.
+- [Microservices basics](/cloud/microservices-basics/) — the architecture a mesh supports.
+- [Istio](https://istio.io/) & [Linkerd](https://linkerd.io/) — the major service meshes.
+
+Next: running Go functions without managing servers at all — [serverless Go](/cloud/serverless-go/).

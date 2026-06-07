@@ -2,7 +2,7 @@
 import { getCollection } from 'astro:content';
 const { related, collection = 'patterns', base = '/patterns', heading = 'Related patterns' } = Astro.props as {
   related: string[];
-  collection?: 'patterns' | 'concurrency' | 'dsa' | 'fundamentals' | 'stdlib' | 'web' | 'internals' | 'systems' | 'security' | 'cloud';
+  collection?: 'patterns' | 'concurrency' | 'dsa' | 'fundamentals' | 'stdlib' | 'web' | 'internals' | 'systems' | 'security' | 'cloud' | 'architecture';
   base?: string;
   heading?: string;
 };

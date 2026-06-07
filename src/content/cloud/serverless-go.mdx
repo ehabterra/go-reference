@@ -1,0 +1,153 @@
+---
+title: "Serverless Go"
+category: containers
+kind: topic
+order: 5.5
+difficulty: "Intermediate"
+status: ready
+intent: "Running Go without managing servers — FaaS (Lambda) vs serverless containers (Cloud Run), the handler model, cold starts and why Go excels at them, and when serverless fits."
+related:
+  - dockerizing-go
+  - autoscaling
+  - why-cloud-native
+quiz:
+  - q: "What does 'serverless' actually mean?"
+    options:
+      - text: "You still run on servers, but the provider manages them — you deploy code/containers that scale automatically (including to zero) and you pay per use, not per provisioned server"
+        correct: true
+      - text: "There are literally no servers involved"
+        correct: false
+      - text: "It only works for static websites"
+        correct: false
+      - text: "You must manage the OS and patching yourself"
+        correct: false
+    explain: "Serverless doesn't mean no servers — it means you don't provision or manage them. You hand the platform your code (FaaS) or container (serverless containers); it handles capacity, scaling, patching, and availability, scaling out on demand and often to zero when idle. Billing is usage-based (per request / per 100ms of compute) rather than for always-on instances. The trade is less control for far less operational burden."
+  - q: "What's the difference between FaaS (e.g. AWS Lambda) and serverless containers (e.g. Cloud Run)?"
+    options:
+      - text: "FaaS runs a single handler function with platform-specific packaging and limits; serverless containers run any container image that serves HTTP, giving more portability and fewer runtime constraints"
+        correct: true
+      - text: "FaaS is always cheaper and strictly better"
+        correct: false
+      - text: "Serverless containers can't autoscale"
+        correct: false
+      - text: "They are identical"
+        correct: false
+    explain: "FaaS (Lambda, Cloud Functions) runs an individual function behind a platform-specific invocation model and packaging, with constraints (execution time, package size, statelessness). Serverless containers (Cloud Run, Fargate, Container Apps) run any container that listens on a port and serves HTTP — so it's just your normal Go web server, portable across platforms, with fewer limits. For Go, serverless containers often feel the most natural; FaaS suits small, event-triggered functions."
+  - q: "What is a 'cold start' and why does Go handle it well?"
+    options:
+      - text: "The latency when the platform must spin up a new instance for a request after idle/scale-up; Go's small static binary and fast startup make its cold starts very short"
+        correct: true
+      - text: "The time to compile Go code on each request"
+        correct: false
+      - text: "An error that crashes the function"
+        correct: false
+      - text: "The first request always failing"
+        correct: false
+    explain: "A cold start is the extra latency when no warm instance exists and the platform must initialize one (load the runtime, your code, and dependencies) before serving. Languages that boot a heavy VM/interpreter (JVM, some Node setups) pay more. A compiled Go program is a single static binary with negligible startup and no runtime to warm up, so its cold starts are typically milliseconds — making Go an excellent serverless language, especially with scale-to-zero."
+  - q: "Why must serverless functions be stateless and idempotent-friendly?"
+    options:
+      - text: "Instances are ephemeral and created/destroyed at will, and events may be delivered more than once — so you can't rely on in-memory state between calls, and handlers should tolerate duplicate invocations"
+        correct: true
+      - text: "Because serverless can't use databases"
+        correct: false
+      - text: "Because functions run forever"
+        correct: false
+      - text: "Because state makes them run faster"
+        correct: false
+    explain: "The platform creates and destroys instances freely and may run many in parallel, so anything you stash in memory or local disk can vanish or not be shared — persistent state must live in a database/cache/object store. And because event sources often guarantee at-least-once delivery, the same event can arrive twice; handlers should be idempotent (use an idempotency key, upsert instead of insert) so a retry doesn't double-charge. Design for ephemeral, possibly-duplicated execution."
+  - q: "When is serverless a poor fit?"
+    options:
+      - text: "Sustained high-throughput workloads (where always-on instances are cheaper), latency-critical paths that can't tolerate cold starts, long-running jobs that exceed limits, or work needing lots of local state"
+        correct: true
+      - text: "Any workload that uses HTTP"
+        correct: false
+      - text: "Small, bursty, event-driven tasks"
+        correct: false
+      - text: "Anything written in Go"
+        correct: false
+    explain: "Serverless shines for spiky, event-driven, or low/variable-traffic workloads where pay-per-use and scale-to-zero save money and ops. It fits poorly for steady high-volume traffic (a constantly-busy service is often cheaper on reserved instances), hard real-time paths that can't absorb cold-start latency, long-running or compute-heavy jobs that hit execution-time/memory limits, and workloads needing large local state or persistent connections. Match the model to the traffic shape."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚕 Analogy">
+Owning a car (a traditional server) means it sits in your driveway costing money whether you drive or not, and you handle the maintenance. Serverless is hailing a taxi: one appears when you need a ride, you pay only for the trip, and someone else owns and services the fleet. The catch is the brief wait for the cab to arrive (the <em>cold start</em>) — and a Go app is the rare passenger whose taxi shows up in milliseconds.
+</Callout>
+
+## Serverless ≠ no servers
+
+It means *you* don't provision or manage them. You hand the platform your code or container; it handles capacity, scaling (including [to zero](/cloud/autoscaling/)), patching, and availability, and bills you **per use** instead of per always-on instance. Two flavors:
+
+<Mermaid code={String.raw`graph TD
+  subgraph FaaS["FaaS (Lambda, Cloud Functions)"]
+    F["one handler function<br/>platform packaging + limits<br/>event-triggered"]
+  end
+  subgraph SC["Serverless containers (Cloud Run, Fargate)"]
+    C["any container that serves HTTP<br/>your normal Go server<br/>portable, fewer limits"]
+  end`} />
+
+- **FaaS** — deploy a single **handler function**; the platform invokes it per event (HTTP, queue, schedule). Constraints on runtime, size, and duration.
+- **Serverless containers** — deploy any **container that serves HTTP** — i.e. your ordinary Go web server. More portable, fewer limits. Often the most natural fit for Go.
+
+## See it: the handler model
+
+Both models reduce to "a function that takes an event and returns a response." You can write and test that handler as plain Go — no cloud needed. This runs here:
+
+<Playground client:visible title="handler.go" code={String.raw`package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// A FaaS-style event and response — just structs.
+type Event struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+type Response struct {
+	Message string ` + "`json:\"message\"`" + `
+}
+
+// Handle is the function the platform invokes per event. It's stateless:
+// everything it needs comes in via the event (and external stores).
+func Handle(e Event) (Response, error) {
+	if e.Name == "" {
+		return Response{}, fmt.Errorf("name required")
+	}
+	return Response{Message: "hello, " + e.Name}, nil
+}
+
+func main() {
+	// Locally we just call it — the cloud runtime does this for you.
+	raw := []byte(` + "`" + `{"name":"Ada"}` + "`" + `)
+	var e Event
+	_ = json.Unmarshal(raw, &e)
+
+	resp, err := Handle(e)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	out, _ := json.Marshal(resp)
+	fmt.Println(string(out)) // {"message":"hello, Ada"}
+}`} />
+
+On AWS Lambda you'd wrap `Handle` with `lambda.Start(Handle)` from `aws-lambda-go`; on Cloud Run you'd serve it via `net/http`. The *logic* is the same testable Go function either way.
+
+<Callout type="go" title="🐹 Go is one of the best serverless runtimes">
+Two Go traits make it shine here. <strong>Tiny, fast cold starts</strong>: a single static binary with no VM/interpreter to warm up starts in milliseconds, so scale-to-zero is practical and the pay-per-use math works. <strong>Low memory + high concurrency</strong>: goroutines let one serverless-container instance handle many concurrent requests cheaply (great on Cloud Run, which bills per-instance-time and can serve concurrent requests). For FaaS, use <a href="https://github.com/aws/aws-lambda-go" target="_blank" rel="noopener">aws-lambda-go</a> (or the provider's SDK); for serverless containers, just <a href="/cloud/dockerizing-go/">build your normal tiny image</a> and deploy it — no special framework. Initialize expensive things (DB pools, clients) <em>once</em> at package/init scope so they're reused across warm invocations.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Ephemeral, possibly-duplicated, and not always cheaper">
+Design for the model's realities. Instances are <strong>ephemeral</strong> — don't trust in-memory or local-disk state between calls; persist to a DB/cache/object store. Events are often <strong>at-least-once</strong> — the same invocation can arrive twice, so make handlers <a href="/cloud/the-outbox-pattern/">idempotent</a> (idempotency keys, upserts) to avoid double effects. Mind <strong>limits</strong> — execution time, memory, and payload caps make long-running or heavy jobs a bad fit. And serverless is <em>not</em> universally cheaper: for sustained high traffic, always-on instances often cost less, and cold-start latency can be unacceptable on hot paths. Match serverless to spiky, event-driven, or low/variable-traffic work.
+</Callout>
+
+## See also
+
+- [Dockerizing Go](/cloud/dockerizing-go/) — the container serverless-container platforms run.
+- [Autoscaling](/cloud/autoscaling/) — scale-to-zero and the cold-start trade-off.
+- [Why cloud-native Go](/cloud/why-cloud-native/) — the static-binary properties that make Go serverless-friendly.
+- [aws-lambda-go](https://github.com/aws/aws-lambda-go) & [Cloud Run](https://cloud.google.com/run) — a FaaS SDK and a serverless-container platform.
+
+That's the cloud-native extras — back to the [Cloud-Native index](/cloud/), or explore the [Architecture track](/architecture/).

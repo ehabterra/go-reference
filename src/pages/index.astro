@@ -12,6 +12,7 @@ const internals = await getCollection('internals');
 const systems = await getCollection('systems');
 const security = await getCollection('security');
 const cloud = await getCollection('cloud');
+const architecture = await getCollection('architecture');
 
 const gofCount = patterns.filter((p) => p.data.gof).length;
 const concPatternCount = patterns.filter((p) => p.data.category === 'concurrency').length;
@@ -26,9 +27,10 @@ const internalsCount = internals.filter((p) => p.data.kind === 'topic').length;
 const systemsCount = systems.filter((p) => p.data.kind !== 'pattern').length;
 const securityCount = security.filter((p) => p.data.kind !== 'pattern').length;
 const cloudCount = cloud.filter((p) => p.data.kind !== 'pattern').length;
+const architectureCount = architecture.filter((p) => p.data.kind !== 'pattern').length;
 
 // unified progress across every page in the reference
-const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web, ...internals, ...systems, ...security, ...cloud].map((p) => p.id).join(',');
+const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web, ...internals, ...systems, ...security, ...cloud, ...architecture].map((p) => p.id).join(',');
 ---
 <BaseLayout>
   <header class="dp-hero">
@@ -134,6 +136,14 @@ const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdli
       <h3>Cloud-Native</h3>
       <p data-i18n="home.cloud.desc">Run Go in production — containers and Kubernetes, health probes and graceful shutdown, structured logs, metrics and tracing, message queues and event-driven design, and resilience patterns like retries, circuit breakers and sagas.</p>
       <span class="dp-topic__stat">{cloudCount} <span data-i18n="home.cloud.stat">topics · containers → resilience · runnable</span></span>
+      <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
+    </a>
+
+    <a class="dp-topic" data-cat="arch-principles" href="/architecture/">
+      <div class="dp-topic__icon">🏛️</div>
+      <h3>Architecture</h3>
+      <p data-i18n="home.architecture.desc">Design systems that last — Domain-Driven Design and bounded contexts, aggregates and repositories, hexagonal/clean architecture, an idiomatic Go project layout, and the modular-monolith-vs-microservices decision.</p>
+      <span class="dp-topic__stat">{architectureCount} <span data-i18n="home.architecture.stat">topics · DDD → boundaries · runnable</span></span>
       <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
     </a>
   </div>

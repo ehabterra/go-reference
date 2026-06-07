@@ -1,0 +1,166 @@
+---
+title: "Deployment Strategies"
+category: containers
+kind: topic
+order: 4.7
+difficulty: "Intermediate"
+status: ready
+intent: "Shipping a new version without dropping traffic — rolling, blue-green, and canary releases, the health-gated promotion that makes them safe, and how readiness probes tie in."
+related:
+  - ci-cd-and-gitops
+  - health-and-lifecycle
+  - autoscaling
+quiz:
+  - q: "What is a rolling deployment?"
+    options:
+      - text: "Replace instances of the old version with the new one a few at a time, so the service stays up throughout and capacity is never fully lost"
+        correct: true
+      - text: "Restart all instances at once with the new version"
+        correct: false
+      - text: "Run the new version only on weekends"
+        correct: false
+      - text: "Roll back automatically after every deploy"
+        correct: false
+    explain: "A rolling deployment (Kubernetes' default) gradually replaces old pods with new ones in batches — spin up some new, wait for them to pass readiness, retire some old, repeat — so there's always enough healthy capacity serving traffic. It needs no extra infrastructure, but during the roll both versions run simultaneously (so changes must be backward-compatible), and rollback means rolling back, which takes time."
+  - q: "What characterizes a blue-green deployment?"
+    options:
+      - text: "Two full environments (blue=current, green=new); you deploy to green, test it, then switch all traffic at once — and can flip back instantly if it's bad"
+        correct: true
+      - text: "Deploying to half the users permanently"
+        correct: false
+      - text: "Painting servers two colors"
+        correct: false
+      - text: "Running the database in two regions"
+        correct: false
+    explain: "Blue-green keeps two complete environments. The current (blue) serves production while you deploy and smoke-test the new version (green) in parallel. Then you cut traffic over to green in one switch (a load-balancer/router change). The big win is instant rollback — flip back to blue. The cost is running double the infrastructure during the cutover, and handling stateful concerns (DB migrations, in-flight sessions) across the switch."
+  - q: "What is a canary release?"
+    options:
+      - text: "Route a small percentage of real traffic to the new version, watch its metrics/errors, and progressively increase the share only if it stays healthy — else roll back"
+        correct: true
+      - text: "Deploy to a test environment with synthetic traffic only"
+        correct: false
+      - text: "Deploy only to internal employees forever"
+        correct: false
+      - text: "A deployment that always fails first"
+        correct: false
+    explain: "A canary (named after canaries in coal mines) sends a small slice of production traffic — say 1%, then 5%, 25%, 100% — to the new version while monitoring its error rate, latency, and key metrics. If the canary stays healthy you promote it further; if it degrades you abort and shift traffic back. It limits the blast radius of a bad release to a small fraction of users and gives real-traffic signal that staging can't."
+  - q: "Why are readiness probes essential to safe rolling/canary deploys?"
+    options:
+      - text: "The orchestrator only sends traffic to a new instance once its readiness probe passes, so half-started or unhealthy instances never receive requests during the rollout"
+        correct: true
+      - text: "They make the deploy faster"
+        correct: false
+      - text: "They encrypt traffic"
+        correct: false
+      - text: "They replace the need for tests"
+        correct: false
+    explain: "During a rollout, Kubernetes adds a new pod to the load-balancer rotation only after its readiness probe succeeds — so a pod that's still warming up (connecting to the DB, loading config) won't get traffic and cause errors. Combined with graceful shutdown on the old pods (drain in-flight requests), readiness probes are what make a rolling or canary deploy actually zero-downtime. Get them wrong and you drop requests on every deploy."
+  - q: "What requirement do ALL these strategies impose on your application changes?"
+    options:
+      - text: "Backward/forward compatibility — old and new versions run simultaneously and share the same database/clients, so schema and API changes must be rolled out in compatible steps (expand/contract)"
+        correct: true
+      - text: "The app must be rewritten for each deploy"
+        correct: false
+      - text: "Zero database usage"
+        correct: false
+      - text: "All users must log out during deploys"
+        correct: false
+    explain: "Because rolling, blue-green, and canary all have both versions live at once (and talking to one database and existing clients), a deploy must not break the version still running. That means compatible changes: add a nullable column before writing to it, support both old and new message formats, never remove an API field clients still use until they've migrated. The 'expand/contract' (parallel-change) pattern — add the new, migrate, then remove the old across separate deploys — is how you ship breaking changes safely."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚦 Analogy">
+Replacing a bridge while traffic flows. <strong>Rolling</strong>: close and rebuild one lane at a time — traffic always has a lane. <strong>Blue-green</strong>: build a whole second bridge alongside, then divert everyone over in one go (and keep the old one ready in case the new one wobbles). <strong>Canary</strong>: open the new bridge to a trickle of cars first, watch it hold, then let more across. All three avoid the one thing you must never do — shut the river crossing entirely while you work.
+</Callout>
+
+## Three ways to ship without an outage
+
+<Mermaid code={String.raw`graph TD
+  subgraph Rolling["Rolling (default)"]
+    R["replace pods in batches; both versions briefly coexist"]
+  end
+  subgraph BG["Blue-Green"]
+    BGd["green deployed beside blue → switch all traffic at once → instant flip-back"]
+  end
+  subgraph Canary["Canary"]
+    C["1% → 5% → 25% → 100%, gated on metrics each step"]
+  end`} />
+
+| Strategy | Extra infra | Rollback | Blast radius of a bad release | Best for |
+|---|---|---|---|---|
+| **Rolling** | none | slow (roll back) | medium (some pods) | the sane default |
+| **Blue-green** | 2× during cutover | instant (flip) | all-or-nothing | fast rollback, big releases |
+| **Canary** | a bit (routing) | fast (shift back) | tiny (1% of users) | risky changes, real-traffic validation |
+
+## The safety mechanism: health-gated promotion
+
+What makes any of these safe isn't the traffic shape — it's **gating each step on health**. A new instance receives traffic only after its **readiness probe** passes; a canary advances to the next percentage only if its **error rate and latency stay within budget**. See [health probes & graceful lifecycle](/cloud/health-and-lifecycle/) for the probe mechanics.
+
+## See it: a canary promotion gate
+
+The runnable below is an **illustration of the decision logic**, not a deployment tool you install — it shows how a canary controller observes the new version's metrics and decides to promote, hold, or abort. Real progressive-delivery controllers (<a href="https://argoproj.github.io/rollouts/" target="_blank" rel="noopener">Argo Rollouts</a>, <a href="https://flagger.app/" target="_blank" rel="noopener">Flagger</a>) run this same kind of logic against live Prometheus metrics. This runs here:
+
+<Playground client:visible title="canary.go" code={String.raw`package main
+
+import "fmt"
+
+type Metrics struct {
+	ErrorRate float64 // 0..1
+	P99ms     int
+}
+
+// Budgets the canary must stay within to be promoted.
+const (
+	maxErrRate = 0.02 // 2%
+	maxP99ms   = 300
+)
+
+var steps = []int{1, 5, 25, 50, 100} // traffic % ladder
+
+// decide promotes to the next step, holds, or aborts.
+func decide(step int, m Metrics) (next int, verdict string) {
+	if m.ErrorRate > maxErrRate || m.P99ms > maxP99ms {
+		return 0, "ABORT → shift traffic back to stable"
+	}
+	for i, s := range steps {
+		if s == step && i+1 < len(steps) {
+			return steps[i+1], "PROMOTE"
+		}
+	}
+	return step, "DONE → canary is now stable"
+}
+
+func main() {
+	// Healthy canary climbs the ladder.
+	at := 1
+	for _, m := range []Metrics{{0.005, 120}, {0.01, 180}, {0.008, 200}, {0.012, 260}} {
+		next, v := decide(at, m)
+		fmt.Printf("at %3d%%  err=%.1f%% p99=%dms  -> %s (next %d%%)\n",
+			at, m.ErrorRate*100, m.P99ms, v, next)
+		at = next
+	}
+	// A bad release trips the gate and rolls back.
+	_, v := decide(25, Metrics{ErrorRate: 0.09, P99ms: 800})
+	fmt.Println("bad release at 25%:", v)
+}`} />
+
+The gate makes the rollback decision *automatic and metric-driven* — exactly what tools like Argo Rollouts or Flagger do against real Prometheus metrics.
+
+<Callout type="go" title="🐹 Go services are easy to deploy this way — if they shut down gracefully">
+A small static Go binary in a [tiny container](/cloud/dockerizing-go/) starts in milliseconds, so rolling and canary steps are quick. The one thing your code <em>must</em> do is cooperate with the rollout: implement a <a href="/cloud/health-and-lifecycle/">readiness probe</a> that only reports ready once dependencies are wired, and handle <code>SIGTERM</code> to <strong>drain in-flight requests</strong> before exiting (<code>server.Shutdown(ctx)</code>). Without graceful shutdown, every pod the rollout retires drops its current requests — turning a "zero-downtime" strategy into a steady drip of 502s on each deploy. The traffic strategy is the orchestrator's job; being safe to stop is yours.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Both versions run at once — so changes must be compatible">
+Every strategy here has the old and new version live simultaneously, sharing one database and existing clients. A deploy that breaks the still-running version causes an outage <em>during</em> the rollout. Use the <strong>expand/contract (parallel-change)</strong> pattern for breaking changes: first deploy a version that <em>adds</em> the new (nullable column, new field, new endpoint) while still supporting the old; migrate data/clients; only then deploy a version that removes the old. Never drop a column or API field that the currently-running version still depends on. Database migrations especially must be backward-compatible across a single deploy step.
+</Callout>
+
+## See also
+
+- [CI/CD & GitOps](/cloud/ci-cd-and-gitops/) — the pipeline that drives these rollouts.
+- [Health probes & graceful lifecycle](/cloud/health-and-lifecycle/) — the readiness/drain mechanics that make them zero-downtime.
+- [Autoscaling](/cloud/autoscaling/) — scaling the replicas a rollout manages.
+- [Argo Rollouts](https://argoproj.github.io/rollouts/) & [Flagger](https://flagger.app/) — progressive-delivery controllers.
+
+Next: letting the platform size your service to its load — [autoscaling](/cloud/autoscaling/).

@@ -1,0 +1,121 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+// Each term: t=term, k=i18n key suffix, en=English definition (HTML), href=external ref.
+// The Arabic definition lives in src/i18n/ar.json under `glossary.<k>`.
+const groups: { key: string; title: string; terms: { t: string; k: string; en: string; href?: string }[] }[] = [
+  {
+    key: 'containers',
+    title: 'Containers & Orchestration',
+    terms: [
+      { t: 'Container', k: 'container', en: 'An isolated process started from an image, sharing the host kernel — far lighter than a virtual machine.' },
+      { t: 'Image', k: 'image', en: 'An immutable, layered snapshot of an app plus its runtime; you run an image as a container.' },
+      { t: 'Docker', k: 'docker', href: 'https://docs.docker.com/get-started/', en: 'The standard engine for building and running containers from a <code>Dockerfile</code> recipe.' },
+      { t: 'Registry', k: 'registry', en: 'A server that stores and distributes container images (Docker Hub, GHCR, ECR).' },
+      { t: 'Kubernetes (K8s)', k: 'kubernetes', href: 'https://kubernetes.io/docs/home/', en: 'An orchestrator that declaratively runs, scales, heals, and networks containers across a cluster.' },
+      { t: 'Helm', k: 'helm', href: 'https://helm.sh/', en: 'A package manager for Kubernetes — templated, versioned bundles of manifests called charts.' },
+    ],
+  },
+  {
+    key: 'observability',
+    title: 'Observability',
+    terms: [
+      { t: 'Prometheus', k: 'prometheus', href: 'https://prometheus.io/docs/', en: 'A pull-based metrics database and monitoring system that scrapes <code>/metrics</code> endpoints.' },
+      { t: 'Grafana', k: 'grafana', href: 'https://grafana.com/docs/', en: 'A dashboarding and visualization tool for metrics, logs, and traces.' },
+      { t: 'OpenTelemetry (OTel)', k: 'otel', href: 'https://opentelemetry.io/docs/languages/go/', en: 'A vendor-neutral standard and SDK for traces, metrics, and logs — instrument once, export anywhere.' },
+      { t: 'Jaeger', k: 'jaeger', href: 'https://www.jaegertracing.io/', en: 'A distributed-tracing backend for storing and exploring traces.' },
+    ],
+  },
+  {
+    key: 'messaging',
+    title: 'Messaging & Data',
+    terms: [
+      { t: 'Redis', k: 'redis', href: 'https://redis.io/docs/latest/', en: 'An in-memory key–value store used for caching, sessions, queues, and rate limiting.' },
+      { t: 'NATS', k: 'nats', href: 'https://docs.nats.io/', en: 'A lightweight cloud-native messaging system (pub/sub, queue groups, JetStream).' },
+      { t: 'Kafka', k: 'kafka', href: 'https://kafka.apache.org/documentation/', en: 'A distributed, durable event-streaming log for high-throughput pub/sub.' },
+      { t: 'Message broker', k: 'broker', en: 'Middleware that receives, stores, and routes messages between producers and consumers.' },
+      { t: 'Outbox pattern', k: 'outbox', en: 'Write an event into the same DB transaction as the state change; a relay publishes it later — fixes the dual-write problem.' },
+      { t: 'CQRS', k: 'cqrs', en: 'Command Query Responsibility Segregation — separate write and read models.' },
+      { t: 'Event sourcing', k: 'eventsourcing', en: 'Store the sequence of events as the source of truth and derive state by replaying them.' },
+      { t: 'Saga', k: 'saga', en: 'A multi-service transaction modeled as a sequence of local steps, each with a compensating undo.' },
+      { t: 'Idempotency', k: 'idempotency', en: 'Processing the same request/message twice has the same effect as once — the key to safe retries.' },
+    ],
+  },
+  {
+    key: 'networking',
+    title: 'Networking & Protocols',
+    terms: [
+      { t: 'IPC', k: 'ipc', en: 'Inter-process communication — OS mechanisms (pipes, sockets, shared memory, signals) for processes to exchange data.' },
+      { t: 'Socket', k: 'socket', en: 'An endpoint for network (or local) communication; in Go, the <code>net.Conn</code> behind a connection.' },
+      { t: 'Pipe', k: 'pipe', en: 'A one-directional, in-kernel byte stream connecting a write end to a read end.' },
+      { t: 'RPC', k: 'rpc', en: 'Remote Procedure Call — invoking a function on another process or host as if it were local.' },
+      { t: 'gRPC', k: 'grpc', href: 'https://grpc.io/docs/', en: 'A high-performance RPC framework using protobuf over HTTP/2, with generated typed clients.' },
+      { t: 'Protocol Buffers', k: 'protobuf', href: 'https://protobuf.dev/', en: "Google's typed, compact binary serialization format and interface description language." },
+      { t: 'TLS', k: 'tls', en: 'Transport Layer Security — encrypts and authenticates network connections (the S in HTTPS).' },
+      { t: 'mTLS', k: 'mtls', en: 'Mutual TLS — both client and server present and verify certificates, common in service meshes.' },
+      { t: 'CIDR', k: 'cidr', en: 'Classless Inter-Domain Routing — an IP range written as address/prefix, e.g. <code>10.0.0.0/8</code>.' },
+      { t: 'SNI', k: 'sni', en: 'Server Name Indication — the TLS field naming the host being connected to (sent before encryption).' },
+    ],
+  },
+  {
+    key: 'security',
+    title: 'Security & Cryptography',
+    terms: [
+      { t: 'AEAD', k: 'aead', en: 'Authenticated Encryption with Associated Data — encrypts and authenticates in one step (e.g. AES-GCM).' },
+      { t: 'KDF', k: 'kdf', en: 'Key Derivation Function — derives a key from a password/secret; slow KDFs (argon2, bcrypt) protect passwords.' },
+      { t: 'HMAC', k: 'hmac', en: 'Hash-based Message Authentication Code — proves a message’s integrity and origin with a shared key.' },
+      { t: 'Nonce', k: 'nonce', en: 'A “number used once” — a unique value per encryption that must never repeat under the same key.' },
+      { t: 'CSP', k: 'csp', en: 'Content Security Policy — a response header restricting which resources a page may load (mitigates XSS).' },
+      { t: 'HSTS', k: 'hsts', en: 'HTTP Strict Transport Security — a header forcing browsers to use HTTPS.' },
+      { t: 'JWT', k: 'jwt', en: 'JSON Web Token — a signed (not encrypted) token carrying claims; always verify the algorithm and expiry.' },
+      { t: 'OWASP', k: 'owasp', href: 'https://owasp.org/www-project-top-ten/', en: 'Open Worldwide Application Security Project — best known for the OWASP Top 10 web risks.' },
+      { t: 'CVE', k: 'cve', en: 'Common Vulnerabilities and Exposures — a public identifier for a known security flaw.' },
+      { t: 'SBOM', k: 'sbom', en: 'Software Bill of Materials — an inventory of every component and dependency in a build.' },
+    ],
+  },
+  {
+    key: 'architecture',
+    title: 'Architecture',
+    terms: [
+      { t: 'Domain-Driven Design (DDD)', k: 'ddd', href: 'https://martinfowler.com/tags/domain%20driven%20design.html', en: 'Modeling software around the business domain and its shared language.' },
+      { t: 'Bounded context', k: 'boundedcontext', en: 'A self-contained part of the domain with its own model and vocabulary (a DDD concept).' },
+      { t: 'Hexagonal / Clean architecture', k: 'hexagonal', en: 'Ports & adapters — isolate core business logic from I/O (DB, HTTP) behind interfaces.' },
+      { t: '12-factor app', k: 'twelvefactor', href: 'https://12factor.net/', en: 'A methodology for portable, scalable cloud apps (config in the environment, stateless processes, …).' },
+      { t: 'Monolith', k: 'monolith', en: 'A single deployable application that contains all of a system’s features.' },
+      { t: 'Microservices', k: 'microservices', en: 'An architecture of small, independently-deployable services that each own their data.' },
+    ],
+  },
+];
+---
+<BaseLayout title="Glossary" description="Plain-language definitions of the external tools and acronyms referenced across The Go Reference — Docker, Kubernetes, Redis, Kafka, Prometheus, OpenTelemetry, gRPC, TLS/mTLS, AEAD, KDF, DDD, sagas and more — each with a link to learn it in depth.">
+  <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Glossary</span></nav>
+
+  <header class="dp-hero">
+    <p class="dp-hero__eyebrow" data-i18n="glossary.eyebrow">Reference</p>
+    <h1 data-i18n="glossary.h1">Glossary</h1>
+    <p class="dp-hero__lede" data-i18n-html="glossary.lede">
+      The Go Reference teaches <strong>Go</strong>; for the external tools and concepts it mentions, here are
+      short plain-language definitions — each with a link to learn it properly. If a page drops an acronym you
+      don’t recognize, it’s probably here.
+    </p>
+  </header>
+
+  {groups.map((g) => (
+    <section class="dp-gloss-sec">
+      <h2 class="dp-section-head" data-i18n={`glossary.grp.${g.key}`}>{g.title}</h2>
+      <dl class="dp-gloss">
+        {g.terms.map((term) => (
+          <div class="dp-gloss__item">
+            <dt class="dp-gloss__term">
+              {term.t}
+              {term.href && (
+                <a class="dp-gloss__link" href={term.href} target="_blank" rel="noopener" aria-label={`Learn ${term.t} (external)`}>↗</a>
+              )}
+            </dt>
+            <dd class="dp-gloss__def" data-i18n-html={`glossary.${term.k}`} set:html={term.en} />
+          </div>
+        ))}
+      </dl>
+    </section>
+  ))}
+</BaseLayout>
