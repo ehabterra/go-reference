@@ -77,7 +77,7 @@ Logs are the diary entries of individual requests; metrics are the dashboard gau
 
 ## Pull-based metrics
 
-Prometheus is **pull-based**: your app maintains counters in memory and exposes them on a `/metrics` HTTP endpoint in a simple text format; Prometheus **scrapes** that endpoint on an interval and stores the time series.
+**Prometheus** is an open-source metrics database and monitoring system (the de-facto standard in cloud-native, usually paired with **Grafana** for dashboards). It is **pull-based**: your app maintains counters in memory and exposes them on a `/metrics` HTTP endpoint in a simple text format; Prometheus **scrapes** that endpoint on an interval and stores the time series.
 
 <Mermaid code={String.raw`graph LR
   APP["Go app<br/>counters in memory<br/>+ /metrics endpoint"] -->|scrape every 15s| PROM["Prometheus<br/>(stores time series)"]

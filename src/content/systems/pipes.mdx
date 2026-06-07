@@ -77,7 +77,7 @@ A pipe is exactly what it sounds like: a tube with water poured in one end comin
 
 ## What a pipe is
 
-A **pipe** is the oldest, simplest IPC: a one-directional, in-kernel **byte stream** with a *write end* and a *read end*. Bytes written to one end come out the other, in order, with no message boundaries. There are two flavors:
+A **pipe** is the oldest, simplest form of **inter-process communication (IPC)** — the umbrella term for the OS mechanisms that let separate processes exchange data (pipes, sockets, shared memory, signals). A pipe specifically is a one-directional, in-kernel **byte stream** with a *write end* and a *read end*. Bytes written to one end come out the other, in order, with no message boundaries. There are two flavors:
 
 - **Anonymous pipe** — no name; shared by handing a file descriptor to a child process. This is what the shell's `|` builds.
 - **Named pipe (FIFO)** — has a filesystem path, so *unrelated* processes can connect by opening it.

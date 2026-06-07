@@ -75,6 +75,10 @@ import Playground from '../../components/islands/Playground.tsx';
 Shipping a Go service in a full Linux image is mailing a screwdriver inside a packed toolbox inside a shipping container — heavy, slow, and full of things a thief could use. A multi-stage build unpacks the screwdriver and mails just that: the single static binary in a near-empty box. Smaller to send, nothing extra to steal, and it does exactly one job. Go's static binaries make this minimalism trivial in a way few other languages can match.
 </Callout>
 
+## What Docker actually is
+
+A **container** packages your application together with everything it needs to run — the binary, files, and a minimal OS userland — into one **image** that runs identically on any machine with a container runtime. **Docker** is the standard tool for building and running them; you describe the image in a **`Dockerfile`** (a recipe of steps), run `docker build` to produce the image, push it to a **registry**, and Kubernetes (or `docker run`) pulls and runs it. New to it? Think "a `go build` that also packages the OS around your binary."
+
 ## The multi-stage build
 
 The standard pattern: compile in a heavy builder stage, then copy only the binary into a minimal final image.
