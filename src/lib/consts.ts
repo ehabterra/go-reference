@@ -232,4 +232,32 @@ export const SYSTEMS_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Security categories (the journey on /security/). */
+export const SECURITY_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'sec-foundations',
+    title: 'Security Foundations',
+    blurb:
+      'The mindset before the tools — why Go is the language of modern security tooling, the rules of authorized testing, and how to build and ship a tool responsibly.',
+  },
+  {
+    key: 'offensive',
+    title: 'Recon & Offensive Testing',
+    blurb:
+      'How attacks actually work, so you can defend against them — port scanning, DNS and HTTP reconnaissance, fuzzing for bugs, and reading raw packets. Lab-scoped and defense-paired.',
+  },
+  {
+    key: 'cryptography',
+    title: 'Cryptography',
+    blurb:
+      "Go's crypto toolkit done right — hashing and password storage, authenticated symmetric encryption, TLS and PKI, and the classic mistakes that break weak crypto.",
+  },
+  {
+    key: 'defense',
+    title: 'Defensive Engineering',
+    blurb:
+      'Writing software that resists attack — input validation and injection defense, authentication and authorization, secrets management, and securing the supply chain.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

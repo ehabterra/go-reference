@@ -1,0 +1,162 @@
+---
+title: "Why Go for Security"
+category: sec-foundations
+kind: guide
+order: 1
+difficulty: "Start here"
+status: ready
+intent: "Why Go became the language of security tooling — static binaries that drop anywhere, cheap concurrency for scanners, and a crypto/net standard library that covers most of what a tool needs."
+related:
+  - security-mindset-and-ethics
+  - building-security-tools
+  - port-scanning
+quiz:
+  - q: "Why is a single static Go binary so useful for security tooling?"
+    options:
+      - text: "It drops onto a target or lab box with no interpreter or dependencies and just runs — and cross-compiles to any OS/arch from one machine"
+        correct: true
+      - text: "It is impossible to reverse-engineer"
+        correct: false
+      - text: "It encrypts itself automatically"
+        correct: false
+      - text: "It runs faster than hand-written assembly"
+        correct: false
+    explain: "`CGO_ENABLED=0 go build` produces one self-contained executable; set GOOS/GOARCH and you cross-compile for Linux, Windows, macOS, amd64/arm64 from a single CI job. That portability — copy-and-run, no runtime to install — is exactly why red and blue teams reach for Go."
+  - q: "Which standard-library packages cover most of what a security tool needs out of the box?"
+    options:
+      - text: "net, crypto/*, encoding/*, and net/http"
+        correct: true
+      - text: "Only fmt and os"
+        correct: false
+      - text: "None — Go has no crypto in the stdlib"
+        correct: false
+      - text: "You must use C libraries for all of it"
+        correct: false
+    explain: "Go ships TCP/UDP and DNS in net, hashing/AES/TLS/HMAC in crypto/*, JSON/hex/base64/ASN.1 in encoding/*, and a full HTTP client+server in net/http. A scanner, a fuzzer, or a TLS service is mostly stdlib — third-party libs (gopacket, x/crypto) fill the gaps."
+  - q: "Why does cheap concurrency matter for a port scanner or web fuzzer?"
+    options:
+      - text: "Goroutines make 'thousands of probes in flight at once' affordable, so I/O-bound scanning finishes fast without thread-per-connection cost"
+        correct: true
+      - text: "It makes the scan undetectable"
+        correct: false
+      - text: "Concurrency reduces the number of packets sent"
+        correct: false
+      - text: "It bypasses firewalls"
+        correct: false
+    explain: "Scanning and fuzzing are I/O-bound: most time is spent waiting on the network. Goroutines + a worker pool keep thousands of probes in flight on a handful of OS threads, so the tool is limited by bandwidth and rate limits, not by thread overhead."
+  - q: "What does the `crypto/subtle` package exist for?"
+    options:
+      - text: "Constant-time operations (e.g. comparing secrets) so attackers can't learn data from timing differences"
+        correct: true
+      - text: "Making encryption subtly weaker for export"
+        correct: false
+      - text: "Hiding data inside images"
+        correct: false
+      - text: "Obfuscating Go source code"
+        correct: false
+    explain: "`subtle.ConstantTimeCompare` takes the same time whether bytes match early or late, defeating timing side-channels when checking MACs, tokens, or password hashes. Using `==` or bytes.Equal on a secret can leak how many leading bytes were correct."
+  - q: "Is Go's garbage collector a problem for security software?"
+    options:
+      - text: "Rarely — memory safety eliminates whole bug classes (buffer overflows, use-after-free) that plague C security tools, and the GC is low-latency"
+        correct: true
+      - text: "Yes, it makes all crypto insecure"
+        correct: false
+      - text: "Yes, the GC sends your keys to Google"
+        correct: false
+      - text: "Go programs cannot use memory at all"
+        correct: false
+    explain: "Memory safety is a security feature: the overflow/UAF bugs that are the bread and butter of exploitation simply don't exist in safe Go. The trade-off is that secrets in GC'd memory are harder to wipe deterministically — for the highest-assurance cases you pin them in byte slices and zero them, but for the vast majority of tooling, safety wins."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🛡️ Analogy">
+A field operative wants a tool that fits in one pocket, works in any country, and never needs batteries you can't find locally. A Go binary is that tool: one self-contained file, cross-compiled for whatever box it lands on, with the crypto and networking "batteries" built in. You don't ship a runtime, hunt for libraries, or fight dependency hell on a stripped-down target — you copy the file and it runs.
+</Callout>
+
+## What this track is — and isn't
+
+This track teaches security **the way a defender must understand it**: to stop an attack you have to know how it works. So we cover offensive techniques — scanning, recon, fuzzing, packet analysis — *and* the defensive engineering that neutralizes them — input validation, authentication, cryptography, supply-chain safety.
+
+Everything offensive here is scoped to systems you **own or are authorized to test** (see [the security mindset](/security/security-mindset-and-ethics/)). The goal is skill and understanding, not harm. You will not find weaponized malware, command-and-control frameworks, or detection-evasion tooling — those cross the line from learning into causing damage, and they aren't what makes you a better engineer.
+
+## Why Go won the security-tooling market
+
+Walk through any modern offensive or defensive toolkit and you'll find Go everywhere — from network scanners to TLS-terminating proxies to cloud security scanners. Four properties explain it:
+
+<Mermaid code={String.raw`graph TD
+  GO["Go security tool"] --> A["single static binary<br/>(drop & run, no deps)"]
+  GO --> B["cross-compiles anywhere<br/>(GOOS/GOARCH)"]
+  GO --> C["cheap concurrency<br/>(1000s of probes in flight)"]
+  GO --> D["crypto + net in stdlib<br/>(TLS, AES, DNS, HTTP)"]
+  A --> WIN["fast to write, easy to deploy"]
+  B --> WIN
+  C --> WIN
+  D --> WIN`} />
+
+- **Drop-and-run binaries.** `CGO_ENABLED=0 go build` yields one file with no interpreter and no shared libraries. Copy it to a lab target, a container, or a jump box and it runs. There is no "install Python 3.11 and 14 pip packages" step.
+- **Cross-compilation.** `GOOS=windows GOARCH=amd64 go build` from a Mac. One CI job ships every platform — invaluable when your target and your laptop differ.
+- **Concurrency for I/O-bound work.** Scanning and fuzzing spend their lives waiting on the network. Goroutines plus a [worker pool](/patterns/worker-pool/) keep thousands of requests in flight cheaply, so throughput is bounded by the network, not by threads.
+- **A security-grade standard library.** `net` (TCP/UDP/DNS), `crypto/*` (hashing, AES-GCM, TLS, HMAC, constant-time compare), `encoding/*` (hex, base64, JSON, ASN.1), and `net/http`. Most tools are 90% stdlib.
+
+## See it: the stdlib is the toolkit
+
+No imports beyond the standard library — a fingerprint, a keyed MAC, and a constant-time check, the building blocks of half the tools in this track. This runs right here:
+
+<Playground client:visible title="toolkit.go" code={String.raw`package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"fmt"
+)
+
+func main() {
+	data := []byte("transfer 100 to alice")
+	key := []byte("shared-secret-key")
+
+	// A fingerprint: SHA-256 over the data.
+	sum := sha256.Sum256(data)
+	fmt.Println("sha256:", hex.EncodeToString(sum[:])[:16], "...")
+
+	// A keyed MAC: proves the message came from someone with the key.
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	tag := mac.Sum(nil)
+	fmt.Println("hmac:  ", hex.EncodeToString(tag)[:16], "...")
+
+	// Verify in CONSTANT TIME — no timing side-channel.
+	want := tag
+	got := tag
+	ok := subtle.ConstantTimeCompare(want, got) == 1
+	fmt.Println("verified:", ok)
+}`} />
+
+That's hashing, message authentication, and a timing-safe comparison — three primitives, zero third-party dependencies. The [cryptography pages](/security/hashing-and-passwords/) go deep on each.
+
+## The honest trade-offs
+
+Go isn't magic. Two things to know going in:
+
+- **Memory safety cuts both ways.** The buffer overflows and use-after-frees that drive C exploitation don't exist in safe Go — a huge win. But that same managed memory makes it harder to *wipe* a secret deterministically; the GC may copy it around. For most tooling that's fine; for high-assurance key handling you minimize a secret's lifetime and zero its bytes.
+- **`cgo` breaks the superpower.** Packages that link C (some `gopacket` builds, certain DB drivers) pull in libc, so the binary is no longer static or trivially cross-compiled. Keep `CGO_ENABLED=0` where you can, and know when a tool genuinely needs the C path.
+
+<Callout type="go" title="🐹 The dual-use reality">
+Every technique in this track is <strong>dual-use</strong>: a port scanner finds your exposed services <em>and</em> an attacker's targets; a fuzzer hardens your parser <em>and</em> hunts for crashes in someone else's. The code is neutral — intent and authorization are what make it ethical. That's why this track pairs every offensive idea with its defense, and why the next page is about the rules of the game, not a tool.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A static binary is not a stealthy one">
+Beginners assume a compiled Go binary hides what it does. It doesn't: strings, symbols, and the Go runtime are all recoverable, and security products fingerprint Go malware easily. Go gives you <em>portability and safety</em>, not secrecy. If you're learning to defend, that's good news — Go-based tools are quite analyzable. Never treat "it's compiled" as a security control.
+</Callout>
+
+## See also
+
+- [The security mindset & authorized testing](/security/security-mindset-and-ethics/) — the rules before the tools.
+- [Building security tools](/security/building-security-tools/) — static builds, cross-compilation, and shipping responsibly.
+- [Cryptography: hashing & passwords](/security/hashing-and-passwords/) — the crypto/* packages in depth.
+- [Why Go for systems](/systems/why-go-for-systems/) — the same superpowers, applied to the OS.
+
+Next: the one thing that separates a security professional from a criminal — [the security mindset & authorized testing](/security/security-mindset-and-ethics/).
