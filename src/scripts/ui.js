@@ -118,6 +118,31 @@ function initSearch() {
   let active = 0;
   let lastFocus = null;
 
+  // ---- level & track filters ----
+  const filtersEl = document.getElementById('dp-cmdk-filters');
+  const activeTracks = new Set();
+  const activeLevels = new Set();
+  const LEVEL_ORDER = ['Start here', 'Beginner', 'Intermediate', 'Advanced', 'Reference'];
+  // distinct tracks (in first-seen order) and levels (in a sensible difficulty order)
+  const tracks = [...new Set(data.map((x) => x.s).filter(Boolean))];
+  const levels = LEVEL_ORDER.filter((l) => data.some((x) => x.d === l));
+
+  const renderFilters = () => {
+    if (!filtersEl) return;
+    const chip = (label, on, kind, val) =>
+      `<button class="dp-cmdk__chip ${on ? 'is-on' : ''}" data-kind="${kind}" data-val="${val.replace(/"/g, '&quot;')}">${label}</button>`;
+    filtersEl.innerHTML =
+      '<span class="dp-cmdk__chip-group">' +
+        levels.map((l) => chip(l, activeLevels.has(l), 'level', l)).join('') +
+      '</span><span class="dp-cmdk__chip-sep"></span><span class="dp-cmdk__chip-group">' +
+        tracks.map((t) => chip(t, activeTracks.has(t), 'track', t)).join('') +
+      '</span>';
+  };
+
+  const passesFilters = (item) =>
+    (activeTracks.size === 0 || activeTracks.has(item.s)) &&
+    (activeLevels.size === 0 || activeLevels.has(item.d));
+
   const render = () => {
     if (!results.length) {
       list.innerHTML = '<li class="dp-cmdk__empty">No matches — try “channel”, “factory”, “context”…</li>';
@@ -129,7 +154,7 @@ function initSearch() {
       return `<li class="dp-cmdk__item ${i === active ? 'is-active' : ''}" data-i="${i}" data-u="${r.u}">
         <div class="dp-cmdk__item-main">
           <div class="dp-cmdk__item-title">${r.t}</div>
-          <div class="dp-cmdk__item-sub">${r.s} · ${r.i || ''}</div>
+          <div class="dp-cmdk__item-sub">${r.s}${r.d ? ' · ' + r.d : ''} · ${r.i || ''}</div>
         </div>
         <span class="dp-cmdk__tag" data-cat="${r.c}" style="color:${color}">${cat}</span>
       </li>`;
@@ -140,9 +165,10 @@ function initSearch() {
 
   const search = (q) => {
     q = q.trim().toLowerCase();
-    if (!q) { results = data.slice(); }
+    const base = data.filter(passesFilters);
+    if (!q) { results = base.slice(0, 50); }
     else {
-      results = data
+      results = base
         .map((item) => ({ item, score: fuzzyScore(q, item) }))
         .filter((x) => x.score > 0)
         .sort((a, b) => b.score - a.score)
@@ -159,6 +185,7 @@ function initSearch() {
     modal.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
     input.value = '';
+    renderFilters();
     search('');
     setTimeout(() => input.focus(), 20);
   };
@@ -172,6 +199,17 @@ function initSearch() {
 
   if (trigger) trigger.addEventListener('click', open);
   input.addEventListener('input', () => search(input.value));
+
+  if (filtersEl) filtersEl.addEventListener('click', (e) => {
+    const chip = e.target.closest('.dp-cmdk__chip');
+    if (!chip) return;
+    const val = chip.getAttribute('data-val');
+    const set = chip.getAttribute('data-kind') === 'level' ? activeLevels : activeTracks;
+    set.has(val) ? set.delete(val) : set.add(val);
+    renderFilters();
+    search(input.value);
+    input.focus();
+  });
   modal.querySelectorAll('[data-dp-cmdk-close]').forEach((el) => el.addEventListener('click', close));
 
   list.addEventListener('click', (e) => {
@@ -255,8 +293,28 @@ function initLang() {
   });
 }
 
+/* ---------- randomize quiz answer order ----------
+   Authoring puts the correct option first; without shuffling, "the first is
+   always right" becomes a giveaway. We shuffle the .dp-opt buttons within each
+   question AFTER initLang() has cached its i18n `blocks` (which track elements
+   by reference, not DOM position) — so the EN/AR positional translation mapping
+   stays correct, and data-correct moves with each button. */
+function initQuizShuffle() {
+  document.querySelectorAll('.dp-q').forEach((q) => {
+    const opts = Array.from(q.querySelectorAll('.dp-opt'));
+    if (opts.length < 2) return;
+    for (let i = opts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [opts[i], opts[j]] = [opts[j], opts[i]];
+    }
+    const explain = q.querySelector('.dp-q__explain'); // keep explanation last
+    opts.forEach((o) => q.insertBefore(o, explain)); // explain null → append
+  });
+}
+
 function boot() {
   initLang();
+  initQuizShuffle();
   initScroll();
   initReveal();
   initMenu();
