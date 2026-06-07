@@ -1,0 +1,150 @@
+---
+title: "The OWASP Top 10"
+category: defense
+kind: topic
+order: 12.5
+difficulty: "Beginner"
+status: ready
+intent: "The industry's reference list of the most critical web app security risks — what each category means, how it shows up in Go, and the defensive habit that neutralizes it."
+related:
+  - input-validation-and-injection
+  - authentication-and-authorization
+  - ssrf-and-request-forgery
+quiz:
+  - q: "What is the OWASP Top 10?"
+    options:
+      - text: "A regularly-updated, community-driven reference list of the most critical web application security risks, used as an awareness and baseline-coverage standard"
+        correct: true
+      - text: "A list of the ten best security tools"
+        correct: false
+      - text: "Ten laws every website must legally comply with"
+        correct: false
+      - text: "A ranking of the most-hacked companies"
+        correct: false
+    explain: "The OWASP Top 10 is a community-driven awareness document from the Open Worldwide Application Security Project, refreshed every few years from real-world data. It names the most critical categories of web app risk (injection, broken access control, etc.). It's not a law or a tool list — it's a baseline checklist: if you can't defend against the Top 10, deeper hardening is premature. Treat it as the floor, not the ceiling."
+  - q: "In the current Top 10, which category sits at #1 — the most prevalent serious risk?"
+    options:
+      - text: "Broken Access Control — users acting outside their intended permissions (e.g. accessing another user's record by changing an ID)"
+        correct: true
+      - text: "Buffer overflows"
+        correct: false
+      - text: "Weak passwords"
+        correct: false
+      - text: "Denial of service"
+        correct: false
+    explain: "Broken Access Control rose to #1 in the 2021 list: the most common serious flaw is letting a user do something they shouldn't — read another user's data by editing an `/orders/123` ID (IDOR), reach an admin endpoint without the admin role, or escalate privileges. The defense is to enforce authorization on every request server-side, deny by default, and never trust a client-supplied identity or role."
+  - q: "The Top 10 renamed 'Injection' to fold in XSS. What's the unifying root cause of injection flaws?"
+    options:
+      - text: "Untrusted input is interpreted as code/commands because data and code aren't separated — fixed by parameterization and context-aware output encoding, not by blacklisting"
+        correct: true
+      - text: "Servers being too slow"
+        correct: false
+      - text: "Using HTTPS incorrectly"
+        correct: false
+      - text: "Storing passwords in plaintext"
+        correct: false
+    explain: "Injection (SQL, OS command, LDAP, and XSS) all share one root cause: untrusted data gets mixed into an interpreter's instructions and is executed as code. The reliable fix is structural separation — parameterized queries so data can never become SQL, and context-aware output encoding (e.g. Go's html/template auto-escaping) so data can never become script. Trying to 'sanitize' by blacklisting bad characters is fragile and routinely bypassed."
+  - q: "How does Go's html/template package defend against XSS by default?"
+    options:
+      - text: "It is context-aware — it automatically escapes interpolated data differently depending on whether it lands in HTML, an attribute, JavaScript, a URL, or CSS"
+        correct: true
+      - text: "It blocks all HTML tags entirely"
+        correct: false
+      - text: "It encrypts the output"
+        correct: false
+      - text: "It does nothing; you must escape manually"
+        correct: false
+    explain: "html/template (distinct from text/template!) tracks the context where each `{{.}}` action sits and applies the correct escaping automatically — HTML-escaping in body text, attribute-escaping inside attributes, JS-escaping inside <script>, URL-escaping in href, etc. This context-aware auto-escaping neutralizes the vast majority of reflected/stored XSS for free. The classic Go footgun is reaching for text/template (no escaping) to render HTML, or using template.HTML to mark untrusted data as safe."
+  - q: "What's the correct way to USE the OWASP Top 10 in a project?"
+    options:
+      - text: "As a baseline awareness checklist and threat-modeling starting point — necessary minimum coverage, complemented by deeper standards (ASVS) and testing, not a complete security program by itself"
+        correct: true
+      - text: "As the complete and sufficient definition of application security"
+        correct: false
+      - text: "Only after a breach has occurred"
+        correct: false
+      - text: "As a list to show auditors and then ignore"
+        correct: false
+    explain: "The Top 10 is a starting point: it raises awareness of the highest-impact categories and anchors threat modeling, code review, and training. But it's explicitly a minimum, not a full program — OWASP itself points teams to the Application Security Verification Standard (ASVS) for thorough requirements, plus testing (SAST/DAST), dependency scanning, and secure design. Cover the Top 10 first; then go deeper."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🩺 Analogy">
+The OWASP Top 10 is the security equivalent of "wash your hands, don't smoke, wear a seatbelt." It isn't the whole of medicine — but the handful of habits on the list prevent the overwhelming majority of harm. If a web app falls to one of these ten, it's almost never because the attack was clever; it's because a basic, well-known precaution was skipped. Learn the ten, build the reflex, and you've closed the doors attackers try first.
+</Callout>
+
+## What it is
+
+The **OWASP Top 10** is a community-driven awareness document from the <a href="https://owasp.org/www-project-top-ten/" target="_blank" rel="noopener">Open Worldwide Application Security Project</a>, refreshed every few years from real-world breach and testing data. It names the **most critical categories of web application risk** — a baseline checklist every developer should be able to defend against. It is *the floor, not the ceiling*: cover it first, then go deeper with the <a href="https://owasp.org/www-project-application-security-verification-standard/" target="_blank" rel="noopener">ASVS</a>.
+
+## The ten (2021 edition), with the Go defense
+
+<Mermaid code={String.raw`graph TD
+  A1["A01 Broken Access Control"] --> D1["enforce authz server-side, deny by default"]
+  A2["A02 Cryptographic Failures"] --> D2["TLS everywhere, hash passwords, no weak crypto"]
+  A3["A03 Injection (+XSS)"] --> D3["parameterize queries, html/template auto-escape"]
+  A4["A04 Insecure Design"] --> D4["threat-model; secure defaults"]
+  A5["A05 Security Misconfiguration"] --> D5["hardened config, no defaults, least privilege"]`} />
+
+| # | Category | Go-flavored defense |
+|---|---|---|
+| **A01** | Broken Access Control | Check authorization on **every** request; deny by default; never trust client-supplied IDs/roles → [authn & authz](/security/authentication-and-authorization/) |
+| **A02** | Cryptographic Failures | TLS in transit; hash passwords with bcrypt/argon2; avoid weak/legacy crypto → [hashing](/security/hashing-and-passwords/), [TLS & PKI](/security/tls-and-pki/) |
+| **A03** | Injection (incl. XSS) | Parameterized queries (`database/sql` placeholders); `html/template` auto-escaping → [injection](/security/input-validation-and-injection/) |
+| **A04** | Insecure Design | Threat-model early; choose secure defaults; rate-limit sensitive flows |
+| **A05** | Security Misconfiguration | No default creds, minimal surface, security headers → [hardening](/security/hardening-services/) |
+| **A06** | Vulnerable & Outdated Components | `govulncheck`, pin & scan dependencies → [supply chain](/security/supply-chain-security/) |
+| **A07** | Identification & Auth Failures | Strong session mgmt, MFA, lockout → [authn & authz](/security/authentication-and-authorization/) |
+| **A08** | Software & Data Integrity Failures | Verify signatures/digests; secure CI/CD; guard deserialization |
+| **A09** | Security Logging & Monitoring Failures | Log security events, alert, don't log secrets |
+| **A10** | Server-Side Request Forgery (SSRF) | Allowlist outbound destinations → [SSRF](/security/ssrf-and-request-forgery/) |
+
+## See it: context-aware escaping kills XSS (A03)
+
+The single highest-leverage XSS defense in Go is using **`html/template`** (not `text/template`). It's *context-aware*: the same untrusted value is escaped differently depending on where it lands. This runs here:
+
+<Playground client:visible title="xss_defense.go" code={String.raw`package main
+
+import (
+	"html/template"
+	"os"
+)
+
+// One piece of attacker-controlled input...
+const userInput = "<script>steal()</script>"
+
+func main() {
+	// html/template auto-escapes by CONTEXT. The same value is encoded
+	// differently for HTML body, attribute, and URL positions.
+	t := template.Must(template.New("p").Parse(
+		"<p>{{.}}</p>\n" +
+			"<a title=\"{{.}}\">link</a>\n" +
+			"<a href=\"/search?q={{.}}\">go</a>\n"))
+
+	_ = t.Execute(os.Stdout, userInput)
+	// The <script> tag is neutralized in every context — it can never
+	// execute. With text/template it would render raw and run. Never
+	// use text/template to build HTML, and never wrap untrusted data
+	// in template.HTML to "fix" escaping.
+}`} />
+
+The `<script>` is rendered as inert text in the body, attribute, and URL — it can never execute. This is why "use `html/template`" is the canonical Go answer to A03's XSS half; the SQL half is "use parameterized queries" (covered in [injection](/security/input-validation-and-injection/)).
+
+<Callout type="go" title="🐹 Go's stdlib already ships most of the Top-10 defenses">
+A lot of the Top 10 is "use the safe stdlib path instead of the dangerous one." <code>database/sql</code> placeholders give you parameterized queries (A03); <code>html/template</code> gives context-aware escaping (A03); <code>crypto/tls</code> gives transport encryption (A02); <code>golang.org/x/crypto/bcrypt</code> gives password hashing (A02); <code>crypto/subtle.ConstantTimeCompare</code> avoids timing leaks (A02/A07); and <code>govulncheck</code> flags vulnerable dependencies (A06). The Go-idiomatic security posture is: reach for the standard, safe primitive — the footguns (string-concatenated SQL, <code>text/template</code> for HTML, rolling your own crypto) are the deviations.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ The Top 10 is a floor, not a finish line">
+Two traps. First, treating the list as <em>complete</em> — it's an awareness baseline, deliberately only ten categories; real coverage needs threat modeling, the ASVS, dependency scanning, and testing on top. Second, defending against the <em>label</em> instead of the <em>root cause</em> — e.g. "fixing" injection by blacklisting quotes and angle brackets instead of parameterizing and context-encoding. Blacklists are bypassed routinely; structural fixes (separate data from code) are what actually hold. Cover the ten, but understand <em>why</em> each defense works.
+</Callout>
+
+## See also
+
+- [Input validation & injection](/security/input-validation-and-injection/) — A03 in depth.
+- [Authentication & authorization](/security/authentication-and-authorization/) — A01 & A07.
+- [SSRF & request forgery](/security/ssrf-and-request-forgery/) — A10.
+- [OWASP Top 10 (official)](https://owasp.org/www-project-top-ten/) & [ASVS](https://owasp.org/www-project-application-security-verification-standard/) — the source documents.
+
+Next: the request-forgery family at #10 — [SSRF & request forgery](/security/ssrf-and-request-forgery/).

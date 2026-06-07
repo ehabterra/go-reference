@@ -1,0 +1,159 @@
+---
+title: "Container Image Security"
+category: defense
+kind: topic
+order: 16.5
+difficulty: "Intermediate"
+status: ready
+intent: "Shipping a Go binary in a container that's small and hard to attack — minimal/distrolesse base images, non-root, pinned-by-digest, scanned, and the content-addressing that makes 'pinning' real."
+related:
+  - hardening-services
+  - supply-chain-security
+  - secrets-management
+quiz:
+  - q: "Why is Go especially well-suited to minimal ('distroless' or scratch) container images?"
+    options:
+      - text: "A statically-linked Go binary has no runtime dependency on the OS, so it can run in an image with almost nothing else — shrinking the attack surface to nearly just your code"
+        correct: true
+      - text: "Go images are required to be large"
+        correct: false
+      - text: "Go needs a full Linux distribution to run"
+        correct: false
+      - text: "Go binaries can't run in containers"
+        correct: false
+    explain: "Compiled with CGO disabled, a Go binary is statically linked — it carries its own runtime and needs no libc, shell, or package manager from the base image. So you can ship it on `scratch` (empty) or a distroless base (just CA certs, tzdata, a non-root user). Fewer packages means fewer CVEs, no shell for an attacker to use, and a tiny image. This is a real Go advantage over interpreted/JIT languages that drag a runtime along."
+  - q: "Why run the container process as a non-root user?"
+    options:
+      - text: "If the app is compromised, a non-root process limits what the attacker can do and makes container escape harder — defense in depth / least privilege"
+        correct: true
+      - text: "Root is slower"
+        correct: false
+      - text: "Non-root images are smaller"
+        correct: false
+      - text: "It's required for the image to build"
+        correct: false
+    explain: "By default a container's root maps to a privileged context that, combined with a kernel or misconfiguration bug, can lead to container escape and host compromise. Running as a non-root UID (USER in the Dockerfile, or runAsNonRoot in Kubernetes) applies least privilege: a compromised process can't write system paths, install tools, or as easily break out. It's a cheap, high-value default — your Go binary almost never needs root."
+  - q: "What does it mean to pin a base image 'by digest' rather than by tag?"
+    options:
+      - text: "Referencing the image by its immutable content hash (sha256:...) instead of a mutable tag like ':latest', so you always get the exact bytes you tested and vetted"
+        correct: true
+      - text: "Pinning the image to a specific server"
+        correct: false
+      - text: "Compressing the image"
+        correct: false
+      - text: "Signing the image with GPG"
+        correct: false
+    explain: "Tags like ':latest' or ':1.22' are mutable pointers — the bytes behind them can change, so a build today may pull different (possibly compromised) content than yesterday. A digest, FROM image@sha256:abcd…, is content-addressed: it names the exact, immutable bytes. Pinning by digest gives reproducible builds and stops a poisoned upstream tag from silently entering your image. You update the digest deliberately, after re-vetting."
+  - q: "What is a multi-stage Docker build and why does it improve security?"
+    options:
+      - text: "Build the binary in a full toolchain image, then COPY only the binary into a minimal final image — so the compiler, source, and build tools never ship to production"
+        correct: true
+      - text: "Building the image on multiple machines"
+        correct: false
+      - text: "Running the build several times for reliability"
+        correct: false
+      - text: "Splitting the app into microservices"
+        correct: false
+    explain: "A multi-stage build uses one stage (golang:… ) to compile, then a fresh minimal final stage (distroless/scratch) that COPYs just the compiled binary. The result ships none of the build apparatus — no Go toolchain, no source code, no git, no package manager — all of which would otherwise enlarge the attack surface and image size. It's the standard way to get a tiny, hardened Go image."
+  - q: "Beyond a small base, what ongoing practice keeps images secure?"
+    options:
+      - text: "Scanning images for known vulnerabilities (e.g. Trivy/Grype), keeping a pinned base updated, and generating an SBOM — security is continuous, not one-time"
+        correct: true
+      - text: "Building the image once and never touching it again"
+        correct: false
+      - text: "Making the image as large as possible for flexibility"
+        correct: false
+      - text: "Running everything as root for convenience"
+        correct: false
+    explain: "Even a minimal image accrues CVEs over time (in CA certs, the base, or your dependencies). Continuous practice: scan images in CI with a vulnerability scanner (Trivy, Grype), regenerate and review an SBOM (software bill of materials) so you know what's inside, and bump the pinned base digest when fixes land. Combine with govulncheck on the Go code itself. Security is a maintenance discipline, not a build-time checkbox."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+Two ways to mail a phone. One: pack it in a shipping container full of tools, packing material, the factory's manuals, and a crowbar — heavy, and anyone who intercepts it gets a toolkit. Two: a padded envelope with just the phone. A container image is the same choice. A Go binary needs almost nothing to run, so ship it in the envelope — a minimal base, no shell, no compiler, no root — and a thief who breaks in finds your code and not much else to work with.
+</Callout>
+
+## Why Go gets tiny, hard images for free
+
+Compiled with **`CGO_ENABLED=0`**, a Go binary is **statically linked** — it carries its own runtime and depends on no OS libc, shell, or package manager. So it runs on `scratch` (empty) or a **distroless** base (just CA certs, timezone data, a non-root user). The payoff is direct: fewer packages → fewer CVEs, no shell for an attacker to pivot with, and a multi-megabyte image instead of a multi-hundred-megabyte one.
+
+> New to containers? See the cloud track's [Dockerizing Go](/cloud/dockerizing-go/) for the basics; this page is the *security* lens on top.
+
+## The hardened Dockerfile, layer by layer
+
+This is a sandbox-fenced reference (you'd build it with Docker, not here):
+
+```dockerfile
+# ── build stage: full toolchain, never ships ───────────────
+FROM golang:1.22@sha256:<pinned-digest> AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# static binary: no libc dependency
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /app ./cmd/server
+
+# ── final stage: minimal, non-root, pinned by DIGEST ───────
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:<pinned-digest>
+COPY --from=build /app /app
+USER nonroot:nonroot           # least privilege
+EXPOSE 8080
+ENTRYPOINT ["/app"]            # no shell exists to exec into
+```
+
+<Mermaid code={String.raw`graph LR
+  S["source + go toolchain"] -->|build stage| B["/app binary"]
+  B -->|COPY only the binary| F["distroless final image<br/>no shell · non-root · pinned"]
+  T["build tools, source, compiler"] -.->|discarded| X["✗ never shipped"]`} />
+
+Each line is a control: **multi-stage** drops the toolchain and source; **`CGO_ENABLED=0`** enables `scratch`/distroless; **`@sha256:` digests** pin exact bytes; **`USER nonroot`** drops privilege; **no shell** removes an attacker's favorite tool.
+
+## See it: why a digest is a real pin
+
+"Pinning by digest" works because images are **content-addressed**: the digest *is* the SHA-256 of the content, so any change to the bytes changes the name. This runs here:
+
+<Playground client:visible title="digest.go" code={String.raw`package main
+
+import (
+	"crypto/sha256"
+	"fmt"
+)
+
+// Pretend these are two versions of a base-image layer's content.
+func main() {
+	vetted := []byte("distroless-static: glibc-free, nonroot, CA certs v1")
+	poisoned := append([]byte{}, vetted...)
+	poisoned = append(poisoned, " + curl|sh backdoor"...) // upstream tampered
+
+	dv := sha256.Sum256(vetted)
+	dp := sha256.Sum256(poisoned)
+
+	fmt.Printf("vetted   digest: sha256:%x\n", dv[:6])
+	fmt.Printf("poisoned digest: sha256:%x\n", dp[:6])
+
+	// You wrote FROM ...@sha256:<vetted>. The poisoned bytes have a
+	// DIFFERENT digest, so they can't masquerade as your pinned image:
+	pinned := dv
+	fmt.Println("poisoned matches your pin?", sha256.Sum256(poisoned) == pinned) // false
+}`} />
+
+A mutable tag (`:latest`) could quietly start pointing at the poisoned bytes; a digest cannot — the hash wouldn't match. That's the whole security argument for pinning.
+
+<Callout type="go" title="🐹 The Go-native recipe">
+Put together: build with <code>CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"</code> for a small static binary (and reproducibility); base the final stage on <a href="https://github.com/GoogleContainerTools/distroless" target="_blank" rel="noopener">distroless</a> <code>static:nonroot</code> (or <code>scratch</code> if you add CA certs yourself); pin every <code>FROM</code> <strong>by digest</strong>; run as <code>nonroot</code>; and in Kubernetes set <code>runAsNonRoot: true</code>, <code>readOnlyRootFilesystem: true</code>, and drop all capabilities. Then run <a href="https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck" target="_blank" rel="noopener">govulncheck</a> on the code and an image scanner in CI. Go does the heavy lifting; you just choose the safe knobs.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A small image isn't a finished job">
+Minimal ≠ permanently safe. CVEs surface later in the base, in CA certs, and in your dependencies, so a pinned digest you never update slowly rots — schedule re-vetting and bumps. Don't bake secrets into layers (they persist in image history even if a later layer deletes them — use runtime secrets, see <a href="/security/secrets-management/">secrets management</a>). And don't reach for an interactive shell or debug tools "just in case" — that's exactly the attack surface distroless removes; debug with an ephemeral sidecar instead. Pair this with <a href="/security/supply-chain-security/">supply-chain controls</a> (signing, SBOM, provenance) for the full picture.
+</Callout>
+
+## See also
+
+- [Hardening services](/security/hardening-services/) — runtime hardening this complements.
+- [Supply-chain security](/security/supply-chain-security/) — signing, SBOM, and dependency provenance.
+- [Secrets management](/security/secrets-management/) — why secrets must not live in image layers.
+- [Dockerizing Go (cloud)](/cloud/dockerizing-go/) — container basics; [distroless](https://github.com/GoogleContainerTools/distroless) — the minimal base images.
+
+That's the security extras — back to the [Security index](/security/), or jump to [Cloud-Native](/cloud/).

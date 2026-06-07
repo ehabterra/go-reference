@@ -1,0 +1,155 @@
+---
+title: "OAuth 2.0 & OpenID Connect"
+category: defense
+kind: topic
+order: 14.5
+difficulty: "Intermediate"
+status: ready
+intent: "Delegated authorization (OAuth2) vs authentication (OIDC) — the Authorization Code + PKCE flow, access vs ID tokens, and the mistakes that turn 'sign in with…' into account takeover."
+related:
+  - authentication-and-authorization
+  - tls-and-pki
+  - secrets-management
+quiz:
+  - q: "What's the fundamental difference between OAuth 2.0 and OpenID Connect (OIDC)?"
+    options:
+      - text: "OAuth 2.0 is an authorization framework (delegated access to resources); OIDC is an authentication layer built on top of it that adds a verifiable ID token proving who the user is"
+        correct: true
+      - text: "They are competing standards that do the same thing"
+        correct: false
+      - text: "OAuth2 is for mobile, OIDC is for web"
+        correct: false
+      - text: "OIDC replaced OAuth2 entirely"
+        correct: false
+    explain: "OAuth 2.0 answers 'is this app allowed to access that resource on the user's behalf?' — delegated authorization, yielding an access token. It deliberately says nothing about user identity. OpenID Connect is a thin layer on top that adds authentication: it returns an ID token (a signed JWT with claims like sub, email) proving who logged in. Rule of thumb: OAuth2 for access (calling an API), OIDC for login (knowing who the user is). Using a bare OAuth2 access token as proof of identity is a classic, dangerous mistake."
+  - q: "Why is the Authorization Code flow with PKCE the recommended flow for almost all clients today?"
+    options:
+      - text: "The auth code is exchanged for tokens out-of-band, and PKCE binds the code to the client that started the flow, so a stolen authorization code is useless to an attacker"
+        correct: true
+      - text: "It avoids using HTTPS"
+        correct: false
+      - text: "It puts the access token directly in the redirect URL"
+        correct: false
+      - text: "It removes the need for a client secret in all cases"
+        correct: false
+    explain: "In the Authorization Code flow the browser only ever receives a short-lived authorization code; the actual tokens are fetched server-to-server (or with PKCE). PKCE (Proof Key for Code Exchange) makes the client send a random 'verifier' hashed into a 'challenge' at the start, and the verifier itself at token exchange — so even if an attacker intercepts the code, they can't redeem it without the verifier. The old Implicit flow (tokens in the URL fragment) is now discouraged; Authorization Code + PKCE is recommended for SPAs, mobile, and confidential clients alike."
+  - q: "In PKCE with the S256 method, how is the code_challenge derived from the code_verifier?"
+    options:
+      - text: "code_challenge = BASE64URL-no-padding( SHA-256( code_verifier ) ) — a one-way hash, so the challenge can be sent publicly without revealing the verifier"
+        correct: true
+      - text: "They are the same random string"
+        correct: false
+      - text: "code_challenge is the verifier encrypted with the client secret"
+        correct: false
+      - text: "code_challenge = MD5(code_verifier)"
+        correct: false
+    explain: "The client generates a high-entropy random code_verifier, then computes code_challenge = base64url(sha256(verifier)) with padding stripped, and sends the challenge (plus method=S256) on the authorization request. At token exchange it sends the raw verifier; the server re-hashes it and checks it matches the stored challenge. Because SHA-256 is one-way, the public challenge leaks nothing about the verifier — so an intercepted authorization request can't be replayed."
+  - q: "What is the #1 OAuth/OIDC implementation mistake that leads to account takeover?"
+    options:
+      - text: "Failing to validate the redirect_uri (and the state and token signature/claims) — e.g. allowing open redirects so the code/token is sent to an attacker-controlled URL"
+        correct: true
+      - text: "Using too long an access-token lifetime"
+        correct: false
+      - text: "Choosing the wrong color for the login button"
+        correct: false
+      - text: "Requesting too few scopes"
+        correct: false
+    explain: "The high-severity bugs cluster around weak validation: a redirect_uri that isn't strictly matched (open redirect → code/token exfiltration), a missing/unchecked state parameter (CSRF on the callback), and ID tokens accepted without verifying the signature, issuer (iss), audience (aud), and expiry (exp). Each can hand an attacker the victim's session. Strict, exact-match redirect URIs, a verified state, and full JWT validation are non-negotiable."
+  - q: "What's the right way to add OAuth2/OIDC to a Go service?"
+    options:
+      - text: "Use vetted libraries (golang.org/x/oauth2, coreos/go-oidc) and a real identity provider — never hand-roll the protocol or skip token validation"
+        correct: true
+      - text: "Implement the token endpoint and JWT parsing yourself for full control"
+        correct: false
+      - text: "Store the client secret in the front-end JavaScript"
+        correct: false
+      - text: "Trust the ID token without checking its signature to save time"
+        correct: false
+    explain: "OAuth2/OIDC is a protocol with many sharp edges (redirect validation, state, PKCE, JWKS rotation, clock skew). Use maintained libraries — golang.org/x/oauth2 for the flow and coreos/go-oidc for ID-token verification against the provider's JWKS — and delegate identity to a real IdP (Auth0, Okta, Keycloak, Google, etc.). Hand-rolling it, putting secrets in the browser, or skipping signature/claim validation are how takeovers happen. Let battle-tested code handle the protocol; you handle scopes and session policy."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏨 Analogy">
+A hotel key card is OAuth2: the front desk gives your phone-app a card that opens <em>your</em> room and the gym — delegated, scoped access — without handing over the master key or even telling the gym door who you are. OpenID Connect adds a photo ID to that card: now the door doesn't just know "this card is allowed," it knows "this is Ada." OAuth2 = what you can access; OIDC = who you are. Mixing them up — treating "this card works" as proof of identity — is how the wrong person ends up in your room.
+</Callout>
+
+## Authorization (OAuth2) vs authentication (OIDC)
+
+**OAuth 2.0** is a *delegated authorization* framework: it lets an app access resources on a user's behalf (call the Calendar API, read the repo) and yields an **access token**. It deliberately says nothing about identity. **OpenID Connect** is a thin layer on top that adds *authentication*: it returns an **ID token** — a signed JWT with claims like `sub` and `email` proving *who* logged in. Read the specs at <a href="https://oauth.net/2/" target="_blank" rel="noopener">oauth.net</a> and <a href="https://openid.net/connect/" target="_blank" rel="noopener">openid.net</a>.
+
+> **Access token** → presented to an API to *access* something. **ID token** → consumed by *your* app to learn *who* the user is. Never use a bare access token as proof of identity.
+
+## The Authorization Code + PKCE flow
+
+This is the recommended flow for SPAs, mobile, and server apps alike:
+
+<Mermaid code={String.raw`sequenceDiagram
+  participant U as User browser
+  participant C as Your app
+  participant A as Auth server (IdP)
+  C->>C: make code_verifier; challenge = S256(verifier)
+  C->>A: /authorize?...&code_challenge=challenge&state=xyz
+  U->>A: log in + consent
+  A-->>C: redirect ?code=AUTH_CODE&state=xyz
+  C->>A: /token  code=AUTH_CODE + code_verifier
+  A-->>C: access_token (+ id_token for OIDC)
+  Note over C,A: stolen code is useless without the verifier`} />
+
+The browser only ever sees a short-lived **authorization code**; tokens are fetched at the `/token` endpoint. **PKCE** binds the code to the client: a stolen code can't be redeemed without the original `code_verifier`.
+
+## See it: computing the PKCE S256 challenge
+
+PKCE is small enough to see end-to-end. The client makes a random `code_verifier`, derives `code_challenge = base64url(sha256(verifier))`, sends the *challenge* up front, and proves possession with the *verifier* at token exchange. This runs here:
+
+<Playground client:visible title="pkce.go" code={String.raw`package main
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+)
+
+// In real code, codeVerifier is 43-128 random chars from a CSPRNG
+// (crypto/rand). Fixed here so the output is deterministic.
+const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+func challengeS256(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	// base64url WITHOUT padding, per RFC 7636.
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func main() {
+	challenge := challengeS256(codeVerifier)
+
+	// 1) Sent on the /authorize request (public — safe to expose):
+	fmt.Println("code_challenge:        ", challenge)
+	fmt.Println("code_challenge_method:  S256")
+
+	// 2) Sent on the /token request; server re-hashes & must match (1):
+	fmt.Println("code_verifier (secret):", codeVerifier)
+
+	// The server's check:
+	fmt.Println("server verifies:       ", challengeS256(codeVerifier) == challenge)
+}`} />
+
+Because SHA-256 is one-way, publishing the challenge reveals nothing about the verifier — so intercepting the authorization request gains an attacker nothing.
+
+<Callout type="gotcha" title="⚠️ The takeover bugs are all in validation">
+The dangerous mistakes aren't in the happy path — they're in skipped checks. <strong>redirect_uri</strong> must be matched <em>exactly</em> against a registered allowlist (a loose match or open redirect lets an attacker receive the code/token). The <strong>state</strong> parameter must be generated, stored, and verified on callback (it's CSRF protection for the flow). And an <strong>ID token</strong> must have its signature verified against the provider's JWKS, plus its <code>iss</code>, <code>aud</code>, and <code>exp</code> claims checked — accepting an unverified JWT means accepting a forged identity. Each omission is a known path to account takeover.
+</Callout>
+
+<Callout type="go" title="🐹 Use the libraries; delegate identity to a real IdP">
+Don't hand-roll this. For the flow, <a href="https://pkg.go.dev/golang.org/x/oauth2" target="_blank" rel="noopener">golang.org/x/oauth2</a> handles the authorize/token dance and token refresh; for OIDC, <a href="https://github.com/coreos/go-oidc" target="_blank" rel="noopener">coreos/go-oidc</a> verifies ID tokens against the provider's rotating JWKS and checks the standard claims for you. Delegate the hard part — being an identity provider — to a real one (Keycloak, Auth0, Okta, Google, Entra). Your job shrinks to: keep the <a href="/security/secrets-management/">client secret safe</a>, request least-privilege <em>scopes</em>, validate strictly, and set a sane session policy. The protocol is a minefield; let maintained code walk it.
+</Callout>
+
+## See also
+
+- [Authentication & authorization](/security/authentication-and-authorization/) — sessions, JWTs, and access control this builds on.
+- [TLS & PKI](/security/tls-and-pki/) — the transport security every OAuth flow assumes.
+- [Secrets management](/security/secrets-management/) — protecting the client secret and tokens.
+- [OAuth 2.0](https://oauth.net/2/) & [OpenID Connect](https://openid.net/connect/) — the canonical specs.
+
+Next: securing what your service is packaged as — [container image security](/security/container-image-security/).
