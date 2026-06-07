@@ -1,0 +1,177 @@
+---
+title: "Fuzzing for Bugs"
+category: offensive
+kind: topic
+order: 7
+difficulty: "Advanced"
+status: ready
+intent: "Finding crashes and vulnerabilities by feeding malformed input — a runnable mutation fuzzer that discovers a parser bug, Go's built-in coverage-guided fuzzing, and why fuzzing your own code is the best defense."
+related:
+  - http-recon
+  - input-validation-and-injection
+  - building-security-tools
+quiz:
+  - q: "What is fuzzing, in one sentence?"
+    options:
+      - text: "Automatically feeding a program many malformed/random inputs to find ones that crash it or trigger unexpected behavior"
+        correct: true
+      - text: "Encrypting input so the parser can't read it"
+        correct: false
+      - text: "Slowing a server with too many requests"
+        correct: false
+      - text: "Guessing passwords from a wordlist"
+        correct: false
+    explain: "A fuzzer generates a flood of inputs — mutated from seeds or guided by code coverage — and runs the target on each, watching for panics, hangs, or assertion failures. It's spectacularly good at finding edge cases humans miss: off-by-ones, integer overflows, and the trust-the-length bugs that plague parsers."
+  - q: "What makes Go's built-in `go test -fuzz` 'coverage-guided'?"
+    options:
+      - text: "It instruments the code and keeps inputs that reach NEW code paths, evolving toward inputs that exercise more of the program"
+        correct: true
+      - text: "It only fuzzes functions named Coverage"
+        correct: false
+      - text: "It measures test coverage percentage and stops at 100%"
+        correct: false
+      - text: "It requires you to list every code path manually"
+        correct: false
+    explain: "Coverage-guided fuzzing (like libFuzzer, built into the Go toolchain since 1.18) tracks which branches each input hits. Inputs that discover new coverage are kept and mutated further, so the fuzzer 'learns' to get past length checks and magic-byte gates far faster than blind random mutation. A crashing input is saved to testdata/fuzz as a permanent regression test."
+  - q: "A classic parser bug a fuzzer finds instantly is the 'trust the length' bug. What is it?"
+    options:
+      - text: "Reading a length field from input and slicing that many bytes without checking it fits — a malicious length triggers an out-of-bounds panic (or worse, in C, a buffer overflow)"
+        correct: true
+      - text: "Using a variable named length"
+        correct: false
+      - text: "Making strings too long for memory"
+        correct: false
+      - text: "Counting bytes instead of runes"
+        correct: false
+    explain: "Length-prefixed formats are everywhere (network protocols, file formats). The bug: `n := int(b[0]); return b[1:1+n]` trusts the attacker-supplied length. If n exceeds the remaining bytes, Go panics (a crash/DoS); in C the same pattern is a heap overflow and a potential RCE. Always validate the length against the actual remaining input."
+  - q: "Why is fuzzing primarily a DEFENSIVE technique?"
+    options:
+      - text: "The highest-value use is fuzzing your OWN parsers and decoders in CI to find and fix crashes before attackers do"
+        correct: true
+      - text: "It can only run on your own machine"
+        correct: false
+      - text: "Fuzzers never find real bugs"
+        correct: false
+      - text: "Attackers cannot use fuzzers"
+        correct: false
+    explain: "Yes, attackers fuzz targets — but the asymmetry favors defense: you have the source, can run continuous coverage-guided fuzzing in CI, and fix what you find. Fuzzing every untrusted-input boundary (file parsers, network decoders, request handlers) is one of the highest-ROI security practices, which is why Go shipped it in the standard toolchain."
+  - q: "What should you fuzz first in a Go service?"
+    options:
+      - text: "Anything that parses untrusted input — decoders, deserializers, request/protocol parsers, and format readers"
+        correct: true
+      - text: "The main() function"
+        correct: false
+      - text: "Pure functions with no inputs"
+        correct: false
+      - text: "The logging package"
+        correct: false
+    explain: "Fuzzing pays off where untrusted bytes enter your program: JSON/protobuf/custom decoders, file-format parsers, URL/header/query parsing, anything taking a []byte or string from the network. Those boundaries are where malformed input becomes a panic, an infinite loop, or a security bug — so that's where coverage-guided fuzzing earns its keep."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🐒 Analogy">
+Imagine a thousand monkeys jamming random keys into your program's input slot — but smart monkeys: whenever one stumbles onto a keystroke that makes the program do something <em>new</em>, the others copy and build on it. That's a coverage-guided fuzzer. It doesn't understand your format; it just relentlessly explores, and it's far more patient and creative about malformed input than any human tester. Crashes it finds are real bugs, every time.
+</Callout>
+
+## What fuzzing finds
+
+Fuzzing targets the boundary where **untrusted input meets your code** — parsers, decoders, request handlers. It excels at the bugs humans skip past:
+
+- **Trust-the-length** bugs — a length field that slices past the buffer (panic in Go; overflow in C).
+- **Off-by-ones and bounds** — empty input, one byte, the maximum value of an `int`.
+- **Infinite loops / pathological input** — a "zip bomb" of nested structures, catastrophic regex backtracking.
+- **Logic crashes** — `nil` derefs and type assertions on malformed data.
+
+<Mermaid code={String.raw`graph LR
+  SEED["seed corpus<br/>(valid inputs)"] --> MUT["mutate<br/>(flip, trim, grow)"]
+  MUT --> RUN["run target<br/>(under recover)"]
+  RUN -->|panic!| SAVE["save crashing input<br/>→ regression test"]
+  RUN -->|new coverage| KEEP["keep & mutate more"]
+  RUN -->|nothing new| MUT`} />
+
+## See it: a mutation fuzzer that finds a real bug
+
+`parseFrame` has the classic trust-the-length bug. This little fuzzer mutates a valid seed until it discovers an input that crashes it — and reports the exact bytes. It runs here (seeded RNG, so the output is deterministic):
+
+<Playground client:visible title="fuzz.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"math/rand"
+)
+
+// parseFrame trusts a 1-byte length prefix — the bug a fuzzer will find.
+func parseFrame(b []byte) []byte {
+	n := int(b[0])      // panics on empty input
+	return b[1 : 1+n]   // panics when 1+n > len(b): trust-the-length
+}
+
+// run the target, converting a panic into a reported crash.
+func tryParse(b []byte) (crashed bool, msg string) {
+	defer func() {
+		if r := recover(); r != nil {
+			crashed, msg = true, fmt.Sprint(r)
+		}
+	}()
+	parseFrame(b)
+	return false, ""
+}
+
+func main() {
+	rng := rand.New(rand.NewSource(42)) // fixed seed → deterministic
+	seed := []byte{2, 'h', 'i'}         // a valid frame: len=2, data "hi"
+
+	for i := 0; i < 10000; i++ {
+		// Mutate a copy of the seed: tweak the length byte and/or trim.
+		in := append([]byte(nil), seed...)
+		in[0] = byte(rng.Intn(256))   // attacker-controlled length
+		if rng.Intn(2) == 0 && len(in) > 1 {
+			in = in[:1+rng.Intn(len(in))] // sometimes truncate the data
+		}
+		if crashed, msg := tryParse(in); crashed {
+			fmt.Printf("CRASH after %d inputs\n", i+1)
+			fmt.Printf("  input:  %v\n", in)
+			fmt.Printf("  panic:  %s\n", msg)
+			return
+		}
+	}
+	fmt.Println("no crash found")
+}`} />
+
+The fuzzer hands `parseFrame` a length byte that's larger than the data and the slice expression panics — a denial-of-service bug in Go, a memory-corruption bug in C. A human writing test cases rarely thinks to try "length says 200, data is 2 bytes." The fuzzer tries it in milliseconds.
+
+## Go's built-in coverage-guided fuzzing
+
+Hand-rolled mutation is blind. Since Go 1.18 the toolchain ships **coverage-guided** fuzzing — it instruments your code, keeps inputs that reach new branches, and minimizes any crash it finds into a saved regression test. The harness is a normal test (fenced — `go test -fuzz` can't run in the playground):
+
+```go
+func FuzzParseFrame(f *testing.F) {
+	f.Add([]byte{2, 'h', 'i'}) // seed corpus
+	f.Fuzz(func(t *testing.T, b []byte) {
+		parseFrame(b) // a panic here is a failure the fuzzer reports
+	})
+}
+```
+
+Run it with `go test -fuzz=FuzzParseFrame`. On a crash, Go writes the minimized input to `testdata/fuzz/FuzzParseFrame/...` so it becomes a permanent unit test — fix the bug and the corpus guards against regressions forever. See [fuzzing in the stdlib track](/stdlib/fuzzing/) for the full workflow.
+
+## Fuzzing is your best defense
+
+<Callout type="go" title="🐹 Fuzz every untrusted-input boundary, in CI">
+The asymmetry favors the defender: you have the source, so you can fuzz <em>continuously</em>. Put a <code>Fuzz</code> target on every place untrusted bytes enter — your JSON/protobuf decoders, file-format parsers, URL/header parsing, custom protocol readers — and run them in CI. Go's <a href="/stdlib/fuzzing/">native fuzzing</a> makes this nearly free, and OSS-Fuzz runs it at scale for major projects. The bugs you find on Monday are the ones an attacker doesn't find on Friday.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A panic is a denial of service">
+In Go, the bugs fuzzing finds are usually <em>crashes</em>, not memory corruption — the runtime's bounds checks turn a would-be buffer overflow into a panic. That's a huge safety win over C, but a panic in a request handler still takes down that goroutine, and an unrecovered panic in the wrong place takes down the <em>process</em>. So a fuzzer-found panic on attacker-controlled input is a real, exploitable denial-of-service vulnerability — not "just a crash." Validate the input so the panic can't happen; don't just <code>recover</code> and hide it.
+</Callout>
+
+## See also
+
+- [Fuzzing (stdlib track)](/stdlib/fuzzing/) — the full `go test -fuzz` workflow and corpus management.
+- [Input validation & injection defense](/security/input-validation-and-injection/) — fixing the bugs fuzzing finds.
+- [HTTP recon](/security/http-recon/) — finding the input boundaries to fuzz.
+- [Building security tools](/security/building-security-tools/) — wrapping a fuzzer in a tool.
+
+Next: reading the raw bytes on the wire — [packet analysis](/security/packet-analysis/).

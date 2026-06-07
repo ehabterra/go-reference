@@ -1,0 +1,231 @@
+---
+title: "Port Scanning"
+category: offensive
+kind: topic
+order: 4
+difficulty: "Intermediate"
+status: ready
+intent: "How a TCP connect scanner works and why Go is ideal for it — a bounded concurrent scanner, banner grabbing for service detection, and the defenses (rate limits, detection, least exposure) that stop it."
+related:
+  - building-security-tools
+  - dns-enumeration
+  - http-recon
+quiz:
+  - q: "What does a basic TCP 'connect' scan actually do to decide a port is open?"
+    options:
+      - text: "It completes the TCP three-way handshake (SYN→SYN-ACK→ACK); a successful connection means the port is open"
+        correct: true
+      - text: "It sends a single UDP byte and waits for ICMP"
+        correct: false
+      - text: "It reads the target's /etc/services file"
+        correct: false
+      - text: "It pings the host with ICMP echo"
+        correct: false
+    explain: "A connect scan uses the OS TCP stack (net.Dial) to attempt a full handshake. If it completes, the port is open and listening; a refused connection (RST) means closed; a timeout usually means filtered (a firewall dropped the packet). It needs no special privileges, unlike a raw SYN scan."
+  - q: "Why is a bounded worker pool essential for a port scanner?"
+    options:
+      - text: "Scanning 65,535 ports across many hosts unbounded would open tens of thousands of sockets at once — exhausting FDs and possibly DoSing the target"
+        correct: true
+      - text: "Workers make the scan stealthier"
+        correct: false
+      - text: "A pool is required to use net.Dial at all"
+        correct: false
+      - text: "It reduces the number of open ports found"
+        correct: false
+    explain: "Scanning is massively parallel I/O. Without a cap you'd spawn a goroutine and socket per port×host — exhausting file descriptors and hammering the target. A fixed worker pool keeps in-flight probes bounded; a per-dial timeout stops slow/filtered ports from stalling the scan."
+  - q: "What is 'banner grabbing' and why does it matter?"
+    options:
+      - text: "Reading the first bytes a service sends (or a crafted request's response) to fingerprint the software and version behind an open port"
+        correct: true
+      - text: "Stealing the website's logo image"
+        correct: false
+      - text: "Capturing the TLS certificate's banner field"
+        correct: false
+      - text: "Grabbing the OS hostname via DNS"
+        correct: false
+    explain: "Many services announce themselves (SSH version, SMTP greeting, HTTP Server header). Reading that banner identifies the exact software and version — which an attacker maps to known CVEs and a defender uses to find outdated services. Hiding or genericizing banners is a mild defense (security through obscurity, not a real control)."
+  - q: "A connect scan reports a port as 'filtered'. What usually causes that?"
+    options:
+      - text: "A firewall silently dropped the probe, so the connection neither completes nor is refused — it just times out"
+        correct: true
+      - text: "The port is definitely open"
+        correct: false
+      - text: "The service crashed"
+        correct: false
+      - text: "DNS resolution failed"
+        correct: false
+    explain: "Open → handshake completes. Closed → the host sends RST (connection refused) quickly. Filtered → a firewall drops the packet with no reply, so you just hit your timeout. Distinguishing these is why a sensible per-connection timeout matters: too short and you mislabel slow-but-open ports as filtered."
+  - q: "What is the best defense against attackers scanning your services?"
+    options:
+      - text: "Reduce exposure (close/firewall unused ports), then detect and rate-limit scans — minimizing the attack surface beats hiding it"
+        correct: true
+      - text: "Run every service on a non-standard high port"
+        correct: false
+      - text: "Block all ICMP"
+        correct: false
+      - text: "Nothing can be done about scanning"
+        correct: false
+    explain: "You can't stop the internet from scanning you, so the real defense is having little to find: close unused ports, put services behind a firewall/VPN, and expose only what must be public. Layer detection (IDS, fail2ban, connection-rate limits) on top. Port-knocking and odd ports are obscurity — minor delay, not protection."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚪 Analogy">
+A port scan is walking down a hallway and trying every doorknob to see which open. An <strong>open</strong> port is an unlocked door with someone working behind it; <strong>closed</strong> is a locked door that answers "no one home"; <strong>filtered</strong> is a door with a guard who says nothing at all, so you can't even tell it's there. The scanner is just a very fast, very patient person trying thousands of knobs — which is exactly what goroutines are good at.
+</Callout>
+
+## How a connect scan works
+
+The simplest scan is the **TCP connect scan**: ask the OS to open a normal connection to `host:port`. The kernel runs the three-way handshake for you, so you need no special privileges:
+
+<Mermaid code={String.raw`sequenceDiagram
+  participant S as Scanner
+  participant T as Target:port
+  S->>T: SYN
+  alt port open
+    T->>S: SYN-ACK
+    S->>T: ACK (handshake complete → OPEN)
+  else port closed
+    T->>S: RST (refused → CLOSED)
+  else firewalled
+    Note over T: packet dropped → (timeout → FILTERED)
+  end`} />
+
+- **Open** — the handshake completes; `net.Dial` returns a usable connection.
+- **Closed** — the host replies with RST; `net.Dial` fails fast with "connection refused".
+- **Filtered** — a firewall drops the probe; `net.Dial` hangs until *your* timeout fires. That timeout is the knob that separates "slow but open" from "filtered."
+
+Go's `net` package gives you the connect scan essentially for free — the skill is doing it *concurrently and politely*.
+
+## See it: the concurrent scan engine
+
+Here is the [worker-pool](/patterns/worker-pool/) scanner with a simulated network so it runs in the sandbox — real `net.Dial` is fenced below. Note the bounded workers, the open/closed/filtered classification, and the deterministic sorted report:
+
+<Playground client:visible title="scan.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+type status int
+
+const (
+	closed status = iota
+	open
+	filtered
+)
+
+// simulateDial stands in for net.DialTimeout so this runs offline.
+// Pretend 22, 80, 443 are open; 8080 is firewalled; everything else closed.
+func simulateDial(port int) status {
+	switch port {
+	case 22, 80, 443:
+		return open
+	case 8080:
+		return filtered
+	default:
+		return closed
+	}
+}
+
+func main() {
+	const workers = 50
+	ports := make(chan int)
+	type res struct {
+		port int
+		st   status
+	}
+	out := make(chan res)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range ports {
+				out <- res{p, simulateDial(p)}
+			}
+		}()
+	}
+	go func() {
+		for p := 1; p <= 1024; p++ {
+			ports <- p
+		}
+		close(ports)
+	}()
+	go func() { wg.Wait(); close(out) }()
+
+	var openPorts []int
+	for r := range out {
+		if r.st == open {
+			openPorts = append(openPorts, r.port)
+		}
+	}
+	sort.Ints(openPorts)
+	fmt.Printf("scanned 1024 ports, %d open:\n", len(openPorts))
+	for _, p := range openPorts {
+		fmt.Printf("  %d/tcp open\n", p)
+	}
+}`} />
+
+## The real thing: net.DialTimeout
+
+Swap the simulated dial for the real one and you have a working scanner. The sandbox can't open real connections, so this is fenced — but it's the whole change:
+
+```go
+import (
+	"fmt"
+	"net"
+	"time"
+)
+
+// scanPort returns true if a TCP handshake to host:port completes.
+func scanPort(host string, port int, timeout time.Duration) bool {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false // refused (closed) or timed out (filtered)
+	}
+	conn.Close()
+	return true
+}
+```
+
+Drop `scanPort` into the worker body above, give it a 1–2 second timeout, and respect the [scope guard](/security/security-mindset-and-ethics/) and a [rate limit](/concurrency/rate-limiting/). That's a complete, polite scanner in ~40 lines — the Black Hat Go classic, done idiomatically.
+
+## Banner grabbing: what's behind the door
+
+Knowing a port is open is half the story; **banner grabbing** identifies the *service*. Many protocols send a greeting on connect (SSH, SMTP, FTP) or answer a crafted request (HTTP). Read the first bytes and you've fingerprinted the software and version:
+
+```go
+conn, _ := net.DialTimeout("tcp", addr, 2*time.Second)
+conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+buf := make([]byte, 256)
+n, _ := conn.Read(buf) // SSH/SMTP/FTP announce themselves here
+fmt.Printf("%s banner: %q\n", addr, buf[:n])
+// For HTTP, write "HEAD / HTTP/1.0\r\n\r\n" first, then read the Server header.
+```
+
+A defender uses the same technique to inventory their own network and spot outdated, vulnerable versions before an attacker does.
+
+## Defending against scans
+
+<Callout type="go" title="🐹 You can't stop scanning — so have little to find">
+The internet scans every public IP constantly; you will be scanned within minutes of going live. So the real defense is <strong>minimizing exposure</strong>: close unused ports, bind services to localhost or a private network, put admin interfaces behind a VPN, and expose only what must be public. Then layer <strong>detection and rate-limiting</strong> — an IDS, <code>fail2ban</code>, or connection-rate caps that flag a host hitting 1,000 ports in a second. A smaller attack surface beats a hidden one every time.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A connect scan is loud and logged">
+The TCP connect scan completes a full handshake, which means the target's services <em>log the connection</em> — every probe shows up. It's the opposite of stealthy. (Raw SYN scans that never complete the handshake are quieter but need root and raw sockets via <code>golang.org/x/net</code> or <code>gopacket</code>.) For authorized testing this is fine and even desirable; just know that "I scanned 65k ports" is plainly visible in the target's logs, and an aggressive unthrottled scan can itself look like — or cause — a denial of service.
+</Callout>
+
+## See also
+
+- [Building security tools](/security/building-security-tools/) — the worker-pool skeleton this fills in.
+- [DNS enumeration](/security/dns-enumeration/) — discovering hosts before you scan their ports.
+- [Worker pool](/patterns/worker-pool/) & [rate limiting](/concurrency/rate-limiting/) — the concurrency behind a fast, polite scanner.
+- [TCP sockets](/web/tcp-sockets/) — the `net` package the scanner is built on.
+
+Next: discovering the hosts and names that make up a target — [DNS enumeration](/security/dns-enumeration/).
