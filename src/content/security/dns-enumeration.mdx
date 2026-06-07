@@ -1,0 +1,213 @@
+---
+title: "DNS Enumeration"
+category: offensive
+kind: topic
+order: 5
+difficulty: "Intermediate"
+status: ready
+intent: "Mapping a target's attack surface through DNS — record types and lookups, concurrent subdomain brute-forcing, zone transfers as a misconfiguration, and the defenses that limit what DNS reveals."
+related:
+  - port-scanning
+  - http-recon
+  - building-security-tools
+quiz:
+  - q: "Why is DNS enumeration usually the first step of reconnaissance?"
+    options:
+      - text: "It maps a target's hosts, subdomains, and services — expanding one domain into a list of things to investigate — often without touching the target directly"
+        correct: true
+      - text: "It immediately gives you a shell"
+        correct: false
+      - text: "It is the only way to find a website's IP"
+        correct: false
+      - text: "DNS records contain user passwords"
+        correct: false
+    explain: "DNS turns 'example.com' into a map: A/AAAA records (hosts), MX (mail), TXT (SPF/DKIM and sometimes leaked info), NS (nameservers), and discoverable subdomains (dev, staging, vpn, admin). Much of it comes from public resolvers and certificate-transparency logs, so you learn the attack surface before sending a single packet to the target's own servers."
+  - q: "What is DNS subdomain brute-forcing?"
+    options:
+      - text: "Trying many candidate names (dev.example.com, vpn.example.com, …) from a wordlist and keeping the ones that resolve"
+        correct: true
+      - text: "Guessing the DNS server's admin password"
+        correct: false
+      - text: "Flooding the resolver with queries to crash it"
+        correct: false
+      - text: "Decrypting the DNS responses"
+        correct: false
+    explain: "You prepend each word in a wordlist to the target domain and resolve it; names that return records exist. It's I/O-bound and embarrassingly parallel — a perfect goroutine + worker-pool job. Certificate-transparency logs and passive DNS often find even more, without querying the target at all."
+  - q: "A nameserver allows an AXFR zone transfer to anyone. Why is that dangerous?"
+    options:
+      - text: "AXFR dumps the entire zone — every record at once — handing an attacker the complete host map instead of making them guess names"
+        correct: true
+      - text: "It lets the attacker change DNS records"
+        correct: false
+      - text: "It exposes the server's root password"
+        correct: false
+      - text: "It is not dangerous; AXFR is encrypted"
+        correct: false
+    explain: "A zone transfer (AXFR) is meant for replication between authoritative servers. If a nameserver answers AXFR for untrusted clients, anyone can download every record in the zone — internal hostnames included — turning enumeration from guesswork into a single request. The fix is to restrict AXFR to known secondary servers."
+  - q: "What is a wildcard DNS record, and why does it complicate brute-forcing?"
+    options:
+      - text: "A *.example.com record makes EVERY subdomain resolve, so a naive brute-forcer reports thousands of false positives"
+        correct: true
+      - text: "It blocks all subdomain lookups"
+        correct: false
+      - text: "It encrypts subdomain names"
+        correct: false
+      - text: "It is a record that never resolves"
+        correct: false
+    explain: "With a wildcard, anything.example.com resolves to the same IP — so your brute-forcer 'finds' nonexistent hosts. The standard mitigation is to first resolve a random, definitely-nonexistent name; if it resolves, a wildcard is present, and you filter out any candidate returning that same answer."
+  - q: "How do you limit what DNS reveals about your infrastructure?"
+    options:
+      - text: "Restrict zone transfers, split internal vs external DNS, avoid descriptive hostnames, and don't leak details in TXT records"
+        correct: true
+      - text: "Turn off DNS entirely"
+        correct: false
+      - text: "Use a very long domain name"
+        correct: false
+      - text: "Rely on the registrar to hide everything"
+        correct: false
+    explain: "You can't hide public records, but you can limit the map: lock down AXFR, use split-horizon DNS so internal names aren't world-resolvable, avoid hostnames like jenkins-prod-admin, and keep secrets out of TXT records. Remember certificate-transparency logs publish every TLS hostname you issue, so naming hygiene matters there too."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗺️ Analogy">
+Before breaking into a building you'd study the map: how many entrances, where the loading dock is, which annex is the old unguarded one. DNS <em>is</em> that map for a target. One domain name expands into mail servers, an API host, a forgotten <code>staging.</code> box, a <code>vpn.</code> gateway — each a door to try. And most of the map is public, so you can draw it without ever knocking.
+</Callout>
+
+## DNS is a public map of the target
+
+Every record type tells you something:
+
+- **A / AAAA** — hostnames to IPv4/IPv6 addresses. The hosts themselves.
+- **MX** — mail servers (and often the email provider in use).
+- **NS** — the authoritative nameservers (and whether DNS is self-hosted or outsourced).
+- **TXT** — SPF, DKIM, domain-verification tokens — and occasionally leaked internal details.
+- **CNAME** — aliases that reveal cloud providers and SaaS vendors (`*.cloudfront.net`, `*.azurewebsites.net`).
+
+In Go, the `net` package resolves all of these. The lookups need a real network, so they're fenced, but the API is tiny:
+
+```go
+import "net"
+
+ips, _  := net.LookupHost("example.com")     // A/AAAA
+mx, _   := net.LookupMX("example.com")        // mail servers
+txt, _  := net.LookupTXT("example.com")       // SPF/DKIM/verification
+ns, _   := net.LookupNS("example.com")        // nameservers
+cname, _ := net.LookupCNAME("www.example.com") // alias chain
+```
+
+## Subdomain brute-forcing
+
+The hosts that aren't linked from anywhere — `dev`, `staging`, `admin`, `vpn`, `git` — are found by **brute-forcing**: prepend each word in a wordlist to the domain and keep the names that resolve. It's pure I/O, so it's a textbook concurrent job.
+
+<Mermaid code={String.raw`graph LR
+  WL["wordlist<br/>(dev, vpn, api…)"] --> GEN["build FQDN<br/>word + . + domain"]
+  GEN --> POOL["resolver pool<br/>(bounded goroutines)"]
+  POOL --> RES["LookupHost"]
+  RES -->|resolves| FOUND["found subdomain"]
+  RES -->|NXDOMAIN| DROP["discard"]`} />
+
+## See it: the enumeration engine
+
+This runs the full pipeline — candidate generation, a bounded resolver pool, wildcard filtering, sorted output — against a *simulated* DNS zone so it works offline. Swap `resolve` for `net.LookupHost` and it's real:
+
+<Playground client:visible title="enum.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// A simulated zone. In a real tool, resolve == net.LookupHost.
+var zone = map[string]string{
+	"www.example.com":   "93.184.216.34",
+	"dev.example.com":   "10.0.0.5",
+	"vpn.example.com":   "10.0.0.9",
+	"admin.example.com": "10.0.0.12",
+}
+
+func resolve(fqdn string) (string, bool) {
+	ip, ok := zone[fqdn]
+	return ip, ok
+}
+
+func main() {
+	domain := "example.com"
+	wordlist := []string{"www", "dev", "staging", "vpn", "admin", "api", "git", "mail"}
+
+	const workers = 20
+	jobs := make(chan string)
+	type hit struct{ name, ip string }
+	out := make(chan hit)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range jobs {
+				fqdn := name + "." + domain
+				if ip, ok := resolve(fqdn); ok {
+					out <- hit{fqdn, ip}
+				}
+			}
+		}()
+	}
+	go func() {
+		for _, w := range wordlist {
+			jobs <- w
+		}
+		close(jobs)
+	}()
+	go func() { wg.Wait(); close(out) }()
+
+	var found []hit
+	for h := range out {
+		found = append(found, h)
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].name < found[j].name })
+	fmt.Printf("found %d subdomains:\n", len(found))
+	for _, h := range found {
+		fmt.Printf("  %-20s %s\n", h.name, h.ip)
+	}
+}`} />
+
+In a real tool, also resolve a random name like `zzqx9.example.com` first; if it resolves, a **wildcard** is present and you must filter candidates returning that same IP, or every guess becomes a false positive.
+
+## Zone transfers: enumeration on easy mode
+
+A misconfigured nameserver that answers **AXFR** zone transfers to anyone hands you the entire zone in one request — no guessing. It's a classic finding. The stdlib doesn't do AXFR, so tools use `github.com/miekg/dns`:
+
+```go
+// Fenced: needs github.com/miekg/dns and a real network.
+t := new(dns.Transfer)
+m := new(dns.Msg)
+m.SetAxfr("example.com.")
+ch, _ := t.In(m, "ns1.example.com:53")
+for env := range ch {           // every record in the zone, if AXFR is open
+	for _, rr := range env.RR {
+		fmt.Println(rr)
+	}
+}
+```
+
+If this works against a target, it's a reportable misconfiguration: the nameserver is leaking its complete host inventory.
+
+<Callout type="go" title="🐹 Recon without touching the target">
+The quietest enumeration never queries the target's servers at all. <strong>Certificate-transparency logs</strong> (crt.sh) publish every TLS certificate ever issued — so every hostname an org has put behind HTTPS is public record. <strong>Passive DNS</strong> databases and search engines add more. A thorough recon tool combines CT logs + passive sources + a brute-force pass, deduping the results. For a defender, the lesson is sobering: issuing a cert for <code>secret-admin.example.com</code> publishes that name to the world.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Brute-forcing is noisy and wildcard-prone">
+Two traps. First, a fast brute-force sends thousands of queries to a resolver — easily rate-limited, and noisy enough to alert a defender; throttle it and prefer passive sources first. Second, <strong>wildcard DNS</strong> makes naive tools report thousands of phantom subdomains. Always do the random-name wildcard check before trusting results, or your report will be full of hosts that don't exist.
+</Callout>
+
+## See also
+
+- [Port scanning](/security/port-scanning/) — what to do with the hosts you discover.
+- [HTTP recon](/security/http-recon/) — fingerprinting the web services on those hosts.
+- [Building security tools](/security/building-security-tools/) — the resolver pool is the same skeleton.
+- [TLS & PKI](/security/tls-and-pki/) — why certificate transparency makes hostnames public.
+
+Next: probing the web services those hosts expose — [HTTP recon](/security/http-recon/).

@@ -1,0 +1,26 @@
+---
+import { getCollection, render } from 'astro:content';
+import PageLayout from '../../layouts/PageLayout.astro';
+
+export async function getStaticPaths() {
+  const items = await getCollection('security');
+  return items.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<PageLayout
+  entry={entry}
+  collection="security"
+  base="/security"
+  sectionTitle="Security"
+  sectionHref="/security/"
+  relatedHeading="Related topics"
+  topicLabel="Security"
+>
+  <Content />
+</PageLayout>

@@ -1,0 +1,165 @@
+---
+title: "The Security Mindset & Authorized Testing"
+category: sec-foundations
+kind: topic
+order: 2
+difficulty: "Beginner"
+status: ready
+intent: "The rules of the game — authorization and scope, threat modeling, defense in depth, assume-breach thinking, and responsible disclosure. The line between a professional and a criminal is permission."
+related:
+  - why-go-for-security
+  - building-security-tools
+  - input-validation-and-injection
+quiz:
+  - q: "What single thing separates legal security testing from a crime?"
+    options:
+      - text: "Authorization — explicit, written permission to test a defined scope of systems"
+        correct: true
+      - text: "Whether you found a vulnerability"
+        correct: false
+      - text: "Whether you caused damage"
+        correct: false
+      - text: "Whether you used Go or Python"
+        correct: false
+    explain: "The technique is identical whether you're a pentester or an attacker; the difference is permission. Authorized testing means a signed scope (rules of engagement) defining which systems, which methods, and which times are allowed. No authorization = unauthorized access, which is a crime in most jurisdictions (e.g. the US CFAA) regardless of intent or outcome."
+  - q: "What is 'defense in depth'?"
+    options:
+      - text: "Layering independent controls so that breaching one doesn't breach the system — no single point of failure"
+        correct: true
+      - text: "Encrypting data twice with the same key"
+        correct: false
+      - text: "Hiding the server behind a long URL"
+        correct: false
+      - text: "Running the firewall on a faster machine"
+        correct: false
+    explain: "Defense in depth assumes any one control can fail, so you stack them: network segmentation, then authentication, then least-privilege authorization, then input validation, then monitoring. An attacker who gets past the firewall still faces auth; past auth, still faces authorization checks. Redundant, independent layers."
+  - q: "What does 'assume breach' mean as a design principle?"
+    options:
+      - text: "Design as if an attacker is already inside — minimize blast radius, enforce least privilege, log everything, and make lateral movement hard"
+        correct: true
+      - text: "Give up on security because breaches are inevitable"
+        correct: false
+      - text: "Only protect the network perimeter"
+        correct: false
+      - text: "Assume your users are all attackers and block them"
+        correct: false
+    explain: "Perimeter-only security fails the moment someone gets in. Assume-breach flips it: grant least privilege so a compromised component can do little, segment so it can't reach everything, and instrument heavily so you detect and contain. It's the foundation of zero-trust architecture."
+  - q: "You find a serious vulnerability in a product you use. What is responsible disclosure?"
+    options:
+      - text: "Privately report it to the vendor, give them reasonable time to fix it, then coordinate public disclosure"
+        correct: true
+      - text: "Immediately post a working exploit on social media"
+        correct: false
+      - text: "Sell it to the highest bidder"
+        correct: false
+      - text: "Quietly exploit it yourself"
+        correct: false
+    explain: "Responsible (coordinated) disclosure reports the flaw privately first — often via a security.txt contact or a bug-bounty program — giving the vendor a fair window (commonly 90 days) to patch before details go public. It protects users while still ensuring the issue is eventually known and fixed. Dropping a 0-day publicly endangers everyone running the software."
+  - q: "Why build a 'scope check' into a security tool?"
+    options:
+      - text: "To refuse to act on any target outside the authorized address range — a guardrail against accidents and abuse"
+        correct: true
+      - text: "To make the tool run faster"
+        correct: false
+      - text: "To encrypt the results"
+        correct: false
+      - text: "Scope checks are only for compliance paperwork"
+        correct: false
+    explain: "A hardcoded allowlist (e.g. an authorized CIDR) that the tool checks before scanning or attacking prevents the classic disaster of fat-fingering an IP and hitting production or a third party. It encodes your rules of engagement in the tool itself — a professional habit that turns 'I promise I'll be careful' into an enforced control."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔑 Analogy">
+A locksmith and a burglar own the same picks. What separates them is a license and a customer who asked them to open the door. In security, the tools are identical on both sides of the law — a scanner is a scanner. The thing that makes you a professional rather than a criminal isn't the code; it's <strong>authorization</strong>: explicit permission to test a defined set of systems. Master that distinction before you touch a single offensive technique.
+</Callout>
+
+## Authorization is the whole game
+
+The techniques in this track are neutral. Run a port scan against your own lab and you're learning; run it against a bank and you've committed a crime in most countries — under laws like the US **Computer Fraud and Abuse Act** or the UK **Computer Misuse Act** — regardless of whether you "meant well" or caused no damage.
+
+So the first skill isn't technical. It's knowing your **scope**:
+
+- **Own it or have written permission.** A home lab, deliberately vulnerable VMs (DVWA, Metasploitable), a CTF, or a paid engagement with a signed *rules of engagement* document.
+- **Stay inside the lines.** The scope defines which hosts, which techniques (some forbid denial-of-service or social engineering), and which time windows are allowed.
+- **Minimize impact.** Authorized doesn't mean reckless — don't exfiltrate real data, don't degrade production, stop and report if you find something critical.
+
+## The defender's three mental models
+
+Beyond ethics, three principles shape how you build and break systems:
+
+<Mermaid code={String.raw`graph LR
+  A["Attacker"] -->|must pass| L1["Network<br/>segmentation"]
+  L1 --> L2["Authentication"]
+  L2 --> L3["Authorization<br/>(least privilege)"]
+  L3 --> L4["Input validation"]
+  L4 --> L5["Monitoring<br/>& alerting"]
+  L5 --> D["Data"]
+  style D fill:#059669,color:#fff`} />
+
+- **Defense in depth.** Never rely on one control. Stack independent layers so breaching the firewall still leaves the attacker facing authentication, then authorization, then validation, then detection. The diagram above is one such stack.
+- **Least privilege.** Every component, user, and token gets the *minimum* access it needs and no more. A compromised service with read-only access to one table is a far smaller disaster than one with admin everywhere.
+- **Assume breach.** Design as if the attacker is already inside. Shrink the blast radius, segment aggressively, and log everything so you can detect and contain. This is the heart of zero-trust.
+
+## Encode your rules of engagement in code
+
+A professional habit: make the tool itself refuse to act outside the authorized scope. Here a scanner checks every target against an allowlisted CIDR *before* it would ever send a packet — a guardrail that turns a promise into an enforced control. This runs here (pure parsing, no network):
+
+<Playground client:visible title="scope.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net"
+)
+
+// authorizedScope is the ONLY range this tool is permitted to touch.
+var authorizedScope = mustCIDR("192.168.56.0/24") // a typical lab network
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+// inScope is the guardrail every action must pass first.
+func inScope(target string) bool {
+	ip := net.ParseIP(target)
+	return ip != nil && authorizedScope.Contains(ip)
+}
+
+func main() {
+	targets := []string{"192.168.56.10", "192.168.56.250", "8.8.8.8", "10.0.0.1"}
+	for _, t := range targets {
+		if inScope(t) {
+			fmt.Printf("%-15s ✓ authorized — scanning\n", t)
+		} else {
+			fmt.Printf("%-15s ✗ OUT OF SCOPE — refusing\n", t)
+		}
+	}
+}`} />
+
+`8.8.8.8` and `10.0.0.1` are refused before any probe is sent. Building this check into your tooling is how you avoid the career-ending mistake of scanning the wrong network.
+
+## Responsible disclosure
+
+When you find a real vulnerability in software you don't own, the ethical path is **coordinated disclosure**: report it privately to the vendor (look for a `security.txt`, a security contact, or a bug-bounty program), give them a reasonable window to fix it (90 days is a common norm), and only then coordinate public disclosure. This protects the users running that software while still ensuring the flaw gets fixed and known. Dumping a working exploit publicly with no warning endangers everyone.
+
+<Callout type="gotcha" title="⚠️ 'It was only a scan' is not a defense">
+People underestimate how low the legal bar is. Unauthorized port scanning, credential stuffing, or even automated requests against a site you don't own can violate computer-misuse law — no exploitation or damage required. Convictions have followed from "just looking." Treat <em>every</em> action against a system you don't own or have written permission to test as off-limits. When in doubt, don't.
+</Callout>
+
+<Callout type="go" title="🐹 Build the guardrails in">
+The scope check above is a pattern worth repeating: encode your constraints in the tool. A rate limiter so you don't hammer a target, a dry-run flag, an allowlist of hosts, structured logging of every action you took (for the engagement report and your own defense). Go makes these trivial — and a tool that <em>can't</em> color outside the lines is a tool you can trust yourself with.
+</Callout>
+
+## See also
+
+- [Why Go for security](/security/why-go-for-security/) — the language's fit for tooling.
+- [Building security tools](/security/building-security-tools/) — shipping responsibly, with rate limits and logging.
+- [Input validation & injection defense](/security/input-validation-and-injection/) — defense in depth at the code level.
+- [Authentication & authorization](/security/authentication-and-authorization/) — least privilege in practice.
+
+Next: how to actually build and ship a tool — [building security tools](/security/building-security-tools/).

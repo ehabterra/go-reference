@@ -1,0 +1,186 @@
+---
+title: "Packet Analysis"
+category: offensive
+kind: topic
+order: 8
+difficulty: "Advanced"
+status: ready
+intent: "Reading the wire — parsing IP/TCP headers from raw bytes by hand, live capture with gopacket, and using packet analysis defensively for intrusion detection and anomaly monitoring."
+related:
+  - port-scanning
+  - dns-enumeration
+  - tls-and-pki
+quiz:
+  - q: "When you capture a raw packet off the wire, how is it structured?"
+    options:
+      - text: "As nested layers — Ethernet frame wrapping an IP packet wrapping a TCP/UDP segment wrapping the application data"
+        correct: true
+      - text: "As a single flat JSON object"
+        correct: false
+      - text: "As encrypted bytes that can't be parsed without a key"
+        correct: false
+      - text: "As the raw application data only"
+        correct: false
+    explain: "Packets are layered (encapsulation): the link layer (Ethernet) carries the network layer (IPv4/IPv6), which carries the transport layer (TCP/UDP), which carries the application payload. To analyze a packet you peel the layers in order, each header telling you how to interpret the next — exactly what encoding/binary or gopacket does for you."
+  - q: "Why does parsing binary headers use encoding/binary with a fixed byte order?"
+    options:
+      - text: "Network protocols define multi-byte fields in big-endian ('network byte order'), so you must read them with binary.BigEndian to get correct values on any CPU"
+        correct: true
+      - text: "Because Go can't read bytes otherwise"
+        correct: false
+      - text: "encoding/binary encrypts the header"
+        correct: false
+      - text: "Little-endian is illegal in Go"
+        correct: false
+    explain: "Internet protocols specify big-endian for multi-byte integers (the RFCs call it network byte order). Your CPU may be little-endian, so reading a port or length with the wrong order gives garbage. binary.BigEndian.Uint16(b) reads it correctly regardless of host architecture."
+  - q: "Why does live packet capture (libpcap/gopacket) usually require root and break Go's static-binary superpower?"
+    options:
+      - text: "Sniffing needs privileged raw-socket access, and gopacket binds to the C libpcap library via cgo — so the binary needs cgo and the .so present"
+        correct: true
+      - text: "Because capturing packets is illegal"
+        correct: false
+      - text: "gopacket is written in Python"
+        correct: false
+      - text: "Go cannot open sockets"
+        correct: false
+    explain: "Reading all traffic on an interface requires elevated privileges (root or CAP_NET_RAW) and a raw/AF_PACKET socket. The popular gopacket library wraps the C libpcap, so it needs cgo — meaning you lose the static, cross-compiled binary unless you use a pure-Go capture backend. For pure analysis of already-captured bytes, no privileges or cgo are needed."
+  - q: "What is the primary DEFENSIVE use of packet analysis?"
+    options:
+      - text: "Intrusion detection and network monitoring — spotting scans, exfiltration, malformed traffic, and anomalies in real time"
+        correct: true
+      - text: "Speeding up the network"
+        correct: false
+      - text: "Encrypting all traffic automatically"
+        correct: false
+      - text: "Replacing the firewall"
+        correct: false
+    explain: "Reading packets is how IDS/IPS systems (Snort, Suricata, Zeek) and monitoring tools work: they watch traffic for scan patterns, known-bad signatures, unexpected protocols, or volume anomalies that signal exfiltration. Defensive packet analysis is a huge field — and Go (via gopacket) is a common language for building these tools."
+  - q: "You're sniffing HTTPS traffic. What can you actually see?"
+    options:
+      - text: "Metadata — IPs, ports, packet sizes/timing, and the TLS SNI hostname — but not the encrypted application payload"
+        correct: true
+      - text: "The full decrypted request and response"
+        correct: false
+      - text: "Nothing at all; TLS hides the IP headers too"
+        correct: false
+      - text: "Only the passwords"
+        correct: false
+    explain: "TLS encrypts the payload, so you can't read the HTTP body or headers. But the lower layers are still visible: source/destination IPs and ports, packet sizes and timing (traffic analysis), and — until Encrypted Client Hello is universal — the SNI field naming the host being visited. Encryption protects content, not the existence and shape of the conversation."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="✉️ Analogy">
+A packet is a letter inside an envelope inside a mailbag. The mailbag (Ethernet) says which truck; the envelope (IP) says which building; the address line (TCP/UDP port) says which apartment; and the letter inside (the payload) is the message. Packet analysis is sorting the mail: you read each layer's label to know where the next one goes. Even when the letter is sealed (TLS), the envelope and bag still tell you who's talking to whom, how much, and when.
+</Callout>
+
+## Packets are layers
+
+A captured frame is **encapsulated** — each layer wraps the next:
+
+<Mermaid code={String.raw`graph LR
+  ETH["Ethernet<br/>(MACs)"] --> IP["IPv4/IPv6<br/>(src/dst IP, proto)"]
+  IP --> TCP["TCP/UDP<br/>(src/dst port, flags)"]
+  TCP --> APP["payload<br/>(HTTP, DNS, …)"]`} />
+
+To analyze a packet you peel the layers in order. Each header is a fixed-ish byte layout defined by an RFC, with multi-byte fields in **big-endian** (network byte order) — which is exactly what `encoding/binary` reads.
+
+## See it: parse IP + TCP headers by hand
+
+No capture library needed to *parse* bytes — this runs right here. We decode a real IPv4 header and the TCP header inside it, pulling out addresses, protocol, ports, and flags:
+
+<Playground client:visible title="parse.go" code={String.raw`package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"net"
+)
+
+func main() {
+	// A captured IPv4 packet: 20-byte IP header + 20-byte TCP header.
+	pkt := []byte{
+		// --- IPv4 header ---
+		0x45, 0x00, 0x00, 0x28, // ver=4, IHL=5 (20B), total len=40
+		0x1c, 0x46, 0x40, 0x00, // id, flags/frag
+		0x40, 0x06, 0xb1, 0xe6, // TTL=64, proto=6 (TCP), checksum
+		192, 168, 1, 10, // src IP
+		93, 184, 216, 34, // dst IP
+		// --- TCP header ---
+		0xd4, 0x31, // src port 54321
+		0x01, 0xbb, // dst port 443
+		0x00, 0x00, 0x00, 0x00, // seq
+		0x00, 0x00, 0x00, 0x00, // ack
+		0x50, 0x02, // data offset=5, flags=0x02 (SYN)
+		0x72, 0x10, 0x00, 0x00, 0x00, 0x00, // window, checksum, urg
+	}
+
+	ihl := int(pkt[0]&0x0f) * 4 // IP header length in bytes
+	proto := pkt[9]
+	srcIP := net.IP(pkt[12:16])
+	dstIP := net.IP(pkt[16:20])
+	fmt.Printf("IPv4  %s -> %s  proto=%d (TCP)\n", srcIP, dstIP, proto)
+
+	tcp := pkt[ihl:] // TCP segment starts after the IP header
+	srcPort := binary.BigEndian.Uint16(tcp[0:2])
+	dstPort := binary.BigEndian.Uint16(tcp[2:4])
+	flags := tcp[13]
+	fmt.Printf("TCP   %d -> %d  flags=0x%02x %s\n", srcPort, dstPort, flags, decodeFlags(flags))
+}
+
+func decodeFlags(f byte) string {
+	names := []struct {
+		bit  byte
+		name string
+	}{{0x02, "SYN"}, {0x10, "ACK"}, {0x01, "FIN"}, {0x04, "RST"}, {0x08, "PSH"}}
+	out := ""
+	for _, n := range names {
+		if f&n.bit != 0 {
+			out += n.name + " "
+		}
+	}
+	return out
+}`} />
+
+That `flags=0x02 SYN` to port 443 is the opening packet of a TLS connection — the same SYN a [SYN scan](/security/port-scanning/) sends. Reading flags is how you tell a connection attempt from established traffic, and how an IDS recognizes a scan.
+
+## Live capture with gopacket
+
+Parsing bytes is pure Go; *capturing* them off an interface needs privileges and the C `libpcap` library, via `github.com/google/gopacket`. This is fenced — it requires root, cgo, and a real NIC:
+
+```go
+// Fenced: needs gopacket + libpcap, root/CAP_NET_RAW, a real interface.
+handle, _ := pcap.OpenLive("eth0", 65536, true, pcap.BlockForever)
+defer handle.Close()
+handle.SetBPFFilter("tcp and port 443") // kernel-side filter
+
+src := gopacket.NewPacketSource(handle, handle.LinkType())
+for pkt := range src.Packets() {
+	if ip := pkt.Layer(layers.LayerTypeIPv4); ip != nil {
+		v, _ := ip.(*layers.IPv4)
+		fmt.Printf("%s -> %s\n", v.SrcIP, v.DstIP)
+	}
+}
+```
+
+`gopacket` does the layer-peeling for you and supports **BPF filters** (compiled in the kernel, so you only copy the packets you care about). It's the foundation of most Go-based network tools.
+
+## The defensive heart: detection and monitoring
+
+<Callout type="go" title="🐹 Packet analysis is mostly a blue-team skill">
+The biggest use of reading packets isn't attacking — it's <strong>defending</strong>. Intrusion-detection systems (Snort, Suricata, Zeek) and network monitors watch traffic for scan patterns (many SYNs, no ACKs), known-bad signatures, unexpected protocols on odd ports, beaconing intervals that smell like malware, or sudden volume that looks like exfiltration. Go + gopacket is a common stack for building these — from a quick "alert on port scans" sniffer to a full flow-analysis pipeline. Learning to read packets makes you a better defender far more than a better attacker.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Encryption hides content, not metadata">
+Sniffing TLS traffic won't give you the HTTP request — the payload is encrypted. But don't conclude the conversation is private: the IP headers (who is talking to whom), the ports, and the <strong>packet sizes and timing</strong> are all visible, and traffic analysis can infer a surprising amount (which page was loaded, when a user is active). Until Encrypted Client Hello is universal, the TLS <strong>SNI</strong> field even leaks the hostname in plaintext. Capturing other people's traffic is also heavily regulated — wiretap laws apply — so only sniff networks you own or are authorized to monitor.
+</Callout>
+
+## See also
+
+- [Port scanning](/security/port-scanning/) — the SYN packets you'll see an IDS flag.
+- [TLS & PKI](/security/tls-and-pki/) — what encryption does and doesn't hide on the wire.
+- [TCP & UDP sockets](/web/tcp-sockets/) — the protocols whose headers you're parsing.
+- [Framing & protocols](/web/framing-and-protocols/) — reading fixed binary layouts with encoding/binary.
+
+Next: doing cryptography right, starting with hashing and password storage — [hashing & passwords](/security/hashing-and-passwords/).

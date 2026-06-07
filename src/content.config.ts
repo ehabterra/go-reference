@@ -47,6 +47,11 @@ const refSchema = z.object({
     'files',
     'processes',
     'ipc',
+    // security categories
+    'sec-foundations',
+    'offensive',
+    'cryptography',
+    'defense',
   ]),
   kind: z.enum(['pattern', 'guide', 'topic']).default('pattern'),
   order: z.number(),
@@ -117,4 +122,9 @@ const systems = defineCollection({
   schema: refSchema,
 });
 
-export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals, systems };
+const security = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/security' }),
+  schema: refSchema,
+});
+
+export const collections = { patterns, concurrency, dsa, fundamentals, stdlib, web, internals, systems, security };

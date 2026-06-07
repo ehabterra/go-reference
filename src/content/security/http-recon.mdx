@@ -1,0 +1,198 @@
+---
+title: "HTTP Reconnaissance"
+category: offensive
+kind: topic
+order: 6
+difficulty: "Intermediate"
+status: ready
+intent: "Profiling web targets in Go — a custom HTTP client, fingerprinting tech from headers, content and path discovery, and the response-hardening defenses (security headers, generic errors, rate limits) that blunt it."
+related:
+  - dns-enumeration
+  - fuzzing-for-bugs
+  - input-validation-and-injection
+quiz:
+  - q: "What can response headers alone reveal about a web target?"
+    options:
+      - text: "The server software and version, framework, language, CDN/WAF, and sometimes debug info — a tech fingerprint to map against known vulnerabilities"
+        correct: true
+      - text: "Nothing useful; headers are encrypted"
+        correct: false
+      - text: "The database password"
+        correct: false
+      - text: "The full source code"
+        correct: false
+    explain: "Server, X-Powered-By, X-AspNet-Version, Set-Cookie names (PHPSESSID, JSESSIONID), and CDN headers (CF-RAY, X-Amz-Cf-Id) fingerprint the stack. An attacker maps 'nginx 1.18 + PHP 7.4' to known CVEs; a defender removes or genericizes these headers so they reveal less."
+  - q: "Why should a recon HTTP client set its own timeout instead of using http.DefaultClient as-is?"
+    options:
+      - text: "http.DefaultClient has NO timeout — a single hung target can block a goroutine forever, stalling the whole scan"
+        correct: true
+      - text: "The default client cannot send custom headers"
+        correct: false
+      - text: "It is required to follow redirects"
+        correct: false
+      - text: "The default client is encrypted and slow"
+        correct: false
+    explain: "http.DefaultClient (and http.Get) have no timeout by default — a slow or malicious server can hold the connection open indefinitely. Always construct &http.Client{Timeout: ...} (and ideally a context per request) so every probe is bounded. This is true for production clients too, not just recon."
+  - q: "What is content/path discovery (directory brute-forcing)?"
+    options:
+      - text: "Requesting candidate paths (/admin, /.git/, /backup.zip) from a wordlist and noting which return non-404 responses"
+        correct: true
+      - text: "Downloading the entire site recursively"
+        correct: false
+      - text: "Reading the server's filesystem directly"
+        correct: false
+      - text: "Decrypting the TLS traffic"
+        correct: false
+    explain: "Many sensitive paths aren't linked from anywhere — admin panels, exposed .git directories, backup archives, API docs. A discovery tool requests each path from a wordlist and flags interesting status codes (200, 403, 401, 301). Tools like gobuster/ffuf do exactly this; the Go pattern is the same worker pool you've seen."
+  - q: "Why must a content-discovery tool calibrate against the target's 404 behavior?"
+    options:
+      - text: "Many sites return 200 with a 'not found' page (a soft-404), so blindly trusting status codes yields false positives unless you baseline the not-found response first"
+        correct: true
+      - text: "404 pages contain malware"
+        correct: false
+      - text: "The HTTP spec forbids 404"
+        correct: false
+      - text: "Calibration makes requests faster"
+        correct: false
+    explain: "Plenty of apps serve a friendly 200 page for missing routes (a 'soft 404'). A naive tool that treats 200 as 'found' reports every path as existing. The fix: request a guaranteed-nonexistent path first to learn the not-found fingerprint (status + body length), then flag responses that differ from it."
+  - q: "What's the most effective way to reduce what HTTP recon learns about your service?"
+    options:
+      - text: "Strip/genericize version-revealing headers, return uniform errors, add security headers, and rate-limit — minimize information leakage"
+        correct: true
+      - text: "Block the User-Agent string 'Go-http-client'"
+        correct: false
+      - text: "Serve the site only over HTTP"
+        correct: false
+      - text: "Put the whole site behind a CAPTCHA"
+        correct: false
+    explain: "Remove Server/X-Powered-By detail, return consistent generic error pages (so soft-404 calibration and tech fingerprinting are harder), set security headers, and rate-limit aggressive clients. Blocking one User-Agent is trivially bypassed. You can't stop recon, but you can make it learn far less — defense in depth, not a single trick."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔎 Analogy">
+Walk up to a shop and you learn a lot before entering: the brand of lock, the alarm-company sticker, the "back in 5 minutes" note, the delivery entrance round the side. HTTP recon is reading those signs on a web service — the <code>Server</code> header is the lock brand, a stray <code>/.git/</code> is the propped-open back door, a verbose error page is the note that says too much. None of it is breaking in; it's reading what the building tells you for free.
+</Callout>
+
+## A recon client, built right
+
+Everything starts with an HTTP client you control — custom headers, a real timeout, and your own redirect policy. The build is fenced (it needs the network) but it's the foundation of every web tool:
+
+```go
+client := &http.Client{
+	Timeout: 8 * time.Second, // NEVER use the zero-timeout default
+	CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse // see redirects, don't auto-follow
+	},
+}
+req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+req.Header.Set("User-Agent", "recon/1.0 (authorized testing)")
+resp, err := client.Do(req)
+```
+
+The two non-negotiables: a **timeout** (the default client has none — one hung host stalls a goroutine forever) and an honest **User-Agent** for authorized work.
+
+## Fingerprinting from the response
+
+The headers and status code reveal the stack:
+
+<Mermaid code={String.raw`graph TD
+  R["HTTP response"] --> H["Server: nginx/1.18"]
+  R --> P["X-Powered-By: PHP/7.4"]
+  R --> C["Set-Cookie: PHPSESSID"]
+  R --> CDN["CF-RAY / X-Amz-Cf-Id"]
+  H --> MAP["map to known CVEs"]
+  P --> MAP
+  C --> MAP
+  CDN --> WAF["CDN / WAF in front?"]`} />
+
+## See it: parse and fingerprint a response
+
+You can analyze a raw HTTP response with `http.ReadResponse` — no network needed — which is exactly how this runs in the sandbox. The same parsing logic works on a real `resp` from `client.Do`:
+
+<Playground client:visible title="fingerprint.go" code={String.raw`package main
+
+import (
+	"bufio"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+)
+
+// A captured raw HTTP response (as if read from the wire).
+const raw = "HTTP/1.1 200 OK\r\n" +
+	"Server: nginx/1.18.0\r\n" +
+	"X-Powered-By: PHP/7.4.3\r\n" +
+	"Set-Cookie: PHPSESSID=abc; HttpOnly\r\n" +
+	"Content-Type: text/html\r\n" +
+	"Content-Length: 0\r\n" +
+	"\r\n"
+
+func main() {
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw)), nil)
+	if err != nil {
+		fmt.Println("parse error:", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	fmt.Println("status:", resp.StatusCode)
+
+	// Simple tech fingerprint from headers.
+	var tech []string
+	if s := resp.Header.Get("Server"); s != "" {
+		tech = append(tech, "web server: "+s)
+	}
+	if p := resp.Header.Get("X-Powered-By"); p != "" {
+		tech = append(tech, "language: "+p)
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name == "PHPSESSID" {
+			tech = append(tech, "session: PHP")
+		}
+	}
+	sort.Strings(tech)
+	fmt.Println("fingerprint:")
+	for _, t := range tech {
+		fmt.Println("  -", t)
+	}
+}`} />
+
+That `nginx/1.18.0 + PHP/7.4.3` fingerprint is the first thing an attacker maps to a CVE list — and the first thing a defender should make *less* informative.
+
+## Content and path discovery
+
+The interesting paths aren't linked — `/admin`, `/.git/config`, `/backup.zip`, `/api/v1/docs`. **Path discovery** requests each candidate from a wordlist (the same [worker pool](/patterns/worker-pool/)) and flags non-boring responses. The one subtlety is **soft-404 calibration**:
+
+```go
+// Calibrate: fetch a path that definitely doesn't exist, record its
+// status + body length as the "not found" fingerprint.
+notFound := fetch(base + "/zzq-" + random())
+// A real hit differs from that baseline (different status OR length).
+if resp.StatusCode != notFound.status || resp.length != notFound.length {
+	report(path, resp.StatusCode)
+}
+```
+
+Without calibration, a site that serves a friendly `200` page for missing routes makes every guess look like a hit. Always baseline first, then throttle (don't hammer the target), and honor `robots.txt` as a *hint about interesting paths* — it often lists exactly what the owner wanted hidden.
+
+## Defending your web service
+
+<Callout type="go" title="🐹 Make your responses say less">
+You can't stop recon, but you can starve it. <strong>Strip version detail</strong> from <code>Server</code>/<code>X-Powered-By</code> (or override with a generic value). <strong>Return uniform errors</strong> — a consistent generic 404 defeats soft-404 calibration and tech-stack guessing. <strong>Add security headers</strong> (see <a href="/web/web-security/">web security</a>): HSTS, CSP, X-Content-Type-Options. And <strong>rate-limit</strong> aggressive clients so directory brute-forcing is slow and visible. Each one is small; together they turn a rich fingerprint into a shrug.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Scraping and brute-forcing have legal and operational limits">
+Automated requests against a site you don't own can breach its terms of service and, at volume, computer-misuse law — and an aggressive content-discovery run can look like an attack or knock a fragile app over. For authorized testing, throttle hard, set a clear User-Agent, and stay in scope. For scraping specifically, respect <code>robots.txt</code> and rate limits even when the law is ambiguous — being a good citizen keeps you out of both technical and legal trouble.
+</Callout>
+
+## See also
+
+- [DNS enumeration](/security/dns-enumeration/) — finding the hosts whose web services you then profile.
+- [Fuzzing for bugs](/security/fuzzing-for-bugs/) — pushing past recon into finding actual flaws.
+- [Input validation & injection defense](/security/input-validation-and-injection/) — the bugs recon is looking for.
+- [Web security](/web/web-security/) — the security headers and hardening referenced above.
+
+Next: from reading what a service says to finding where it breaks — [fuzzing for bugs](/security/fuzzing-for-bugs/).

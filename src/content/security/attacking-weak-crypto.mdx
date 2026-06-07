@@ -1,0 +1,174 @@
+---
+title: "Attacking Weak Crypto"
+category: cryptography
+kind: topic
+order: 12
+difficulty: "Advanced"
+status: ready
+intent: "How good algorithms get broken by bad usage — dictionary attacks on fast hashes, ECB pattern leakage, nonce reuse, hardcoded keys, weak randomness, and timing side-channels — and how to avoid each."
+related:
+  - hashing-and-passwords
+  - symmetric-encryption
+  - tls-and-pki
+quiz:
+  - q: "Why can a leaked database of unsalted SHA-256 password hashes be cracked so fast?"
+    options:
+      - text: "SHA-256 is fast, so an attacker hashes a huge wordlist at billions/sec and matches; with no salt, one precomputed table cracks every reused password at once"
+        correct: true
+      - text: "SHA-256 can be mathematically reversed"
+        correct: false
+      - text: "The hashes contain the password length"
+        correct: false
+      - text: "It cannot be cracked; SHA-256 is for passwords"
+        correct: false
+    explain: "Cracking isn't reversing — it's guessing and hashing until a guess matches. Because SHA-256 is fast and unsalted hashes are identical for identical passwords, an attacker precomputes (or GPU-brute-forces) common passwords and matches the whole table at once. Salting + a slow KDF (argon2id/bcrypt) makes each guess expensive and unique, defeating this."
+  - q: "What goes catastrophically wrong if you reuse a nonce with AES-GCM (or any stream/CTR cipher)?"
+    options:
+      - text: "Two ciphertexts under the same key+nonce leak the XOR of their plaintexts, and for GCM it can expose the authentication key — breaking confidentiality and integrity"
+        correct: true
+      - text: "Nothing; nonces can be reused freely"
+        correct: false
+      - text: "Decryption becomes slower"
+        correct: false
+      - text: "The key length doubles"
+        correct: false
+    explain: "Stream ciphers XOR the plaintext with a keystream derived from key+nonce. Same key+nonce = same keystream, so C1 XOR C2 = P1 XOR P2 — the plaintexts leak. For GCM specifically, nonce reuse also lets an attacker recover the GHASH authentication key and forge messages. Nonce uniqueness per key is not optional."
+  - q: "Why is math/rand unsuitable for generating keys, tokens, or nonces?"
+    options:
+      - text: "It's a deterministic PRNG — predictable from its seed/state, so an attacker can reproduce 'random' values; security needs crypto/rand"
+        correct: true
+      - text: "It's too slow"
+        correct: false
+      - text: "It only produces even numbers"
+        correct: false
+      - text: "It can't produce enough bytes"
+        correct: false
+    explain: "math/rand is a statistical PRNG: fast and fine for simulations, but its output is fully determined by its seed and is predictable. If you generate a session token or key with it, an attacker who learns or guesses the state can predict future values. Always use crypto/rand (CSPRNG) for anything security-sensitive."
+  - q: "What's wrong with hardcoding an encryption key or API secret in source code?"
+    options:
+      - text: "It ends up in version control history and inside the compiled binary, where anyone with the repo or the binary can extract it — and rotating it means a rebuild"
+        correct: true
+      - text: "Nothing, as long as the repo is private"
+        correct: false
+      - text: "It makes the binary larger"
+        correct: false
+      - text: "It only matters for asymmetric keys"
+        correct: false
+    explain: "A secret in source is committed to git forever (even if later 'removed', it's in history) and is trivially recoverable from the binary with `strings`. Private repos get leaked, forked, and cloned to laptops. Secrets belong in environment variables, a secrets manager, or a mounted file — never in code. See secrets management."
+  - q: "What is a timing side-channel, and how do you prevent it when comparing secrets?"
+    options:
+      - text: "Comparing secrets with == returns early on the first mismatch, leaking how many bytes matched via timing; use subtle.ConstantTimeCompare instead"
+        correct: true
+      - text: "A clock that runs too fast on the server"
+        correct: false
+      - text: "Latency added by encryption"
+        correct: false
+      - text: "It only affects asymmetric crypto"
+        correct: false
+    explain: "A naive byte comparison (== or bytes.Equal) stops at the first differing byte, so a matching prefix takes measurably longer. An attacker measures response times to recover a MAC or token byte-by-byte. crypto/subtle.ConstantTimeCompare always examines all bytes, taking the same time regardless of where (or whether) they differ."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🔓 Analogy">
+A bank-vault door is unbreakable — but it's useless if someone props it open, writes the combination on a sticky note, or uses the same key for every vault in the country. Cryptography is the same: AES and SHA-256 are not the weak point; <em>how you use them</em> is. Almost every real-world crypto break is a usage mistake — a reused nonce, a fast hash, a key in source control — not a broken algorithm. This page is a tour of the sticky notes.
+</Callout>
+
+## The break is (almost) never the algorithm
+
+<Mermaid code={String.raw`graph TD
+  ALGO["strong algorithm<br/>AES, SHA-256"] --> M1["fast hash for passwords"]
+  ALGO --> M2["reused nonce"]
+  ALGO --> M3["ECB mode"]
+  ALGO --> M4["hardcoded key"]
+  ALGO --> M5["math/rand"]
+  ALGO --> M6["== on secrets"]
+  M1 --> BROKEN["broken in practice"]
+  M2 --> BROKEN
+  M3 --> BROKEN
+  M4 --> BROKEN
+  M5 --> BROKEN
+  M6 --> BROKEN`} />
+
+## Dictionary attacks: why fast hashes lose
+
+"Cracking" a hash isn't reversing it — it's **guessing and re-hashing** until a guess matches. Because SHA-256 is *fast*, an attacker tries an enormous wordlist cheaply. This runs here: it cracks unsalted SHA-256 hashes against a small wordlist, exactly as a real cracker does:
+
+<Playground client:visible title="crack.go" code={String.raw`package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+)
+
+func sha(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func main() {
+	// A "stolen database" of unsalted SHA-256 password hashes.
+	stolen := map[string]string{
+		"alice": sha("password123"),
+		"bob":   sha("letmein"),
+		"carol": sha("S3cur3!Passphrase-No-One-Guesses"),
+	}
+
+	// The attacker's wordlist (real ones have millions of entries).
+	wordlist := []string{"123456", "password", "letmein", "password123", "qwerty"}
+
+	// Precompute hash -> word, then match the whole DB at once.
+	rainbow := make(map[string]string, len(wordlist))
+	for _, w := range wordlist {
+		rainbow[sha(w)] = w
+	}
+
+	for user, h := range stolen {
+		if pw, ok := rainbow[h]; ok {
+			fmt.Printf("%-6s CRACKED -> %s\n", user, pw)
+		} else {
+			fmt.Printf("%-6s safe (not in wordlist)\n", user)
+		}
+	}
+}`} />
+
+`alice` and `bob` fall instantly; `carol`'s long, unusual passphrase survives *this* list but not a bigger one run at GPU speed. The fix isn't a better hash function — it's a **slow, salted KDF** ([argon2id/bcrypt](/security/hashing-and-passwords/)) so each guess costs ~100ms instead of nanoseconds, turning a seconds-long crack into millennia.
+
+## The other classic mistakes
+
+- **ECB mode leaks patterns.** [AES in ECB](/security/symmetric-encryption/) encrypts identical blocks identically, so structure shows through the ciphertext (the "ECB penguin"). Use AEAD (AES-GCM).
+- **Nonce reuse is fatal.** Reuse a key+nonce with GCM/CTR and the keystream repeats: `C1 XOR C2 = P1 XOR P2` leaks the plaintexts, and GCM additionally exposes its authentication key. One nonce, one message, forever.
+- **Hardcoded keys.** A secret in source is in git history *and* the binary (`strings ./app` finds it). Rotating it needs a rebuild. Secrets go in the environment or a [secrets manager](/security/secrets-management/).
+- **Weak randomness.** `math/rand` is a predictable PRNG — fine for jitter, fatal for keys, tokens, and nonces. Use `crypto/rand`.
+- **Timing side-channels.** Comparing a secret with `==` returns early on the first mismatch, leaking the matching length through response time. Use `crypto/subtle.ConstantTimeCompare`.
+
+## crypto/rand vs math/rand — the one-byte difference that matters
+
+```go
+import "crypto/rand" // NOT math/rand — for any security value
+
+token := make([]byte, 32)
+rand.Read(token) // cryptographically secure, unpredictable
+// math/rand would give predictable bytes an attacker can reproduce.
+```
+
+This single import choice is the difference between an unguessable session token and one an attacker can reproduce from the PRNG state. When in doubt for anything security-sensitive, it's `crypto/rand`.
+
+<Callout type="go" title="🐹 A weak-crypto audit checklist">
+Grep your codebase for the tells: <code>md5</code>/<code>sha1</code> used for security, <code>NewECBEncrypter</code>, <code>math/rand</code> generating keys/tokens, a constant that looks like a key, <code>bytes.Equal</code> or <code>==</code> on a MAC/token, and any reused nonce. Run <code>govulncheck</code> for known crypto-library CVEs, and prefer high-level libraries (<code>age</code>, <code>nacl/secretbox</code>) that make the right choices for you. The algorithms are solid; your job is to not undermine them.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ 'It encrypts/looks random' is not a security review">
+The scariest weak-crypto bugs <em>work perfectly</em> — they encrypt, decrypt, and produce random-looking output, so they pass every functional test. A reused nonce, an ECB image, a math/rand token: the program behaves correctly while being completely broken. Functional correctness tells you nothing about cryptographic correctness. The only checks that matter are the specific properties above — and, for anything important, a real review by someone who knows crypto.
+</Callout>
+
+## See also
+
+- [Hashing & passwords](/security/hashing-and-passwords/) — the slow KDFs that defeat dictionary attacks.
+- [Symmetric encryption](/security/symmetric-encryption/) — AEAD, nonces, and why ECB is banned.
+- [Secrets management](/security/secrets-management/) — keeping keys out of source and binaries.
+- [Supply-chain security](/security/supply-chain-security/) — govulncheck for vulnerable crypto libraries.
+
+Next: defensive engineering, starting with the bug class behind most breaches — [input validation & injection defense](/security/input-validation-and-injection/).

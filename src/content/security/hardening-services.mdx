@@ -1,0 +1,199 @@
+---
+title: "Hardening HTTP Services"
+category: defense
+kind: topic
+order: 16
+difficulty: "Intermediate"
+status: ready
+intent: "Turning a working Go server into a hardened one — timeouts and body limits against resource exhaustion, security headers, panic-recovery and rate-limiting middleware, and graceful shutdown."
+related:
+  - input-validation-and-injection
+  - authentication-and-authorization
+  - secrets-management
+quiz:
+  - q: "Why must a production net/http server set explicit timeouts (ReadTimeout, WriteTimeout, IdleTimeout)?"
+    options:
+      - text: "The zero-value Server has NO timeouts, so a slow client can hold connections open indefinitely (Slowloris), exhausting resources — timeouts bound every connection"
+        correct: true
+      - text: "Timeouts make responses faster"
+        correct: false
+      - text: "They are required to serve HTML"
+        correct: false
+      - text: "Only HTTPS needs timeouts"
+        correct: false
+    explain: "http.Server{} has no timeouts by default — a deliberate slow-read/slow-write client (Slowloris attack) can tie up connections forever and exhaust the server. Set ReadHeaderTimeout, ReadTimeout, WriteTimeout, and IdleTimeout so no single connection can hog resources. This is the single most common production-hardening miss."
+  - q: "What does http.MaxBytesReader (or MaxBytesHandler) protect against?"
+    options:
+      - text: "An unbounded request body — an attacker streaming gigabytes to exhaust memory; it caps how much the server will read"
+        correct: true
+      - text: "Slow responses"
+        correct: false
+      - text: "SQL injection"
+        correct: false
+      - text: "Expired certificates"
+        correct: false
+    explain: "Without a limit, a handler reading r.Body will happily buffer however much an attacker sends — a trivial memory-exhaustion DoS. http.MaxBytesReader wraps the body so reads fail past a cap, and returns a 413 to the client. Always bound request bodies (and use a low limit for endpoints that expect small JSON)."
+  - q: "Why should middleware recover from panics in handlers?"
+    options:
+      - text: "An unrecovered panic in a handler goroutine crashes the whole server process; recovery turns it into a 500 for that one request and keeps the server up"
+        correct: true
+      - text: "Recovery makes handlers faster"
+        correct: false
+      - text: "It is required for routing"
+        correct: false
+      - text: "Panics can't happen in handlers"
+        correct: false
+    explain: "net/http runs each request in its own goroutine, but an unrecovered panic still terminates the process (a panic isn't isolated to the request unless you recover it). Recovery middleware defers a recover(), logs the error, and writes a 500 — so one buggy/attacker-triggered panic degrades a single request instead of taking down every connection. (Go's server does recover some panics, but explicit middleware gives you logging and a clean response.)"
+  - q: "What do security headers like Content-Security-Policy and Strict-Transport-Security do?"
+    options:
+      - text: "They instruct the browser to enforce protections — CSP restricts what scripts/resources can load (mitigating XSS), HSTS forces HTTPS — defense in depth at the client"
+        correct: true
+      - text: "They encrypt the response body"
+        correct: false
+      - text: "They speed up page loads"
+        correct: false
+      - text: "They authenticate the user"
+        correct: false
+    explain: "Security headers are instructions the browser enforces: CSP limits which origins scripts/styles/images can come from (a strong XSS mitigation), HSTS forces future visits over HTTPS, X-Content-Type-Options stops MIME sniffing, and Referrer-Policy limits leakage. They don't replace server-side defenses but add a powerful client-side layer for free."
+  - q: "Why implement graceful shutdown (srv.Shutdown(ctx)) rather than just exiting?"
+    options:
+      - text: "It stops accepting new connections but lets in-flight requests finish, avoiding dropped requests and corrupted state on deploy/restart"
+        correct: true
+      - text: "It makes the binary smaller"
+        correct: false
+      - text: "It is required for TLS"
+        correct: false
+      - text: "It speeds up startup"
+        correct: false
+    explain: "Hard-killing a server mid-request drops connections and can leave operations half-done. srv.Shutdown(ctx) stops accepting new connections, waits (up to a deadline) for active requests to complete, then returns — so rolling deploys and SIGTERM handling don't cause errors. Pair it with os/signal.NotifyContext to trigger on SIGINT/SIGTERM."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🏰 Analogy">
+A working server is a house with the lights on. A <em>hardened</em> server is that house with locks on every door, a time limit on how long a visitor can loiter, a cap on how much they can carry in, a guard who stays calm when one room catches fire, and a fire drill for closing up. Each measure is small; together they're the difference between a home and a target. The defaults get you a working server — hardening is the deliberate work that survives the internet.
+</Callout>
+
+## The defaults are not production-ready
+
+`http.ListenAndServe(":8080", mux)` works, but the zero-value server has **no timeouts and no body limits** — both are denial-of-service waiting to happen. Hardening layers protections on top:
+
+<Mermaid code={String.raw`graph TD
+  REQ["request"] --> TO["timeouts<br/>(no Slowloris)"]
+  TO --> RL["rate limit<br/>(no flooding)"]
+  RL --> BL["body limit<br/>(no memory DoS)"]
+  BL --> REC["panic recovery<br/>(stay up)"]
+  REC --> HDR["security headers<br/>(browser enforces)"]
+  HDR --> H["your handler"]`} />
+
+## Server timeouts and body limits
+
+Always construct an explicit `http.Server` with timeouts, and bound request bodies (fenced — needs a listening socket, but it's the core config):
+
+```go
+srv := &http.Server{
+	Addr:              ":8443",
+	Handler:           mux,
+	ReadHeaderTimeout: 5 * time.Second,  // defeats Slowloris
+	ReadTimeout:       15 * time.Second,
+	WriteTimeout:      15 * time.Second,
+	IdleTimeout:       60 * time.Second,
+	MaxHeaderBytes:    1 << 20,          // 1 MB of headers max
+}
+
+// Per-handler body cap: refuse bodies larger than 1 MB.
+func handler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	// ... decode r.Body; reads past the cap fail with a 413.
+}
+```
+
+Without these, a slow client holds connections open forever and a large body exhausts memory — both trivial to exploit, both fixed in a few lines.
+
+## See it: a hardening middleware chain
+
+Middleware composes cleanly in Go. This runs here using `httptest` (no real socket): a chain that **recovers from panics**, adds **security headers**, and still serves a normal request — proving one handler panic becomes a 500 instead of a crash:
+
+<Playground client:visible title="middleware.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+// recoverMW turns a handler panic into a 500 instead of a process crash.
+func recoverMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// securityHeaders adds defense-in-depth headers the browser enforces.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		w.Header().Set("Strict-Transport-Security", "max-age=63072000")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "hello")
+	})
+	mux.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
+		panic("handler blew up") // simulated bug / attack trigger
+	})
+
+	// Wrap the mux: recover(outer) -> securityHeaders -> mux.
+	app := recoverMW(securityHeaders(mux))
+
+	for _, path := range []string{"/ok", "/boom"} {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		fmt.Printf("%-6s -> %d  CSP=%q\n", path, rec.Code, rec.Header().Get("Content-Security-Policy"))
+	}
+	fmt.Println("server still running after the panic ✓")
+}`} />
+
+`/boom` returns `500` instead of crashing the process, and every response carries the security headers. In production you'd add **rate-limiting** middleware (a [token bucket](/concurrency/rate-limiting/) keyed per client) and CSRF protection for state-changing form posts.
+
+## Graceful shutdown
+
+Don't hard-kill a server mid-request. `srv.Shutdown(ctx)` stops accepting new connections and lets in-flight requests finish, so rolling deploys don't drop traffic:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+go srv.ListenAndServe()
+<-ctx.Done() // wait for SIGINT/SIGTERM
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+srv.Shutdown(shutdownCtx) // drain active requests, then exit
+```
+
+<Callout type="go" title="🐹 The production hardening checklist">
+<strong>Timeouts</strong> on the server (Read/Write/Idle/ReadHeader) — the #1 miss. <strong>Body limits</strong> with <code>MaxBytesReader</code>. <strong>Recovery</strong> middleware so a panic is a 500, not a crash, with the error logged. <strong>Security headers</strong> (CSP, HSTS, nosniff). <strong>Rate limiting</strong> per client. <strong>TLS</strong> with <code>MinVersion: tls.VersionTLS12</code> (see <a href="/security/tls-and-pki/">TLS &amp; PKI</a>). <strong>Graceful shutdown</strong> on SIGTERM. And run as a <strong>non-root</strong> user in a minimal container. None is hard; the discipline is doing all of them.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Headers must be set before the body is written">
+A subtle Go trap: once you call <code>w.Write</code> (or <code>fmt.Fprint(w, ...)</code>), the status code and headers are flushed — any <code>w.Header().Set(...)</code> after that is silently ignored. So security-header middleware must run <em>before</em> the handler writes, and a handler must set its status/headers before writing the body. If your CSP header mysteriously isn't appearing, check whether something wrote to the ResponseWriter first. (Middleware ordering matters: wrap so headers are set on the way in.)
+</Callout>
+
+## See also
+
+- [Input validation & injection](/security/input-validation-and-injection/) — the per-request defenses inside the handler.
+- [Authentication & authorization](/security/authentication-and-authorization/) — auth middleware in the same chain.
+- [TLS & PKI](/security/tls-and-pki/) — serving the hardened server over HTTPS.
+- [Web security & HTTP servers (web track)](/web/web-security/) — middleware and headers in depth.
+
+Next: securing everything your code pulls in — [supply-chain security](/security/supply-chain-security/).

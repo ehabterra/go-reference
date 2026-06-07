@@ -1,0 +1,193 @@
+---
+title: "Authentication & Authorization"
+category: defense
+kind: topic
+order: 14
+difficulty: "Intermediate"
+status: ready
+intent: "Proving who you are and deciding what you may do — sessions vs tokens, secure token generation and constant-time checks, password verification, and least-privilege authorization (RBAC)."
+related:
+  - hashing-and-passwords
+  - secrets-management
+  - input-validation-and-injection
+quiz:
+  - q: "What's the difference between authentication and authorization?"
+    options:
+      - text: "Authentication proves WHO you are (identity); authorization decides WHAT you're allowed to do (permissions). AuthN comes first, then AuthZ"
+        correct: true
+      - text: "They are two words for login"
+        correct: false
+      - text: "Authorization happens before authentication"
+        correct: false
+      - text: "Authentication is for admins, authorization for users"
+        correct: false
+    explain: "AuthN ('are you who you claim?') verifies identity via a password, token, certificate, or MFA. AuthZ ('may you do this?') checks whether that verified identity has permission for the action. You authenticate once, then authorize every sensitive operation. Confusing the two — e.g. authenticating a user but never checking they own the resource — is a top vulnerability class (broken access control)."
+  - q: "How should a session token (or API key) be generated and compared?"
+    options:
+      - text: "Generate it from crypto/rand (unguessable), store only its hash, and compare with subtle.ConstantTimeCompare"
+        correct: true
+      - text: "Use a sequential integer ID"
+        correct: false
+      - text: "Generate it with math/rand and compare with =="
+        correct: false
+      - text: "Use the user's email as the token"
+        correct: false
+    explain: "A token must be unpredictable (crypto/rand, ≥128 bits), stored as a hash so a DB leak doesn't expose live sessions, and compared in constant time (subtle.ConstantTimeCompare) to avoid timing attacks. Sequential IDs are guessable, math/rand is predictable, and == leaks the matching prefix through timing."
+  - q: "What is a key trade-off between server-side sessions and stateless JWTs?"
+    options:
+      - text: "Sessions are easy to revoke (delete server-side) but need server state; JWTs scale statelessly but are hard to revoke before they expire"
+        correct: true
+      - text: "JWTs are always more secure than sessions"
+        correct: false
+      - text: "Sessions cannot be used with cookies"
+        correct: false
+      - text: "JWTs are encrypted by default"
+        correct: false
+    explain: "A server-side session is a random ID mapping to state you control — instantly revocable by deleting it, but it requires a session store. A JWT carries signed claims the server verifies without a lookup (great for scale and microservices), but it's valid until expiry — revoking early needs a denylist or short lifetimes + refresh tokens. Note: a JWT is signed, not encrypted; don't put secrets in its payload."
+  - q: "What is the 'alg: none' JWT vulnerability?"
+    options:
+      - text: "An attacker changes the token's algorithm header to 'none' (or HS256 when the server expects RS256), tricking a careless verifier into accepting an unsigned/forged token"
+        correct: true
+      - text: "JWTs with no algorithm run faster"
+        correct: false
+      - text: "It compresses the token"
+        correct: false
+      - text: "It is a feature for testing"
+        correct: false
+    explain: "Historically, libraries trusted the token's own 'alg' header. Set it to 'none' and a naive verifier skips signature checking; or switch RS256→HS256 so the verifier uses the public key as an HMAC secret. The fix: the SERVER pins the expected algorithm and never lets the token dictate it. Use a well-maintained library and validate alg, exp, iss, and aud explicitly."
+  - q: "What does least-privilege authorization (RBAC) mean in practice?"
+    options:
+      - text: "Each role/user gets only the permissions it needs; every sensitive action checks the caller's permission, and ownership is verified (can THIS user touch THIS resource)"
+        correct: true
+      - text: "Only admins need permission checks"
+        correct: false
+      - text: "Check the user is logged in and allow everything after that"
+        correct: false
+      - text: "Give everyone admin to keep things simple"
+        correct: false
+    explain: "Authentication alone isn't authorization. RBAC maps roles to permissions and checks them per action; least privilege means granting the minimum. Crucially, also verify object-level ownership: a logged-in user requesting /orders/123 must own order 123 (IDOR — insecure direct object reference — is checking auth but not ownership). Deny by default; allow explicitly."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎟️ Analogy">
+Authentication is showing your ID at the door — proving you're <em>you</em>. Authorization is the wristband that says which areas you can enter — VIP, backstage, or just the lobby. Two different checks: the bouncer verifies the ID once, but security checks the wristband at every restricted door. A venue that checks IDs but never looks at wristbands lets anyone who got in the front door wander into the vault — which is exactly the "broken access control" bug at the top of every vulnerability list.
+</Callout>
+
+## Two questions, in order
+
+<Mermaid code={String.raw`graph LR
+  REQ["request"] --> AUTHN{"AuthN:<br/>who are you?"}
+  AUTHN -->|verified| AUTHZ{"AuthZ:<br/>may you do this?"}
+  AUTHN -->|fails| D1["401 Unauthorized"]
+  AUTHZ -->|permitted| OK["perform action"]
+  AUTHZ -->|denied| D2["403 Forbidden"]`} />
+
+**Authentication** establishes identity (password, token, certificate, MFA). **Authorization** decides if that identity may perform the action. You authenticate once; you authorize *every* sensitive operation. The classic, devastating mistake is doing the first and skipping the second.
+
+## Sessions vs tokens
+
+Two ways to remember a logged-in user:
+
+- **Server-side sessions** — a random session ID in a cookie maps to state you hold. Easy to **revoke** (delete it), but needs a session store. Set the cookie `HttpOnly`, `Secure`, `SameSite`.
+- **Stateless JWTs** — a signed token carrying claims the server verifies without a lookup. **Scales** statelessly (great for microservices), but is valid until it expires — early revocation needs short lifetimes + refresh tokens or a denylist. A JWT is **signed, not encrypted**: never put secrets in its payload.
+
+## See it: secure tokens and a constant-time check
+
+A session token must be unguessable, stored hashed, and compared in constant time. This runs here — output is booleans, so it's deterministic despite the random token:
+
+<Playground client:visible title="token.go" code={String.raw`package main
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"fmt"
+)
+
+// newToken returns an unguessable 256-bit token from a secure source.
+func newToken() string {
+	b := make([]byte, 32)
+	rand.Read(b) // crypto/rand — never math/rand for secrets
+	return hex.EncodeToString(b)
+}
+
+// store only the HASH, so a DB leak doesn't expose live sessions.
+func hashToken(t string) [32]byte { return sha256.Sum256([]byte(t)) }
+
+// verify in constant time to avoid timing side-channels.
+func verify(presented string, storedHash [32]byte) bool {
+	h := hashToken(presented)
+	return subtle.ConstantTimeCompare(h[:], storedHash[:]) == 1
+}
+
+func main() {
+	token := newToken()         // issued at login, sent to the client
+	stored := hashToken(token)  // only this is kept server-side
+
+	fmt.Println("token length (hex chars):", len(token)) // 64 = 256 bits
+	fmt.Println("correct token accepted:", verify(token, stored))
+	fmt.Println("forged token rejected:", verify("deadbeef", stored))
+}`} />
+
+That's the whole secure-token recipe: `crypto/rand` for unpredictability, hash-at-rest so a leaked database can't be replayed, and `subtle.ConstantTimeCompare` so an attacker can't recover the token byte-by-byte through timing. Password login follows the same shape but verifies against a [bcrypt/argon2 hash](/security/hashing-and-passwords/).
+
+## See it: authorization with least privilege
+
+Authentication tells you *who*; authorization checks *may they*. A small role→permission map, checked per action, with deny-by-default:
+
+<Playground client:visible title="rbac.go" code={String.raw`package main
+
+import "fmt"
+
+type perm string
+
+var rolePerms = map[string][]perm{
+	"viewer": {"read"},
+	"editor": {"read", "write"},
+	"admin":  {"read", "write", "delete"},
+}
+
+// can returns true only if the role explicitly has the permission.
+func can(role string, p perm) bool {
+	for _, allowed := range rolePerms[role] { // unknown role -> no perms -> deny
+		if allowed == p {
+			return true
+		}
+	}
+	return false
+}
+
+func main() {
+	checks := []struct {
+		role string
+		p    perm
+	}{
+		{"viewer", "read"}, {"viewer", "delete"},
+		{"editor", "write"}, {"admin", "delete"}, {"intruder", "read"},
+	}
+	for _, c := range checks {
+		fmt.Printf("%-9s %-7s -> %v\n", c.role, c.p, can(c.role, string(c.p)))
+	}
+}`} />
+
+`viewer` can't `delete`; an unknown `intruder` role gets nothing — **deny by default**. Beyond role checks, also verify **ownership**: a logged-in user requesting `/orders/123` must own order 123. Skipping that is IDOR (insecure direct object reference), a top web bug.
+
+<Callout type="go" title="🐹 Don't roll your own auth crypto — but do enforce AuthZ yourself">
+Use vetted libraries for the hard cryptographic parts — password hashing (<a href="/security/hashing-and-passwords/">argon2/bcrypt</a>), JWT signing/verification, OAuth/OIDC flows. But <strong>authorization logic is your domain</strong>: deny by default, check permission on every sensitive action, verify object ownership (not just login), and centralize the checks (middleware) so you can't forget one. Most breaches aren't broken crypto — they're a missing access-control check on one endpoint.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Authenticated is not authorized (and trust the server, not the client)">
+Two recurring disasters. First, <strong>broken access control</strong>: verifying a user is logged in but not that they're allowed to touch <em>this</em> resource — so user A reads user B's data by changing an ID. Always check ownership/permission, not just authentication. Second, <strong>client-side trust</strong>: hiding an admin button in the UI while leaving the endpoint open, or trusting a role claim the client can edit. Every authorization decision must happen on the server against state the client can't forge. For JWTs specifically, pin the expected <code>alg</code> and validate <code>exp</code>/<code>iss</code>/<code>aud</code> — never let the token choose its own verification.
+</Callout>
+
+## See also
+
+- [Hashing & passwords](/security/hashing-and-passwords/) — verifying credentials at login.
+- [Secrets management](/security/secrets-management/) — where signing keys and session secrets live.
+- [Input validation & injection](/security/input-validation-and-injection/) — the layer below access control.
+- [Web security (web track)](/web/web-security/) — cookies, CSRF, and session handling in net/http.
+
+Next: keeping the keys, tokens, and credentials this all depends on out of your code — [secrets management](/security/secrets-management/).

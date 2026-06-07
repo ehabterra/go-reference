@@ -1,0 +1,213 @@
+---
+title: "Building Security Tools"
+category: sec-foundations
+kind: topic
+order: 3
+difficulty: "Intermediate"
+status: ready
+intent: "The anatomy of a Go security tool — static cross-compiled builds, stripped binaries, embedded assets, and a concurrent worker-pool skeleton with rate limiting and structured logging you can reuse for any scanner."
+related:
+  - why-go-for-security
+  - port-scanning
+  - secrets-management
+quiz:
+  - q: "How do you produce a small, static, cross-compiled release binary?"
+    options:
+      - text: "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -trimpath"
+        correct: true
+      - text: "go build --static --strip --cross"
+        correct: false
+      - text: "You must compile on the target OS with a C toolchain"
+        correct: false
+      - text: "go run with the -release flag"
+        correct: false
+    explain: "CGO_ENABLED=0 makes it static; GOOS/GOARCH pick the target; `-ldflags='-s -w'` strips the symbol table and DWARF debug info (smaller binary); `-trimpath` removes local filesystem paths from the binary. One command, any platform, no C toolchain."
+  - q: "What is the right concurrency shape for a scanner that probes thousands of targets?"
+    options:
+      - text: "A fixed worker pool reading from a jobs channel, so concurrency is bounded and the network isn't overwhelmed"
+        correct: true
+      - text: "One goroutine per target with no limit — spawn 50,000 at once"
+        correct: false
+      - text: "A single goroutine doing them sequentially"
+        correct: false
+      - text: "Recursion, one call per port"
+        correct: false
+    explain: "Unbounded `go probe(t)` for 50k targets opens 50k sockets at once — you exhaust file descriptors, get rate-limited or blocked, and may DoS the target. A fixed worker pool (N goroutines pulling from a jobs channel) caps in-flight work; pair it with a rate limiter to control requests/second."
+  - q: "Why embed wordlists or templates with go:embed instead of reading them from disk?"
+    options:
+      - text: "So the tool stays a single self-contained binary with no external files to ship or lose"
+        correct: true
+      - text: "Because disk files are always slower"
+        correct: false
+      - text: "go:embed encrypts the files"
+        correct: false
+      - text: "It is the only way to read a file in Go"
+        correct: false
+    explain: "go:embed bakes assets (wordlists, payload templates, a CA cert) into the binary at compile time. The drop-and-run superpower stays intact — one file, no 'where's the wordlist?' on the target. Use real files only when the data must be user-supplied or too large to embed."
+  - q: "Why does a security tool need structured logging of its own actions?"
+    options:
+      - text: "For the engagement report and your own defense — an auditable record of exactly what you did, when, and to which host"
+        correct: true
+      - text: "To make the tool look professional"
+        correct: false
+      - text: "Logging makes scans faster"
+        correct: false
+      - text: "It is required by the Go compiler"
+        correct: false
+    explain: "In authorized testing you must be able to prove what you did and didn't do. Structured logs (slog, JSON) give a timestamped, queryable trail of every action — essential for the client report, for de-conflicting with the blue team, and for protecting yourself if something breaks during the window."
+  - q: "What does Go's `plugin` package let a tool do, and what's the catch?"
+    options:
+      - text: "Load compiled .so modules at runtime for extensibility — but it's Linux/macOS only, requires matching Go versions, and breaks static builds (needs cgo)"
+        correct: true
+      - text: "Run untrusted code in a perfect sandbox"
+        correct: false
+      - text: "Write plugins in any language"
+        correct: false
+      - text: "Nothing — Go has no plugin support"
+        correct: false
+    explain: "`plugin` loads .so files built with -buildmode=plugin, enabling modular tools. The catches are real: it needs cgo (no static binary), only works on Linux/macOS, and the plugin and host must be built with the exact same Go version and dependencies. Many tools prefer an embedded scripting engine (Lua, Starlark) or subprocess plugins instead."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🧰 Analogy">
+A good field kit isn't one giant gadget — it's a frame with interchangeable parts: the same handle takes a scanner head, a fuzzer head, a recon head. A well-built Go security tool is the same: a reusable skeleton — bounded concurrency, rate limiting, structured logging, a scope guard — into which you drop the specific probe. Get the frame right once and every tool you write afterward is mostly the probe.
+</Callout>
+
+## The release build
+
+The headline feature is the build itself. One command produces a small, static, portable binary:
+
+```bash
+# Static (no libc), stripped (-s -w), reproducible (-trimpath), for Linux/amd64.
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -ldflags='-s -w' -trimpath -o scanner ./cmd/scanner
+
+# Same source, a Windows build from the same machine:
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+  go build -ldflags='-s -w' -trimpath -o scanner.exe ./cmd/scanner
+```
+
+- `CGO_ENABLED=0` — no C, so the binary is static and cross-compiles cleanly.
+- `-ldflags='-s -w'` — drop the symbol table and DWARF debug info; a noticeably smaller binary.
+- `-trimpath` — strip your local filesystem paths out of the binary (privacy and reproducibility).
+
+## The anatomy of a tool
+
+Most scanners and recon tools share the same shape. Build it once and reuse it:
+
+<Mermaid code={String.raw`graph TD
+  CLI["flags / config<br/>(targets, rate, scope)"] --> SCOPE["scope guard<br/>(authorized only)"]
+  SCOPE --> JOBS["jobs channel"]
+  JOBS --> POOL["worker pool<br/>(bounded N)"]
+  POOL --> RL["rate limiter<br/>(req/sec)"]
+  RL --> PROBE["the probe<br/>(scan / fetch / fuzz)"]
+  PROBE --> RESULTS["results channel"]
+  RESULTS --> LOG["structured log<br/>+ report (JSON)"]`} />
+
+The only part that changes between a port scanner, a subdomain enumerator, and a web fuzzer is **the probe**. Everything else — bounded concurrency, rate limiting, scope checks, logging — is shared infrastructure.
+
+## See it: the reusable scanner skeleton
+
+A fixed worker pool drains a jobs channel, a [rate limiter](/concurrency/rate-limiting/) (a ticker here) caps the pace, and results come back deterministically sorted. Swap the body of `probe` and you have a different tool. This runs here — the "probe" is simulated so it works without a network:
+
+<Playground client:visible title="skeleton.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+)
+
+type result struct {
+	target string
+	open   bool
+}
+
+// probe is the ONLY part that changes per tool. Here it's simulated:
+// pretend even-numbered targets are "open".
+func probe(target int) result {
+	return result{target: fmt.Sprintf("10.0.0.%d", target), open: target%2 == 0}
+}
+
+func main() {
+	const workers = 8
+	jobs := make(chan int)
+	out := make(chan result)
+
+	// Rate limit: at most one probe per tick (kept short for the demo).
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range jobs {
+				<-tick.C // pace ourselves — never hammer a target
+				out <- probe(t)
+			}
+		}()
+	}
+
+	// Feed jobs, then close so workers finish.
+	go func() {
+		for t := 1; t <= 12; t++ {
+			jobs <- t
+		}
+		close(jobs)
+	}()
+	// Close results once all workers are done.
+	go func() { wg.Wait(); close(out) }()
+
+	var open []string
+	for r := range out {
+		if r.open {
+			open = append(open, r.target)
+		}
+	}
+	sort.Strings(open) // deterministic report
+	fmt.Printf("found %d open:\n", len(open))
+	for _, t := range open {
+		fmt.Println("  ", t)
+	}
+}`} />
+
+That worker-pool-plus-rate-limiter is the backbone of every scanner in this track. The [port scanning page](/security/port-scanning/) fills in a real `probe`; [worker pool](/patterns/worker-pool/) and [rate limiting](/concurrency/rate-limiting/) cover the pattern in depth.
+
+## Embedding assets and logging actions
+
+Two finishing touches make a tool field-ready:
+
+```go
+import _ "embed"
+
+//go:embed wordlists/subdomains.txt
+var subdomains string // baked into the binary at compile time
+```
+
+`go:embed` keeps the drop-and-run promise: wordlists, payload templates, or a pinned CA certificate travel *inside* the binary. And for authorized work, log every action with [`slog`](/stdlib/structured-logging/) in JSON so you have a timestamped, queryable record for the engagement report:
+
+```go
+slog.Info("probe", "target", t, "port", p, "result", "open", "ts", time.Now())
+```
+
+<Callout type="go" title="🐹 Bound everything that touches the network">
+The number-one beginner mistake is unbounded fan-out: a bare <code>go probe(t)</code> inside a <code>for … range targets</code> loop over 50,000 targets opens 50,000 sockets at once, exhausts file descriptors, and may knock the target over. Always cap concurrency with a fixed worker pool <em>and</em> rate-limit requests/second. A polite tool is a professional tool — and one that won't accidentally cause the very denial-of-service your rules of engagement forbid.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Plugins, cgo, and the static-binary tax">
+Reaching for the <code>plugin</code> package to make a tool extensible has hidden costs: it requires cgo (so you lose the static binary), works only on Linux/macOS, and demands the plugin and host be built with the <em>exact</em> same Go toolchain version and dependency set — a mismatch panics at load time. For most tools an embedded scripting engine (Lua, Starlark) or a subprocess-based plugin protocol is more portable. Reach for <code>plugin</code> only when you control the whole build pipeline.
+</Callout>
+
+## See also
+
+- [Port scanning](/security/port-scanning/) — the skeleton above with a real probe.
+- [Worker pool](/patterns/worker-pool/) & [rate limiting](/concurrency/rate-limiting/) — the concurrency backbone.
+- [Structured logging](/stdlib/structured-logging/) — slog for auditable action logs.
+- [Secrets management](/security/secrets-management/) — keeping API keys out of the binary and the repo.
+
+Next: the canonical first tool — [port scanning](/security/port-scanning/).
