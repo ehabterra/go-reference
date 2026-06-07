@@ -1,0 +1,166 @@
+---
+title: "Distributed Tracing"
+category: observability
+kind: topic
+order: 8
+difficulty: "Intermediate"
+status: ready
+intent: "Following one request across many services — traces and spans, context propagation, OpenTelemetry, sampling, and why a trace is the tool you reach for when metrics say 'slow' but not 'where'."
+related:
+  - structured-logging-in-prod
+  - metrics-with-prometheus
+  - grpc-and-service-comms
+quiz:
+  - q: "What problem does distributed tracing solve that logs and metrics don't?"
+    options:
+      - text: "It stitches one request's path across MANY services into a single timeline of spans, showing where the time went and which hop failed"
+        correct: true
+      - text: "It replaces the need for a database"
+        correct: false
+      - text: "It encrypts requests"
+        correct: false
+      - text: "It makes requests faster automatically"
+        correct: false
+    explain: "Metrics tell you the service is slow; logs show events within one service. Neither follows a single request as it fans out across gateway → auth → orders → payments → db. A trace does: each service records spans tied to one trace ID, assembled into a waterfall that shows exactly which downstream call ate the latency or returned the error."
+  - q: "What are a trace and a span?"
+    options:
+      - text: "A trace is one request's whole journey, identified by a trace ID; a span is one unit of work within it (a service call, a DB query) with start/end times and a parent"
+        correct: true
+      - text: "A trace is a log line; a span is a metric"
+        correct: false
+      - text: "They are two words for the same thing"
+        correct: false
+      - text: "A span is the whole request; a trace is one step"
+        correct: false
+    explain: "A trace = the full request, sharing one trace ID. A span = a timed operation within it (handle the HTTP request, call payments, run a query), each with a span ID, a parent span ID, a duration, and attributes. Spans nest into a tree/waterfall, so you see both the structure and the timing of the request across services."
+  - q: "How does a trace stay connected as a request crosses a service boundary?"
+    options:
+      - text: "Context propagation — the trace/span IDs travel in the request context locally and in headers (W3C traceparent) across the network, so the next service continues the same trace"
+        correct: true
+      - text: "Each service starts a brand-new unrelated trace"
+        correct: false
+      - text: "By matching timestamps after the fact"
+        correct: false
+      - text: "The database joins the traces"
+        correct: false
+    explain: "Within a process the trace context rides in context.Context; across the network it's injected into headers (the W3C traceparent header) by the client and extracted by the server, which starts a child span under the same trace ID. That propagation is what links spans from different services into one trace — and it's why passing ctx everywhere matters."
+  - q: "What is sampling in tracing, and why use it?"
+    options:
+      - text: "Recording only a fraction of traces (or keeping ones that are slow/errored) to control the volume and cost of trace data at high request rates"
+        correct: true
+      - text: "Randomly dropping requests to reduce load"
+        correct: false
+      - text: "Encrypting a sample of traffic"
+        correct: false
+      - text: "Testing a subset of endpoints"
+        correct: false
+    explain: "Tracing every request at scale generates enormous data. Sampling keeps a representative or interesting subset — e.g. 1% of all traces plus 100% of slow/errored ones (tail-based sampling) — so you keep the signal while controlling storage and cost. The trace context carries the sampling decision so all services in one trace agree to record or skip it."
+  - q: "What is OpenTelemetry (OTel)?"
+    options:
+      - text: "A vendor-neutral standard + SDK for generating and exporting traces, metrics, and logs — instrument once, send to any backend (Jaeger, Tempo, Datadog)"
+        correct: true
+      - text: "A specific database for traces"
+        correct: false
+      - text: "A Go web framework"
+        correct: false
+      - text: "A replacement for Kubernetes"
+        correct: false
+    explain: "OpenTelemetry is the CNCF standard for telemetry: a common API/SDK (with a Go implementation) and wire format (OTLP) so you instrument your code once and export to whatever backend you choose, avoiding vendor lock-in. Its libraries auto-instrument net/http, gRPC, and database/sql, so much of the propagation and span creation is handled for you."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📦 Analogy">
+Tracing a request across microservices is package tracking for your data. A metric tells you "average delivery is slow this week"; a log tells you "the Memphis hub scanned a package." But a <em>tracking number</em> follows one parcel through every hub, with a timestamp at each — so you see it sat in Memphis for two days. A trace is that tracking number for a request: one ID, a timestamped scan (span) at every service, assembled into the full journey so you can see exactly where it got stuck.
+</Callout>
+
+## Traces and spans
+
+A **trace** is one request's entire journey, sharing a single **trace ID**. A **span** is one timed unit of work within it — handling the request, calling a downstream service, running a query — each with a span ID, a parent, a duration, and attributes. Spans nest into a waterfall:
+
+<Mermaid code={String.raw`graph TD
+  A["span: GET /checkout<br/>(gateway) — 240ms"] --> B["span: auth.Verify<br/>15ms"]
+  A --> C["span: orders.Create<br/>200ms"]
+  C --> D["span: db.INSERT<br/>30ms"]
+  C --> E["span: payments.Charge<br/>160ms ← the slow hop"]`} />
+
+That waterfall instantly shows `payments.Charge` ate most of the 240ms — something neither a metric ("/checkout is slow") nor a log (one service's events) could pinpoint.
+
+## See it: context propagation builds the trace
+
+The mechanism is **context propagation**: the trace/span IDs ride in `context.Context` locally and in headers across the network. This runs here — a simplified tracer threading IDs through nested calls to build the span tree:
+
+<Playground client:visible title="trace.go" code={String.raw`package main
+
+import (
+	"context"
+	"fmt"
+)
+
+type traceKey struct{}
+type spanCtx struct {
+	traceID string
+	spanID  string
+	depth   int
+}
+
+// startSpan derives a child span from whatever is in the context.
+func startSpan(ctx context.Context, name string) (context.Context, func()) {
+	parent, _ := ctx.Value(traceKey{}).(spanCtx)
+	if parent.traceID == "" {
+		parent.traceID = "trace-7f3a" // root: would be random in real code
+	}
+	child := spanCtx{traceID: parent.traceID, spanID: name, depth: parent.depth + 1}
+	fmt.Printf("%*sspan start: %-16s trace=%s\n", child.depth*2, "", name, child.traceID)
+	ctx = context.WithValue(ctx, traceKey{}, child)
+	return ctx, func() { fmt.Printf("%*sspan end:   %s\n", child.depth*2, "", name) }
+}
+
+func main() {
+	ctx, end := startSpan(context.Background(), "GET /checkout")
+	defer end()
+
+	ctx2, end2 := startSpan(ctx, "orders.Create")
+	// payments.Charge is a CHILD of orders.Create — same trace ID propagates.
+	_, end3 := startSpan(ctx2, "payments.Charge")
+	end3()
+	end2()
+}`} />
+
+Every span shares the one `trace=trace-7f3a` because the ID propagates through `ctx`. Across the network, the client injects it into the **W3C `traceparent`** header and the server extracts it — so spans from different services join the same trace. This is the formalized version of the [correlation IDs](/cloud/structured-logging-in-prod/) from logging.
+
+## OpenTelemetry does this for real
+
+You don't hand-roll tracers. **OpenTelemetry** (<a href="https://opentelemetry.io/docs/languages/go/" target="_blank" rel="noopener">opentelemetry.io</a>) is the vendor-neutral standard: instrument once, export to any backend (Jaeger, Tempo, Datadog). Its Go libraries auto-instrument `net/http`, gRPC, and `database/sql` (fenced — third-party SDK):
+
+```go
+// otelhttp wraps a handler: it extracts traceparent, starts a server span,
+// and puts the context (with trace IDs) into r.Context() for you.
+handler := otelhttp.NewHandler(mux, "api")
+
+// In code, create child spans and add attributes:
+ctx, span := tracer.Start(ctx, "payments.Charge")
+defer span.End()
+span.SetAttributes(attribute.Int("amount", amount))
+// pass ctx to the next call — propagation is automatic.
+```
+
+At scale you **sample**: keep ~1% of traces plus 100% of slow/errored ones, so you keep the signal without the storage cost. The sampling decision rides in the trace context so all services agree.
+
+<Callout type="go" title="🐹 Pass ctx everywhere — it's the propagation backbone">
+Tracing only works if the trace context flows through your whole call path, which is exactly why Go's convention is <code>ctx context.Context</code> as the first argument of every request-scoped function. The context that carries <a href="/concurrency/context/">cancellation and deadlines</a> also carries the trace and span IDs. Thread it from the HTTP handler through your business logic to the database and downstream clients, and OpenTelemetry's instrumentation creates correctly-parented spans automatically. A function that drops <code>ctx</code> breaks the trace (and cancellation) for everything below it.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ A trace is incomplete if any hop doesn't propagate">
+Tracing breaks silently at the weakest link: if one service (or one client call) fails to propagate the trace context — a handler that ignores <code>ctx</code>, an HTTP client without the otel transport, a message published without injecting the headers — the trace splits, and you get a truncated waterfall that hides the very hop you're hunting. Use the auto-instrumentation for <code>net/http</code>/gRPC/SQL, propagate context across <a href="/cloud/message-queues/">async message boundaries</a> too (inject traceparent into the message), and verify end-to-end traces in staging. A trace is only as complete as its least-instrumented service.
+</Callout>
+
+## See also
+
+- [Structured logging](/cloud/structured-logging-in-prod/) — correlation IDs, the precursor to spans.
+- [Metrics with Prometheus](/cloud/metrics-with-prometheus/) — the aggregate that tells you *to* look at a trace.
+- [gRPC & service comms](/cloud/grpc-and-service-comms/) — the boundaries traces cross.
+- [context (concurrency)](/concurrency/context/) — the carrier of trace context.
+
+Next: looking inside one process when it's the bottleneck — [profiling in production](/cloud/profiling-in-production/).

@@ -1,0 +1,167 @@
+---
+title: "The Outbox Pattern & Idempotency"
+category: messaging
+kind: topic
+order: 12
+difficulty: "Advanced"
+status: ready
+intent: "Reliably publishing events alongside a database write — the dual-write problem, the transactional outbox, and idempotency keys that make at-least-once delivery safe to reprocess."
+related:
+  - message-queues
+  - event-driven-architecture
+  - distributed-transactions
+quiz:
+  - q: "What is the 'dual-write problem'?"
+    options:
+      - text: "Writing to the database AND publishing to a broker as two separate steps — if one succeeds and the other fails, your state and your events disagree"
+        correct: true
+      - text: "Writing the same row twice"
+        correct: false
+      - text: "Two services writing the same table"
+        correct: false
+      - text: "Using two databases"
+        correct: false
+    explain: "A handler that does db.Save(order) then broker.Publish(OrderPlaced) has two independent writes with no shared transaction. If the publish fails after the save (or the process crashes between them), the order exists but no event was emitted — downstream services never react. There's no atomic 'commit to DB and broker together', so naive dual writes silently lose events (or emit phantom ones)."
+  - q: "How does the transactional outbox solve the dual-write problem?"
+    options:
+      - text: "Write the event into an 'outbox' table in the SAME database transaction as the business change; a separate relay reads the outbox and publishes to the broker"
+        correct: true
+      - text: "Publish to the broker first, then save to the database"
+        correct: false
+      - text: "Use two-phase commit across DB and broker"
+        correct: false
+      - text: "Retry the publish forever in the request"
+        correct: false
+    explain: "The outbox makes the event part of the same atomic DB transaction as the state change: either both the order row and the outbox row commit, or neither does. A separate relay/poller (or change-data-capture like Debezium) then reads unpublished outbox rows and sends them to the broker, marking them sent. Now the DB is the single source of truth and events can't be lost relative to state."
+  - q: "Why does the outbox relay give you AT-LEAST-once (not exactly-once) publishing?"
+    options:
+      - text: "The relay may publish a row then crash before marking it sent, so it republishes on restart — duplicates are possible, which is why consumers must be idempotent"
+        correct: true
+      - text: "Because the database is unreliable"
+        correct: false
+      - text: "It actually gives exactly-once"
+        correct: false
+      - text: "Because brokers drop messages"
+        correct: false
+    explain: "The relay publishes an outbox row, then marks it 'sent'. If it crashes between those two steps, on restart it sees the row as unsent and publishes again — a duplicate. That's unavoidable (the same ack-then-crash gap as any messaging). So the outbox guarantees at-least-once delivery; consumers must be idempotent to make it safe."
+  - q: "What is an idempotency key and how does a consumer use it?"
+    options:
+      - text: "A stable unique ID on each message/request; the consumer records processed IDs and skips (no-ops) any it has already handled, so duplicates have no extra effect"
+        correct: true
+      - text: "An encryption key for the message"
+        correct: false
+      - text: "A key that makes messages process faster"
+        correct: false
+      - text: "A password for the queue"
+        correct: false
+    explain: "An idempotency key (the event ID, or a client-supplied request key) uniquely identifies an operation. The consumer checks whether it's already processed that key — via a 'processed_ids' table, a conditional insert, or an upsert — and if so, skips the side effects and returns the prior result. This turns at-least-once delivery into 'effectively-once': reprocessing a duplicate is harmless."
+  - q: "Why is an idempotent operation the practical substitute for exactly-once?"
+    options:
+      - text: "If processing twice has the same effect as processing once, duplicates from at-least-once delivery become harmless — you get exactly-once OUTCOMES without exactly-once delivery"
+        correct: true
+      - text: "It makes the broker never redeliver"
+        correct: false
+      - text: "It deletes duplicate messages at the broker"
+        correct: false
+      - text: "It is slower but more accurate"
+        correct: false
+    explain: "True exactly-once delivery is effectively impossible across a network, but you don't need it: if your handler is idempotent, the system reaches the correct end state regardless of how many times a message is delivered. At-least-once delivery + idempotent consumers = exactly-once effect ('effectively-once'). Designing for idempotency, not chasing exactly-once delivery, is the workable answer."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📤 Analogy">
+Imagine recording a sale in your ledger and, separately, dropping a note in the mail to the warehouse. If you write the ledger then drop dead before mailing, the sale exists but the warehouse never ships — your two records disagree. The outbox fixes this by writing the to-mail note <em>into the same ledger, in the same pen-stroke</em> as the sale: either both are recorded or neither is. A mail clerk later picks up notes from the ledger and posts them. The ledger becomes the single truth, and no note is ever lost relative to a sale.
+</Callout>
+
+## The dual-write problem
+
+A handler that saves state *and* publishes an event does **two independent writes**:
+
+```go
+// ❌ Dual write: no shared transaction. A crash or publish failure
+//    between these leaves state and events disagreeing.
+db.Save(order)                 // committed
+broker.Publish(OrderPlaced{})  // ...fails or process dies here → event lost
+```
+
+There is no atomic "commit to the database and the broker together," so naive dual writes silently lose events (order exists, nobody reacts) or emit phantom ones (event published, save rolled back).
+
+## The transactional outbox
+
+Make the event part of the **same database transaction** as the business change by writing it to an **outbox** table. A separate **relay** then publishes it.
+
+<Mermaid code={String.raw`graph LR
+  H["handler"] -->|"ONE tx: order + outbox row"| DB[("database<br/>orders | outbox")]
+  R["relay / CDC"] -->|poll unsent| DB
+  R -->|publish, then mark sent| BR["broker"]
+  BR --> C["consumers (idempotent)"]`} />
+
+```go
+// ✅ Outbox: business change + event committed atomically.
+tx, _ := db.Begin()
+tx.Exec("INSERT INTO orders ...")
+tx.Exec("INSERT INTO outbox (id, topic, payload, sent) VALUES (?, ?, ?, false)", evtID, "orders", payload)
+tx.Commit() // both rows, or neither
+
+// A separate relay loop (or Debezium CDC) publishes unsent rows:
+//   SELECT * FROM outbox WHERE sent = false
+//   broker.Publish(row); UPDATE outbox SET sent = true WHERE id = row.id
+```
+
+Now the database is the single source of truth: an order can't exist without its event being queued for publication. The relay can crash and resume — but because it might publish a row then crash before marking it sent, it gives **at-least-once** publishing (duplicates possible).
+
+## See it: idempotent consumers
+
+At-least-once means duplicates, so consumers must be **idempotent** — processing the same event twice has the same effect as once. The mechanism is an **idempotency key** the consumer dedupes on. This runs here, deterministically:
+
+<Playground client:visible title="idempotent.go" code={String.raw`package main
+
+import "fmt"
+
+type Event struct {
+	ID   string // idempotency key (stable per logical event)
+	Body string
+}
+
+func main() {
+	processed := map[string]bool{} // in real code: a DB table / upsert
+	balance := 0
+
+	apply := func(e Event, amount int) {
+		if processed[e.ID] {
+			fmt.Printf("event %s: duplicate, skipped\n", e.ID)
+			return // already handled — no extra effect
+		}
+		processed[e.ID] = true
+		balance += amount
+		fmt.Printf("event %s: applied (+%d) → balance %d\n", e.ID, amount, balance)
+	}
+
+	// At-least-once delivery: evt-1 arrives TWICE (relay redelivered it).
+	apply(Event{"evt-1", "deposit"}, 100)
+	apply(Event{"evt-1", "deposit"}, 100) // duplicate — must not double-count
+	apply(Event{"evt-2", "deposit"}, 50)
+
+	fmt.Println("final balance:", balance) // 150, not 250
+}`} />
+
+The duplicate `evt-1` is skipped, so the balance is correct (150, not 250). In production you record processed IDs in the database (a unique constraint, a conditional `INSERT ... ON CONFLICT DO NOTHING`, or an upsert) so dedup survives restarts.
+
+<Callout type="go" title="🐹 At-least-once + idempotency = exactly-once outcomes">
+You will never get exactly-once <em>delivery</em> over a network — stop chasing it. The workable design is <strong>at-least-once delivery plus idempotent consumers</strong>, which gives exactly-once <em>effects</em> ('effectively-once'). Concretely: publish via the outbox (no lost events), carry a stable idempotency key on every message, and make each handler safe to run twice (dedupe by key, use upserts/conditional writes, or design naturally-idempotent operations like 'set status = shipped'). Get those three right and duplicates and redeliveries become non-events.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Idempotency must cover the side effects, not just the database row">
+Deduping the DB write is only half the job: if processing an event also sends an email, charges a card, or calls another service, those side effects can fire on every duplicate even if the row is written once. Make the <em>whole</em> handler idempotent — check the idempotency key before any external side effect, make downstream calls idempotent too (pass the key through, e.g. Stripe's idempotency key), and where possible fold the side-effect record into the same transaction. A handler that's idempotent for the database but double-charges the customer hasn't solved the problem.
+</Callout>
+
+## See also
+
+- [Message queues](/cloud/message-queues/) — the at-least-once delivery this makes safe.
+- [Event-driven architecture](/cloud/event-driven-architecture/) — what the outbox reliably publishes.
+- [Distributed transactions](/cloud/distributed-transactions/) — sagas, the multi-service sibling.
+- [database/sql & transactions](/web/sql-transactions/) — the transaction the outbox rides in.
+
+Next: caching reads to take load off your datastore — [caching with Redis](/cloud/caching-with-redis/).

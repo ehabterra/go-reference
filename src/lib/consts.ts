@@ -260,4 +260,32 @@ export const SECURITY_CATEGORIES: CategoryMeta[] = [
   },
 ];
 
+/** Cloud-native categories (the journey on /cloud/). */
+export const CLOUD_CATEGORIES: CategoryMeta[] = [
+  {
+    key: 'containers',
+    title: 'Containers & Kubernetes',
+    blurb:
+      'Packaging and running Go in the cloud — tiny static images, the Kubernetes objects your service lives in, health probes and graceful lifecycle, and config from the environment.',
+  },
+  {
+    key: 'observability',
+    title: 'Config & Observability',
+    blurb:
+      "Seeing what your service does in production — 12-factor config, structured logs, Prometheus metrics, distributed tracing with OpenTelemetry, and profiling live.",
+  },
+  {
+    key: 'messaging',
+    title: 'Messaging & Data',
+    blurb:
+      'Decoupling services with events — message queues, event-driven architecture, the transactional outbox and idempotency, and caching with Redis.',
+  },
+  {
+    key: 'resilience',
+    title: 'Microservices & Resilience',
+    blurb:
+      'Building systems that stay up — service boundaries and gRPC, timeouts and retries, circuit breakers, load shedding, and distributed transactions with the saga pattern.',
+  },
+];
+
 export const REPO_URL = 'https://github.com/ehabterra/go-reference';

@@ -1,0 +1,185 @@
+---
+title: "Kubernetes Basics for Go Services"
+category: containers
+kind: topic
+order: 3
+difficulty: "Intermediate"
+status: ready
+intent: "The Kubernetes objects your Go service lives in — Pods, Deployments, Services, ConfigMaps/Secrets — how a Deployment gives you self-healing and scaling, and how the app receives its identity and config."
+related:
+  - dockerizing-go
+  - health-and-lifecycle
+  - configuration
+quiz:
+  - q: "What is a Pod in Kubernetes?"
+    options:
+      - text: "The smallest deployable unit — one or more containers that share a network namespace and lifecycle, scheduled together on a node"
+        correct: true
+      - text: "A physical server"
+        correct: false
+      - text: "A load balancer"
+        correct: false
+      - text: "A persistent disk"
+        correct: false
+    explain: "A Pod wraps one (usually) or more tightly-coupled containers that share an IP, port space, and storage volumes, and live and die together. You rarely create Pods directly — a Deployment manages them for you — but the Pod is the atom Kubernetes schedules onto nodes."
+  - q: "Why do you deploy via a Deployment rather than creating Pods directly?"
+    options:
+      - text: "A Deployment maintains a desired replica count, self-heals (replaces crashed Pods), and does rolling updates/rollbacks declaratively"
+        correct: true
+      - text: "Deployments make Pods run faster"
+        correct: false
+      - text: "Pods can't run containers"
+        correct: false
+      - text: "Deployments are only for databases"
+        correct: false
+    explain: "A bare Pod that dies stays dead. A Deployment declares 'I want N replicas of this image'; its controller continuously reconciles reality to that desired state — recreating failed Pods, scaling on demand, and rolling out new versions Pod-by-Pod (with automatic rollback). Declarative desired-state management is the heart of Kubernetes."
+  - q: "What does a Kubernetes Service provide?"
+    options:
+      - text: "A stable virtual IP and DNS name that load-balances across the current healthy Pods, so clients don't track ephemeral Pod IPs"
+        correct: true
+      - text: "Persistent storage for Pods"
+        correct: false
+      - text: "A way to build container images"
+        correct: false
+      - text: "Automatic TLS certificates"
+        correct: false
+    explain: "Pods are ephemeral — their IPs change as they're rescheduled. A Service gives a stable ClusterIP and DNS name (my-svc.namespace.svc.cluster.local) that load-balances to whichever Pods currently match its selector and pass their readiness probe. Clients talk to the Service name; Kubernetes handles the churn."
+  - q: "How should a Go app receive its configuration and secrets in Kubernetes?"
+    options:
+      - text: "Via environment variables / mounted files sourced from ConfigMaps (non-secret) and Secrets — injected by the Pod spec, not baked into the image"
+        correct: true
+      - text: "Hardcoded in the image at build time"
+        correct: false
+      - text: "By querying the Kubernetes API on every request"
+        correct: false
+      - text: "From a config file committed to git"
+        correct: false
+    explain: "ConfigMaps hold non-secret config and Secrets hold sensitive values; the Pod spec injects them as env vars or mounted files. The app reads them with os.Getenv/file reads (the 12-factor way), so the same image runs in any environment. This keeps config out of the image and lets you change it without rebuilding."
+  - q: "Why set resource requests and limits on a Pod?"
+    options:
+      - text: "Requests let the scheduler place the Pod where it fits; limits cap usage so one Pod can't starve others (and OOM-kill protects the node)"
+        correct: true
+      - text: "They make the container image smaller"
+        correct: false
+      - text: "They are only for GPU workloads"
+        correct: false
+      - text: "They disable the garbage collector"
+        correct: false
+    explain: "CPU/memory requests tell the scheduler how much to reserve (so the Pod lands on a node with capacity); limits cap consumption so a leaky Pod can't take down its neighbors. For Go specifically, set GOMAXPROCS/GOMEMLIMIT to match the limits (Go 1.25 reads the cgroup CPU limit automatically) so the runtime doesn't over-subscribe."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎛️ Analogy">
+Kubernetes is a thermostat for your services. You don't switch the heating on and off by hand; you declare "keep it at 21°C" and the system continuously works to make reality match. You declare "keep 3 replicas of this image running, reachable at this name, healthy by this probe," and Kubernetes' controllers relentlessly reconcile the cluster to that desired state — restarting, rescheduling, and scaling without you touching a switch. Your job is to declare intent and build a service that behaves well when the thermostat moves things around.
+</Callout>
+
+## The objects your service lives in
+
+<Mermaid code={String.raw`graph TD
+  DEP["Deployment<br/>(desired: 3 replicas)"] --> RS["ReplicaSet"]
+  RS --> P1["Pod"]
+  RS --> P2["Pod"]
+  RS --> P3["Pod"]
+  SVC["Service<br/>(stable IP + DNS)"] -->|load-balances| P1
+  SVC --> P2
+  SVC --> P3
+  CM["ConfigMap / Secret"] -.->|env / mounted files| P1
+  CM -.-> P2
+  CM -.-> P3`} />
+
+- **Pod** — the smallest unit: one (usually) container with a shared network and lifecycle. Ephemeral by design.
+- **Deployment** — declares *N* replicas of an image and reconciles to that state: self-heals crashed Pods, scales, and does rolling updates with rollback.
+- **Service** — a stable virtual IP + DNS name that load-balances across the healthy Pods, hiding their ever-changing IPs.
+- **ConfigMap / Secret** — non-secret and secret config, injected into Pods as env vars or files.
+
+## A minimal Deployment + Service
+
+This is fenced (the sandbox has no cluster), but it's a complete, real manifest for the [image you built](/cloud/dockerizing-go/):
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api }
+spec:
+  replicas: 3                      # desired state: 3 identical Pods
+  selector: { matchLabels: { app: api } }
+  template:
+    metadata: { labels: { app: api } }
+    spec:
+      containers:
+        - name: api
+          image: registry/api:abc123   # a specific tag, never :latest
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: LOG_LEVEL
+              valueFrom: { configMapKeyRef: { name: api-config, key: log_level } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: api-secrets, key: db_password } }
+          resources:
+            requests: { cpu: "100m", memory: "64Mi" }   # scheduler reserves this
+            limits:   { cpu: "500m", memory: "256Mi" }  # hard cap
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 } }
+          livenessProbe:  { httpGet: { path: /healthz, port: 8080 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api }
+spec:
+  selector: { app: api }
+  ports: [{ port: 80, targetPort: 8080 }]
+```
+
+The Deployment keeps 3 Pods alive; the Service gives clients a stable `api` name that load-balances across the ones currently passing their [readiness probe](/cloud/health-and-lifecycle/).
+
+## See it: the app reads its identity from the environment
+
+Kubernetes injects per-Pod identity via the **downward API** and config via env vars — your Go app just reads them, staying stateless and replica-agnostic. This runs here (env vars simulate what Kubernetes injects):
+
+<Playground client:visible title="podenv.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func getenv(k, def string) string {
+	if v, ok := os.LookupEnv(k); ok {
+		return v
+	}
+	return def
+}
+
+func main() {
+	// Kubernetes injects these via the downward API + ConfigMap/Secret refs.
+	os.Setenv("POD_NAME", "api-7d9f-abc12")
+	os.Setenv("POD_NAMESPACE", "production")
+	os.Setenv("LOG_LEVEL", "info")
+
+	// The app treats itself as one interchangeable replica.
+	fmt.Println("pod:      ", getenv("POD_NAME", "local"))
+	fmt.Println("namespace:", getenv("POD_NAMESPACE", "default"))
+	fmt.Println("log level:", getenv("LOG_LEVEL", "warn"))
+	fmt.Println("db pass set:", os.Getenv("DB_PASSWORD") != "") // from a Secret
+	fmt.Println("-> stateless: any replica behaves identically")
+}`} />
+
+The app never assumes it's a particular instance — it reads its name for logs/metrics but holds no local state, so Kubernetes can kill and replace it freely. That statelessness is what makes scaling and self-healing work.
+
+<Callout type="go" title="🐹 Make the Go runtime match the Pod's limits">
+A Go service in a CPU-limited Pod can over-subscribe the scheduler: before Go 1.25, the runtime set <code>GOMAXPROCS</code> to the <em>node's</em> core count, not your Pod's CPU limit, so a 2-CPU Pod on a 64-core node spun up 64 Ps and thrashed. <strong>Go 1.25 reads the cgroup CPU limit automatically</strong>; on older runtimes set <code>GOMAXPROCS</code> from the limit (or use <code>automaxprocs</code>). Likewise set <code>GOMEMLIMIT</code> just under the memory limit so the GC works harder before the kernel OOM-kills the Pod. See the <a href="/concurrency/scheduler/">scheduler</a> and <a href="/concurrency/gc-and-stacks/">GC</a> pages.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Pods are cattle — never store state on one">
+The number-one way Go services fail in Kubernetes is assuming a Pod persists: writing sessions to local memory/disk, caching data that must survive a restart, or pinning a user to a specific replica. Pods are rescheduled, scaled, and replaced constantly, and a Service load-balances each request to <em>any</em> replica. Keep state in a database or <a href="/cloud/caching-with-redis/">Redis</a>, make every replica interchangeable, and treat local disk as scratch space that vanishes. If your app needs a specific Pod to stick around, it isn't ready for the cluster yet.
+</Callout>
+
+## See also
+
+- [Dockerizing Go](/cloud/dockerizing-go/) — the image this Deployment runs.
+- [Health & lifecycle](/cloud/health-and-lifecycle/) — the probes the manifest references.
+- [Configuration](/cloud/configuration/) — ConfigMaps, Secrets, and reading them in Go.
+- [The Go scheduler](/concurrency/scheduler/) — GOMAXPROCS and container awareness.
+
+Next: telling the cluster when you're healthy and shutting down cleanly — [health & lifecycle](/cloud/health-and-lifecycle/).

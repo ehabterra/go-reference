@@ -1,4 +1,11 @@
 import { useState } from 'react';
+import EditorImport from 'react-simple-code-editor';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-go';
+
+// react-simple-code-editor ships CJS; under Astro's SSR the default import can
+// resolve to the module object, so unwrap a nested .default if present.
+const Editor = ((EditorImport as any)?.default ?? EditorImport) as typeof EditorImport;
 
 interface Props {
   code: string;
@@ -6,6 +13,10 @@ interface Props {
 }
 
 type Out = { text: string; kind: 'ok' | 'err' | '' };
+
+// Prism is a pure function of its input → server and client render identical
+// markup, so the hydrated island matches the SSR HTML (no hydration mismatch).
+const highlight = (code: string) => Prism.highlight(code, Prism.languages.go, 'go');
 
 export default function Playground({ code, title = 'main.go' }: Props) {
   const initial = code.trim() + '\n';
@@ -56,12 +67,18 @@ export default function Playground({ code, title = 'main.go' }: Props) {
           </button>
         </div>
       </div>
-      <textarea
-        className="dp-pg__editor"
-        spellCheck={false}
+      <Editor
         value={src}
-        onChange={(e) => setSrc(e.target.value)}
-        rows={Math.min(26, src.split('\n').length + 1)}
+        onValueChange={setSrc}
+        highlight={highlight}
+        padding={16}
+        tabSize={4}
+        insertSpaces={false}
+        textareaId={`pg-${title.replace(/\W+/g, '-')}`}
+        className="dp-pg__editor language-go"
+        textareaClassName="dp-pg__ta"
+        preClassName="dp-pg__pre"
+        style={{ fontFamily: 'var(--font-mono)', fontSize: '.86rem', lineHeight: 1.55 }}
       />
       {out.text && (
         <div className={`dp-pg__out ${out.kind === 'err' ? 'dp-pg__out--err' : out.kind === 'ok' ? 'dp-pg__out--ok' : ''}`}>

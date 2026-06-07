@@ -1,0 +1,184 @@
+---
+title: "Metrics with Prometheus"
+category: observability
+kind: topic
+order: 7
+difficulty: "Intermediate"
+status: ready
+intent: "Measuring a service in aggregate — counters, gauges and histograms, the /metrics endpoint Prometheus scrapes, the RED method, and the cardinality trap that blows up your metrics."
+related:
+  - structured-logging-in-prod
+  - distributed-tracing
+  - profiling-in-production
+quiz:
+  - q: "How does Prometheus collect metrics from a Go service?"
+    options:
+      - text: "It SCRAPES — periodically pulls an HTTP /metrics endpoint the app exposes in a text format"
+        correct: true
+      - text: "The app pushes each metric to Prometheus on every request"
+        correct: false
+      - text: "It reads the application's log files"
+        correct: false
+      - text: "It queries the database directly"
+        correct: false
+    explain: "Prometheus is pull-based: the app exposes a /metrics endpoint and Prometheus scrapes it on an interval (e.g. every 15s). The app just maintains counters in memory and renders them in the text exposition format; Prometheus handles collection, storage, and querying. (Short-lived jobs that can't be scraped use a Pushgateway, the exception.)"
+  - q: "Which metric type fits 'total HTTP requests served'?"
+    options:
+      - text: "A Counter — a monotonically increasing total you compute rates from with rate()"
+        correct: true
+      - text: "A Gauge — it goes up and down"
+        correct: false
+      - text: "A Histogram only"
+        correct: false
+      - text: "A log line per request"
+        correct: false
+    explain: "A Counter only ever increases (or resets to 0 on restart); you query rate(http_requests_total[5m]) to get requests/sec. Gauges are for values that go up and down (in-flight requests, queue depth, memory). Histograms bucket observations (latency, sizes) so you can compute quantiles. Requests-served is the textbook Counter."
+  - q: "What does a Histogram let you compute that a Counter or Gauge cannot?"
+    options:
+      - text: "Distribution/quantiles — e.g. p50/p95/p99 request latency — by bucketing observations"
+        correct: true
+      - text: "The exact value of every single request forever"
+        correct: false
+      - text: "The current CPU temperature"
+        correct: false
+      - text: "Nothing different"
+        correct: false
+    explain: "A Histogram counts observations into latency (or size) buckets, so Prometheus can estimate quantiles like p95/p99 — the numbers that actually describe user experience (an average hides the slow tail). Averages lie; p99 latency tells you what your worst-served users feel. Histograms are how you measure it."
+  - q: "What is the RED method for instrumenting a service?"
+    options:
+      - text: "Rate (requests/sec), Errors (failures/sec), Duration (latency distribution) — the three signals that describe request-driven service health"
+        correct: true
+      - text: "Restart, Examine, Deploy"
+        correct: false
+      - text: "Read, Edit, Delete"
+        correct: false
+      - text: "Redis, Elasticsearch, Docker"
+        correct: false
+    explain: "RED — Rate, Errors, Duration — is the standard trio for request-driven services: how many requests, how many failed, and how long they took (as a histogram). Track those per endpoint and you can answer 'is the service healthy?' and alert on it. (USE — Utilization, Saturation, Errors — is the complementary method for resources like CPU/disk.)"
+  - q: "What is the cardinality trap with metric labels?"
+    options:
+      - text: "Putting high-cardinality values (user IDs, request IDs, raw URLs) in labels creates a separate time series per value — exploding memory and cost"
+        correct: true
+      - text: "Labels make metrics more accurate"
+        correct: false
+      - text: "Too few labels crash Prometheus"
+        correct: false
+      - text: "Cardinality only affects logs"
+        correct: false
+    explain: "Each unique label-value combination is its own time series. A label like user_id or request_id (millions of values) or a raw URL with IDs in the path creates millions of series — blowing up Prometheus memory and query cost (a 'cardinality explosion'). Keep labels low-cardinality and bounded (method, route TEMPLATE, status_code), and put the high-cardinality detail in logs/traces instead."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📈 Analogy">
+Logs are the diary entries of individual requests; metrics are the dashboard gauges of the whole fleet. You don't read a million diary entries to know the car is overheating — you glance at the temperature gauge. Metrics are those gauges: cheap aggregate numbers (requests/sec, error rate, p99 latency) that you watch on a dashboard and alert on, so you know <em>something is wrong</em> before you dive into the logs to find out <em>what</em>.
+</Callout>
+
+## Pull-based metrics
+
+**Prometheus** is an open-source metrics database and monitoring system (the de-facto standard in cloud-native, usually paired with **Grafana** for dashboards); see <a href="https://prometheus.io/docs/" target="_blank" rel="noopener">prometheus.io</a>. It is **pull-based**: your app maintains counters in memory and exposes them on a `/metrics` HTTP endpoint in a simple text format; Prometheus **scrapes** that endpoint on an interval and stores the time series.
+
+<Mermaid code={String.raw`graph LR
+  APP["Go app<br/>counters in memory<br/>+ /metrics endpoint"] -->|scrape every 15s| PROM["Prometheus<br/>(stores time series)"]
+  PROM --> GRAF["Grafana dashboards"]
+  PROM --> ALERT["Alertmanager<br/>(rate/errors/latency)"]`} />
+
+Three core metric types:
+
+- **Counter** — monotonically increasing (requests served, errors). Query `rate()` for per-second rates.
+- **Gauge** — goes up and down (in-flight requests, queue depth, memory).
+- **Histogram** — buckets observations (latency, sizes) so you can compute **p95/p99 quantiles** — the numbers that describe real user experience.
+
+## See it: the /metrics exposition format
+
+This runs here: a tiny in-process registry that counts requests by status and renders the Prometheus text format, served via `httptest`. The real `prometheus/client_golang` does this richly, but the *shape* is exactly this:
+
+<Playground client:visible title="metrics.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sort"
+	"sync"
+)
+
+type counter struct {
+	mu sync.Mutex
+	v  map[string]int // label "status" -> count
+}
+
+func (c *counter) inc(status string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.v[status]++
+}
+
+func (c *counter) render() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := "# TYPE http_requests_total counter\n"
+	keys := make([]string, 0, len(c.v))
+	for k := range c.v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out += fmt.Sprintf("http_requests_total{status=%q} %d\n", k, c.v[k])
+	}
+	return out
+}
+
+func main() {
+	reqs := &counter{v: map[string]int{}}
+	// Simulate traffic.
+	for i := 0; i < 100; i++ {
+		if i%10 == 0 {
+			reqs.inc("500")
+		} else {
+			reqs.inc("200")
+		}
+	}
+
+	// Expose /metrics, then scrape it like Prometheus would.
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, reqs.render())
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	fmt.Print(rec.Body.String())
+}`} />
+
+That `http_requests_total{status="..."}` output is exactly what Prometheus scrapes; `rate(http_requests_total{status="500"}[5m])` then gives your error rate. In real code you'd use the client library:
+
+```go
+// Fenced: github.com/prometheus/client_golang
+var reqs = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "http_requests_total", Help: "Total HTTP requests.",
+}, []string{"method", "route", "status"}) // LOW-cardinality labels only
+
+http.Handle("/metrics", promhttp.Handler())
+// in your middleware: reqs.WithLabelValues(r.Method, route, status).Inc()
+```
+
+## Instrument with RED
+
+For request-driven services, track **RED**: **R**ate (requests/sec), **E**rrors (failures/sec), **D**uration (latency histogram) — per endpoint. Those three answer "is the service healthy?" and are what you alert on. (For resources — CPU, memory, disk — the complementary **USE** method tracks Utilization, Saturation, Errors.)
+
+<Callout type="go" title="🐹 Metrics for aggregates, logs for detail, traces for causality">
+The three observability pillars are complementary, not interchangeable. <strong>Metrics</strong> answer "how many / how fast / how bad" cheaply and are what you <em>alert</em> on. <strong><a href="/cloud/structured-logging-in-prod/">Logs</a></strong> capture individual events you investigate. <strong><a href="/cloud/distributed-tracing/">Traces</a></strong> show one request's path across services. Don't compute rates by parsing logs (expensive) or try to store per-request detail in metric labels (cardinality explosion). Use each for its job: alert on a metric, jump to the trace, read the logs.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ High-cardinality labels will take down your metrics">
+Every unique combination of label values is a separate time series. Put a <code>user_id</code>, <code>request_id</code>, email, or a raw URL with IDs in the path (<code>/orders/12345</code>) into a label and you create millions of series — a <strong>cardinality explosion</strong> that balloons Prometheus memory, slows queries, and can crash the server. Keep labels <strong>low-cardinality and bounded</strong>: <code>method</code>, the route <em>template</em> (<code>/orders/:id</code>, not the concrete id), <code>status_code</code>. The high-cardinality detail belongs in logs and traces, never in metric labels.
+</Callout>
+
+## See also
+
+- [Structured logging](/cloud/structured-logging-in-prod/) — events, not aggregates.
+- [Distributed tracing](/cloud/distributed-tracing/) — following one request across services.
+- [Profiling in production](/cloud/profiling-in-production/) — when metrics say "slow" and you need to know why.
+- [Benchmarks (stdlib)](/stdlib/benchmarks/) — measuring before you ship.
+
+Next: following a single request across service boundaries — [distributed tracing](/cloud/distributed-tracing/).

@@ -11,6 +11,7 @@ const web = await getCollection('web');
 const internals = await getCollection('internals');
 const systems = await getCollection('systems');
 const security = await getCollection('security');
+const cloud = await getCollection('cloud');
 
 const gofCount = patterns.filter((p) => p.data.gof).length;
 const concPatternCount = patterns.filter((p) => p.data.category === 'concurrency').length;
@@ -20,11 +21,14 @@ const funCount = fundamentals.filter((p) => p.data.kind === 'topic').length;
 const stdlibCount = stdlib.filter((p) => p.data.kind === 'topic').length;
 const webCount = web.filter((p) => p.data.kind === 'topic').length;
 const internalsCount = internals.filter((p) => p.data.kind === 'topic').length;
-const systemsCount = systems.filter((p) => p.data.kind === 'topic').length;
-const securityCount = security.filter((p) => p.data.kind === 'topic').length;
+// these tracks open with a kind:"guide" intro page (a real page in the track),
+// so count guide + topic — not just topic — to reflect the true page count.
+const systemsCount = systems.filter((p) => p.data.kind !== 'pattern').length;
+const securityCount = security.filter((p) => p.data.kind !== 'pattern').length;
+const cloudCount = cloud.filter((p) => p.data.kind !== 'pattern').length;
 
 // unified progress across every page in the reference
-const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web, ...internals, ...systems, ...security].map((p) => p.id).join(',');
+const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web, ...internals, ...systems, ...security, ...cloud].map((p) => p.id).join(',');
 ---
 <BaseLayout>
   <header class="dp-hero">
@@ -122,6 +126,14 @@ const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdli
       <h3>Security</h3>
       <p data-i18n="home.security.desc">Offensive and defensive security in Go — the hacker mindset and authorized testing, port scanning and recon, fuzzing and packet analysis, cryptography done right, and secure coding from injection defense to supply-chain safety.</p>
       <span class="dp-topic__stat">{securityCount} <span data-i18n="home.security.stat">topics · recon → defense · runnable</span></span>
+      <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
+    </a>
+
+    <a class="dp-topic" data-cat="containers" href="/cloud/">
+      <div class="dp-topic__icon">☁️</div>
+      <h3>Cloud-Native</h3>
+      <p data-i18n="home.cloud.desc">Run Go in production — containers and Kubernetes, health probes and graceful shutdown, structured logs, metrics and tracing, message queues and event-driven design, and resilience patterns like retries, circuit breakers and sagas.</p>
+      <span class="dp-topic__stat">{cloudCount} <span data-i18n="home.cloud.stat">topics · containers → resilience · runnable</span></span>
       <span class="dp-topic__go" data-i18n="home.enter">Enter →</span>
     </a>
   </div>

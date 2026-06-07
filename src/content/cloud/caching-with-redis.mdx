@@ -1,0 +1,171 @@
+---
+title: "Caching with Redis"
+category: messaging
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "Taking read load off your datastore — the cache-aside pattern, TTLs and invalidation, the cache stampede and how to prevent it, and the consistency trade-offs of caching."
+related:
+  - message-queues
+  - resilience-patterns
+  - sql-transactions
+quiz:
+  - q: "What is the cache-aside (lazy loading) pattern?"
+    options:
+      - text: "On read: check the cache; on a miss, load from the database, store it in the cache, and return it — so the cache fills on demand"
+        correct: true
+      - text: "Write everything to the cache and never to the database"
+        correct: false
+      - text: "The database writes directly into the cache on every change"
+        correct: false
+      - text: "Cache the entire database at startup"
+        correct: false
+    explain: "Cache-aside: the application checks the cache first; a hit returns immediately, a miss falls through to the database, then the result is written to the cache for next time. The cache fills lazily with what's actually requested. It's the most common pattern because it's simple and the cache only holds hot data — but the app owns the read-through and invalidation logic."
+  - q: "Why must cache entries have a TTL (time to live)?"
+    options:
+      - text: "To bound staleness and reclaim memory — entries expire so the cache eventually reflects changes and doesn't grow forever with cold data"
+        correct: true
+      - text: "TTLs make reads slower"
+        correct: false
+      - text: "Redis can't store data without a TTL"
+        correct: false
+      - text: "To encrypt the entries"
+        correct: false
+    explain: "A TTL caps how stale a cached value can get (after expiry it's reloaded fresh) and lets the cache evict old/cold entries so memory stays bounded. Choose it by how much staleness the data tolerates: seconds for fast-changing data, hours for near-static. TTL is your safety net even when explicit invalidation misses a case."
+  - q: "What is a cache stampede (thundering herd) and how do you prevent it?"
+    options:
+      - text: "A popular key expires and many concurrent requests all miss and hit the database at once; prevent it with single-flight (one loader, others wait) or early/jittered refresh"
+        correct: true
+      - text: "Too many keys in the cache"
+        correct: false
+      - text: "The cache server crashing"
+        correct: false
+      - text: "Writing to the cache too fast"
+        correct: false
+    explain: "When a hot key expires, every concurrent request misses simultaneously and stampedes the database — a load spike that can take it down right when the cached item is most popular. Fixes: single-flight (coalesce concurrent misses so only ONE request loads and the rest wait for its result), add jitter to TTLs so keys don't expire together, or refresh proactively before expiry."
+  - q: "On a write, how do you keep the cache from serving stale data?"
+    options:
+      - text: "Invalidate (delete) or update the cache entry when the underlying data changes — commonly write to the DB then delete the cache key"
+        correct: true
+      - text: "Never write to the database"
+        correct: false
+      - text: "Let the TTL handle it and ignore writes"
+        correct: false
+      - text: "Cache writes are impossible"
+        correct: false
+    explain: "With cache-aside, a write must invalidate the cached copy or the next read serves stale data until the TTL expires. The common approach is write-DB-then-delete-key (so the next read repopulates from fresh data); updating the key in place risks races. There's no perfect, race-free invalidation — which is why a TTL backstop matters and why you cache data that tolerates brief staleness."
+  - q: "What happens if your service treats the cache as the source of truth?"
+    options:
+      - text: "Data loss/inconsistency — caches are volatile (evicted, expired, or wiped on restart), so the database must remain the source of truth and the cache a disposable accelerator"
+        correct: true
+      - text: "It becomes faster and safer"
+        correct: false
+      - text: "Nothing; caches are durable"
+        correct: false
+      - text: "The database becomes unnecessary"
+        correct: false
+    explain: "A cache is volatile by design: entries are evicted under memory pressure, expire on TTL, and vanish on a restart or failover. If it holds the only copy of data, you lose it. The cache is a disposable accelerator in front of the durable database; your system must work correctly (just slower) if the cache is completely empty or down."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🗄️ Analogy">
+A cache is the stack of frequently-used files on your desk versus the filing cabinet across the room. You check the desk first (fast); if it's not there you walk to the cabinet (slow), grab it, and leave a copy on the desk for next time. The desk has limited space, so old files get cleared (TTL/eviction), and when a file changes you must throw away the desk copy or you'll read the old one. The cabinet is always the truth; the desk is just a time-saver you can rebuild any time.
+</Callout>
+
+## Cache-aside: the default pattern
+
+**Redis** is an in-memory key–value store — data lives in RAM, so reads and writes are sub-millisecond — commonly used as a cache in front of a slower database (and also for sessions, rate limiters, and queues); learn it at <a href="https://redis.io/docs/latest/" target="_blank" rel="noopener">redis.io</a>. The most common caching pattern is **cache-aside (lazy loading)**: the app checks the cache, and on a miss loads from the database and populates the cache.
+
+<Mermaid code={String.raw`graph TD
+  R["read(key)"] --> C{"in cache?"}
+  C -->|hit| RET["return cached value (fast)"]
+  C -->|miss| DB["load from database"]
+  DB --> SET["store in cache with TTL"]
+  SET --> RET
+  W["write(key)"] --> WDB["write to database"]
+  WDB --> INV["delete cache key (invalidate)"]`} />
+
+The cache fills on demand with hot data; the database stays the source of truth. The app owns two responsibilities: **read-through** (populate on miss) and **invalidation** (clear on write).
+
+## See it: cache-aside with hit/miss accounting
+
+This runs here — an in-memory cache-aside layer that loads from a "database" only on a miss, then serves hits without touching it. Output is deterministic:
+
+<Playground client:visible title="cache.go" code={String.raw`package main
+
+import "fmt"
+
+type Cache struct {
+	data map[string]string
+}
+
+var dbReads int // count expensive backend loads
+
+func loadFromDB(key string) string {
+	dbReads++
+	return "value-of-" + key
+}
+
+func (c *Cache) Get(key string) string {
+	if v, ok := c.data[key]; ok {
+		return v // cache hit — no DB read
+	}
+	v := loadFromDB(key) // miss → load and populate
+	c.data[key] = v
+	return v
+}
+
+func (c *Cache) Invalidate(key string) { delete(c.data, key) }
+
+func main() {
+	c := &Cache{data: map[string]string{}}
+
+	c.Get("user:1") // miss → DB read
+	c.Get("user:1") // hit
+	c.Get("user:1") // hit
+	c.Get("user:2") // miss → DB read
+	fmt.Println("DB reads:", dbReads) // 2, not 4
+
+	// A write invalidates, so the next read reloads fresh data.
+	c.Invalidate("user:1")
+	c.Get("user:1") // miss → DB read
+	fmt.Println("DB reads after write:", dbReads) // 3
+}`} />
+
+Four reads of two keys cost only two DB loads; the rest are cache hits. Invalidation on write forces a fresh reload. The real Redis client is the same shape (fenced — third-party):
+
+```go
+// Fenced: github.com/redis/go-redis/v9
+val, err := rdb.Get(ctx, key).Result()
+if err == redis.Nil { // miss
+	val = loadFromDB(key)
+	rdb.Set(ctx, key, val, 5*time.Minute) // store with a TTL
+}
+// on write: rdb.Del(ctx, key)
+```
+
+## TTLs, stampedes, and invalidation
+
+- **TTL** — every entry expires, bounding staleness and reclaiming memory. Pick it by how much staleness the data tolerates.
+- **Stampede** — when a hot key expires, *all* concurrent requests miss and hit the database at once, a spike that can take it down. Prevent it with **single-flight** (coalesce concurrent misses so one request loads and the rest wait — `golang.org/x/sync/singleflight`), **jittered TTLs** (so keys don't expire together), or proactive refresh.
+- **Invalidation** — on a write, delete the key (write-DB-then-delete) so the next read repopulates. There's no perfectly race-free invalidation, which is why the TTL backstop matters.
+
+<Callout type="go" title="🐹 Cache data that tolerates staleness, and use single-flight for hot keys">
+Caching is a consistency trade: you accept brief staleness for speed, so cache reads that can be slightly old (profiles, product listings, computed views) — not data that must be exact this instant (a bank balance mid-transaction). For hot keys, wrap the loader in <code>singleflight.Group.Do</code> so a thousand simultaneous misses trigger one database load, not a thousand — this single change prevents most stampede outages. And add jitter to TTLs (<code>base + rand</code>) so a batch of keys cached together doesn't all expire on the same tick.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ The cache is disposable — never the source of truth">
+A cache is volatile: entries are evicted under memory pressure, expire on TTL, and vanish entirely on a restart or failover. If your service stores the only copy of something in Redis, a restart loses it. Always keep the <strong>database as the source of truth</strong> and treat the cache as a rebuildable accelerator — your system must remain <em>correct</em> (just slower) with a completely cold or unavailable cache. That also means handling a cache outage gracefully (fall through to the DB, maybe with a <a href="/cloud/resilience-patterns/">circuit breaker</a>), not crashing when Redis is down.
+</Callout>
+
+## See also
+
+- [Message queues](/cloud/message-queues/) — invalidating caches via events across services.
+- [Resilience patterns](/cloud/resilience-patterns/) — surviving a cache/datastore outage.
+- [database/sql & transactions](/web/sql-transactions/) — the source of truth behind the cache.
+- [Rate limiting (concurrency)](/concurrency/rate-limiting/) — single-flight's cousin for bounding load.
+
+Next: building services that stay up when dependencies fail — [resilience patterns](/cloud/resilience-patterns/).

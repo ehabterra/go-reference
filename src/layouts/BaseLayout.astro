@@ -21,16 +21,18 @@ const web = await getCollection('web');
 const internals = await getCollection('internals');
 const systems = await getCollection('systems');
 const security = await getCollection('security');
+const cloud = await getCollection('cloud');
 const searchIndex = [
-  ...patterns.map((p) => ({ t: p.data.title, u: `/patterns/${p.id}/`, c: p.data.category, s: 'Design Patterns', i: p.data.intent })),
-  ...concurrency.map((p) => ({ t: p.data.title, u: `/concurrency/${p.id}/`, c: p.data.category, s: 'Concurrency', i: p.data.intent })),
-  ...fundamentals.map((p) => ({ t: p.data.title, u: `/fundamentals/${p.id}/`, c: p.data.category, s: 'Fundamentals', i: p.data.intent })),
-  ...dsa.map((p) => ({ t: p.data.title, u: `/dsa/${p.id}/`, c: p.data.category, s: 'DSA', i: p.data.intent })),
-  ...stdlib.map((p) => ({ t: p.data.title, u: `/stdlib/${p.id}/`, c: p.data.category, s: 'Stdlib', i: p.data.intent })),
-  ...web.map((p) => ({ t: p.data.title, u: `/web/${p.id}/`, c: p.data.category, s: 'Web', i: p.data.intent })),
-  ...internals.map((p) => ({ t: p.data.title, u: `/internals/${p.id}/`, c: p.data.category, s: 'Go Internals', i: p.data.intent })),
-  ...systems.map((p) => ({ t: p.data.title, u: `/systems/${p.id}/`, c: p.data.category, s: 'Systems', i: p.data.intent })),
-  ...security.map((p) => ({ t: p.data.title, u: `/security/${p.id}/`, c: p.data.category, s: 'Security', i: p.data.intent })),
+  ...patterns.map((p) => ({ t: p.data.title, u: `/patterns/${p.id}/`, c: p.data.category, s: 'Design Patterns', i: p.data.intent, d: p.data.difficulty })),
+  ...concurrency.map((p) => ({ t: p.data.title, u: `/concurrency/${p.id}/`, c: p.data.category, s: 'Concurrency', i: p.data.intent, d: p.data.difficulty })),
+  ...fundamentals.map((p) => ({ t: p.data.title, u: `/fundamentals/${p.id}/`, c: p.data.category, s: 'Fundamentals', i: p.data.intent, d: p.data.difficulty })),
+  ...dsa.map((p) => ({ t: p.data.title, u: `/dsa/${p.id}/`, c: p.data.category, s: 'DSA', i: p.data.intent, d: p.data.difficulty })),
+  ...stdlib.map((p) => ({ t: p.data.title, u: `/stdlib/${p.id}/`, c: p.data.category, s: 'Stdlib', i: p.data.intent, d: p.data.difficulty })),
+  ...web.map((p) => ({ t: p.data.title, u: `/web/${p.id}/`, c: p.data.category, s: 'Web', i: p.data.intent, d: p.data.difficulty })),
+  ...internals.map((p) => ({ t: p.data.title, u: `/internals/${p.id}/`, c: p.data.category, s: 'Go Internals', i: p.data.intent, d: p.data.difficulty })),
+  ...systems.map((p) => ({ t: p.data.title, u: `/systems/${p.id}/`, c: p.data.category, s: 'Systems', i: p.data.intent, d: p.data.difficulty })),
+  ...security.map((p) => ({ t: p.data.title, u: `/security/${p.id}/`, c: p.data.category, s: 'Security', i: p.data.intent, d: p.data.difficulty })),
+  ...cloud.map((p) => ({ t: p.data.title, u: `/cloud/${p.id}/`, c: p.data.category, s: 'Cloud-Native', i: p.data.intent, d: p.data.difficulty })),
 ];
 ---
 <!doctype html>
@@ -77,6 +79,7 @@ const searchIndex = [
       <div class="dp-cmdk__backdrop" data-dp-cmdk-close></div>
       <div class="dp-cmdk__panel" role="dialog" aria-modal="true" aria-label="Search the reference">
         <input class="dp-cmdk__input" id="dp-cmdk-input" type="text" placeholder="Search patterns &amp; concurrency…" autocomplete="off" spellcheck="false" />
+        <div class="dp-cmdk__filters" id="dp-cmdk-filters"></div>
         <ul class="dp-cmdk__results" id="dp-cmdk-results"></ul>
         <div class="dp-cmdk__hint">
           <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>

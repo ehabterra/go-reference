@@ -1,0 +1,180 @@
+---
+title: "Message Queues"
+category: messaging
+kind: topic
+order: 10
+difficulty: "Intermediate"
+status: ready
+intent: "Decoupling services with asynchronous messaging — queues vs pub/sub, consumer groups, delivery guarantees (at-least-once and why exactly-once is hard), acks and redelivery, and backpressure."
+related:
+  - event-driven-architecture
+  - the-outbox-pattern
+  - resilience-patterns
+quiz:
+  - q: "What does putting a message queue between two services buy you?"
+    options:
+      - text: "Decoupling — the producer doesn't wait for or depend on the consumer; the queue absorbs bursts and the consumer processes at its own pace, and either can be down independently"
+        correct: true
+      - text: "It makes both services faster on every request"
+        correct: false
+      - text: "It removes the need for a database"
+        correct: false
+      - text: "It guarantees messages are never lost, automatically"
+        correct: false
+    explain: "A queue turns a synchronous, tightly-coupled call into asynchronous, decoupled communication: the producer publishes and moves on; the consumer reads when ready. This absorbs traffic spikes (buffering), lets the consumer scale and restart independently, and means a slow or down consumer doesn't fail the producer. The trade-off is added latency and eventual consistency."
+  - q: "What's the difference between a queue (point-to-point) and pub/sub (topics)?"
+    options:
+      - text: "A queue delivers each message to exactly ONE consumer (work distribution); pub/sub delivers each message to ALL subscribers (fan-out/broadcast)"
+        correct: true
+      - text: "They are the same thing"
+        correct: false
+      - text: "A queue is faster; pub/sub is slower"
+        correct: false
+      - text: "Pub/sub can only have one subscriber"
+        correct: false
+    explain: "Point-to-point (a work queue) load-balances each message to one of N competing consumers — used to distribute work. Publish/subscribe broadcasts each message to every interested subscriber — used so multiple services react to one event. Kafka consumer groups and NATS queue groups combine both: fan-out across groups, load-balance within a group."
+  - q: "Why is 'exactly-once delivery' so hard, and what do you do instead?"
+    options:
+      - text: "Network/crash uncertainty makes true exactly-once nearly impossible; you use at-least-once delivery + idempotent consumers so reprocessing a duplicate is harmless"
+        correct: true
+      - text: "Exactly-once is the default and trivial"
+        correct: false
+      - text: "You just disable retries"
+        correct: false
+      - text: "You send each message twice on purpose"
+        correct: false
+    explain: "If a consumer processes a message then crashes before acking, the broker can't tell 'done' from 'lost' and redelivers — so duplicates happen. True exactly-once across a network is effectively unachievable. The practical answer is at-least-once delivery plus idempotent processing (dedupe by message/idempotency key) so handling a duplicate has no extra effect — 'effectively-once'."
+  - q: "What does acknowledging (ack) a message do?"
+    options:
+      - text: "It tells the broker the message was successfully processed so it won't be redelivered; if the consumer dies before acking, the broker redelivers it"
+        correct: true
+      - text: "It deletes the queue"
+        correct: false
+      - text: "It sends the message back to the producer"
+        correct: false
+      - text: "Nothing; acks are optional decoration"
+        correct: false
+    explain: "Ack after successful processing (not on receipt) so an in-flight message survives a consumer crash — the broker redelivers unacked messages. Acking on receipt then crashing loses the message (at-most-once); acking after processing gives at-least-once. A nack (or timeout) triggers redelivery, often with backoff, and after N failures the message goes to a dead-letter queue."
+  - q: "How does a queue help with backpressure / traffic spikes?"
+    options:
+      - text: "It buffers bursts so the consumer processes at a steady rate instead of being overwhelmed — but the queue must be bounded/monitored or it grows without limit"
+        correct: true
+      - text: "It speeds up the consumer to match any rate"
+        correct: false
+      - text: "It drops all traffic over a threshold silently"
+        correct: false
+      - text: "Queues have infinite capacity for free"
+        correct: false
+    explain: "A queue absorbs a spike: the producer dumps a burst and the consumer drains it steadily, smoothing load. But a queue is not infinite — if producers persistently outrun consumers, the queue grows without bound (lag), raising latency and eventually failing. Monitor queue depth/consumer lag, scale consumers, and apply backpressure or shedding upstream when lag climbs."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📮 Analogy">
+A synchronous call is handing a colleague a task and standing at their desk until they finish. A message queue is dropping it in their inbox and walking away: you're not blocked, they handle it when free, and if they're at lunch the task waits rather than failing. The inbox absorbs a flood of tasks, and if your colleague is out sick, someone else on the team can pick from the same inbox. That decoupling — in time and in availability — is the whole point.
+</Callout>
+
+## Why a queue
+
+A **message broker** is middleware that receives messages from producers, stores them durably, and delivers them to consumers — decoupling the two. Putting a broker (**NATS** — <a href="https://docs.nats.io/" target="_blank" rel="noopener">nats.io</a> — and **Kafka** — <a href="https://kafka.apache.org/documentation/" target="_blank" rel="noopener">kafka.apache.org</a> — are popular cloud-native ones; RabbitMQ and cloud SQS are others) between services turns a synchronous, fragile call into **asynchronous, decoupled** communication:
+
+- **Decoupling** — the producer publishes and moves on; it doesn't wait for, or depend on, the consumer being up.
+- **Buffering** — the queue absorbs bursts so the consumer works at a steady rate.
+- **Independent scaling & failure** — add consumers to drain faster; either side can restart without failing the other.
+
+The cost is **added latency** and **eventual consistency** — the work happens *soon*, not *now*.
+
+## Queue vs pub/sub
+
+<Mermaid code={String.raw`graph TD
+  subgraph Queue["work queue (point-to-point)"]
+    P1["producer"] --> Q1["queue"]
+    Q1 --> C1["consumer A"]
+    Q1 --> C2["consumer B"]
+    Q1 -.one msg → one consumer.-> C1
+  end
+  subgraph PubSub["pub/sub (topic)"]
+    P2["producer"] --> T["topic"]
+    T --> S1["subscriber X (all get it)"]
+    T --> S2["subscriber Y (all get it)"]
+  end`} />
+
+- **Work queue** — each message goes to **one** of the competing consumers (distribute work).
+- **Pub/sub** — each message goes to **every** subscriber (broadcast an event). Kafka consumer groups / NATS queue groups give you both: fan-out across groups, load-balance within one.
+
+## See it: pub/sub with ack and redelivery
+
+This runs here — a channel-based broker fans a message out to subscribers, and an unacked (failed) delivery is **redelivered**, illustrating at-least-once. Output is deterministic:
+
+<Playground client:visible title="broker.go" code={String.raw`package main
+
+import "fmt"
+
+type msg struct {
+	id   int
+	body string
+}
+
+// processWithRetry models at-least-once: redeliver until acked (or give up).
+func processWithRetry(m msg, handle func(msg) bool) {
+	for attempt := 1; attempt <= 3; attempt++ {
+		if handle(m) { // returns true on successful ack
+			fmt.Printf("msg %d acked on attempt %d\n", m.id, attempt)
+			return
+		}
+		fmt.Printf("msg %d nacked, redelivering (attempt %d)\n", m.id, attempt)
+	}
+	fmt.Printf("msg %d → dead-letter queue\n", m.id)
+}
+
+func main() {
+	// A handler that fails msg 2 once, then succeeds (transient error).
+	seen := map[int]int{}
+	handle := func(m msg) bool {
+		seen[m.id]++
+		return !(m.id == 2 && seen[m.id] == 1)
+	}
+
+	for _, m := range []msg{{1, "a"}, {2, "b"}, {3, "c"}} {
+		processWithRetry(m, handle)
+	}
+}`} />
+
+Message 2 fails once and is redelivered, then acked — at-least-once delivery in miniature. A message that fails repeatedly lands in a **dead-letter queue** for inspection rather than blocking the stream. The real client is similar (fenced — NATS here):
+
+```go
+// Fenced: github.com/nats-io/nats.go — a queue group load-balances delivery.
+nc, _ := nats.Connect(nats.DefaultURL)
+nc.QueueSubscribe("orders", "workers", func(m *nats.Msg) {
+	if err := process(m.Data); err != nil {
+		return // no ack → redelivered (with JetStream)
+	}
+	m.Ack()
+})
+```
+
+## Delivery guarantees
+
+You choose where to ack, and that picks your guarantee:
+
+- **At-most-once** — ack on receipt. Fast, but a crash mid-processing loses the message.
+- **At-least-once** — ack *after* processing. No loss, but a crash before ack causes a **duplicate** redelivery. This is the practical default.
+- **Exactly-once** — effectively unachievable across a network; you *simulate* it with at-least-once **+ idempotent consumers** (dedupe by an idempotency key), covered in [the outbox pattern](/cloud/the-outbox-pattern/).
+
+<Callout type="go" title="🐹 Design consumers to be idempotent from day one">
+Because at-least-once means duplicates are inevitable, every consumer should be <strong>idempotent</strong>: processing the same message twice must have the same effect as processing it once. Carry a stable message/idempotency ID, record processed IDs (or use an upsert / conditional write), and skip or no-op on a repeat. Build this in from the start — retrofitting idempotency after duplicates corrupt data is painful. Goroutines + a <a href="/patterns/worker-pool/">worker pool</a> make scaling consumers easy; idempotency makes scaling them <em>safe</em>.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ An unbounded queue hides an overload, then becomes one">
+A queue smooths spikes, but it is not infinite. If producers persistently outpace consumers, the queue depth (consumer <strong>lag</strong>) grows without bound — latency climbs, memory/disk fills, and eventually the broker or downstream fails, often catastrophically and far from the real cause. Always <strong>monitor queue depth and consumer lag</strong>, scale or speed up consumers, set retention/size limits, and apply <a href="/cloud/resilience-patterns/">backpressure or load shedding</a> upstream when lag rises. A growing queue is an alarm, not a feature.
+</Callout>
+
+## See also
+
+- [Event-driven architecture](/cloud/event-driven-architecture/) — designing systems around messages.
+- [The outbox pattern](/cloud/the-outbox-pattern/) — reliable publishing and idempotency.
+- [Resilience patterns](/cloud/resilience-patterns/) — backpressure, retries, and dead-lettering.
+- [Rate limiting (concurrency)](/concurrency/rate-limiting/) — bounding producers and consumers.
+
+Next: building whole systems around events — [event-driven architecture](/cloud/event-driven-architecture/).

@@ -5,7 +5,7 @@ import CategorySection from '../../components/CategorySection.astro';
 import { SYSTEMS_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('systems');
-const slugs = topics.filter((t) => t.data.kind === 'topic').map((t) => t.id).join(',');
+const slugs = topics.filter((t) => t.data.kind !== 'pattern').map((t) => t.id).join(',');
 ---
 <BaseLayout title="Systems Programming" description="A Go-first guide to systems programming — system calls and the syscall/x/sys packages, files and directories, processes and signals, scheduling and file watching, pipes and Unix sockets for IPC, and memory-mapped files, with diagrams and runnable code.">
   <nav class="dp-breadcrumb dp-kicker"><a href="/">The Go Reference</a> › <span>Systems</span></nav>

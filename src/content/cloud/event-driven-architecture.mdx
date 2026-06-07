@@ -1,0 +1,169 @@
+---
+title: "Event-Driven Architecture"
+category: messaging
+kind: topic
+order: 11
+difficulty: "Advanced"
+status: ready
+intent: "Designing systems around things that happened — events vs commands, event sourcing and rebuilding state by folding events, CQRS, and the eventual consistency you trade for decoupling."
+related:
+  - message-queues
+  - the-outbox-pattern
+  - distributed-transactions
+quiz:
+  - q: "What's the difference between a command and an event?"
+    options:
+      - text: "A command is a request to DO something (imperative, can be rejected); an event is a record that something HAPPENED (past tense, immutable fact)"
+        correct: true
+      - text: "They are the same message"
+        correct: false
+      - text: "A command is async; an event is sync"
+        correct: false
+      - text: "Events are only for logging"
+        correct: false
+    explain: "A command ('PlaceOrder') is directed at one handler that may accept or reject it. An event ('OrderPlaced') is an immutable statement of fact, published to whoever cares — zero or many subscribers react. Commands express intent and can fail; events express history and can't be 'rejected' (they already happened). EDA flips systems from calling each other to reacting to each other's events."
+  - q: "What is event sourcing?"
+    options:
+      - text: "Storing the sequence of events as the source of truth, and deriving current state by replaying (folding) them — instead of storing only the latest state"
+        correct: true
+      - text: "Logging events to a file for debugging"
+        correct: false
+      - text: "Sending events over a queue"
+        correct: false
+      - text: "Encrypting the event stream"
+        correct: false
+    explain: "Instead of an UPDATE that overwrites the balance, event sourcing appends events (Deposited 100, Withdrew 30) and computes the balance by folding them. The event log is the source of truth, giving a complete audit trail, the ability to rebuild state or derive new projections, and time-travel to any past state. The cost is complexity and that current state is a computation, not a row."
+  - q: "What does CQRS separate?"
+    options:
+      - text: "The write model (commands that change state) from the read model (queries) — often with different schemas/stores optimized for each"
+        correct: true
+      - text: "The client from the server"
+        correct: false
+      - text: "Encryption from compression"
+        correct: false
+      - text: "Two different databases that must stay byte-identical"
+        correct: false
+    explain: "CQRS (Command Query Responsibility Segregation) uses separate models for writing and reading. Writes go through command handlers (and often an event log); reads come from query-optimized projections/views built from those events. It pairs naturally with event sourcing and lets each side scale and be shaped independently — at the cost of eventual consistency between write and read sides."
+  - q: "Event-driven systems are 'eventually consistent.' What does that mean in practice?"
+    options:
+      - text: "After a change, different parts of the system converge to the new state after some delay — they're not instantly consistent, so you must design for the in-between window"
+        correct: true
+      - text: "The system is permanently inconsistent"
+        correct: false
+      - text: "Consistency is impossible"
+        correct: false
+      - text: "It means data is never saved"
+        correct: false
+    explain: "Because services react to events asynchronously, there's a window where the order service knows about an order but the read model / inventory service hasn't processed the event yet. They converge 'eventually' (usually milliseconds). You design around it: the UI shows 'processing', reads tolerate slight staleness, and you don't assume a downstream has reacted the instant you publish. This is the core trade for decoupling."
+  - q: "Choreography vs orchestration for coordinating an event-driven workflow?"
+    options:
+      - text: "Choreography: services react to each other's events with no central coordinator (decoupled, but flow is implicit); orchestration: a central coordinator directs each step (explicit flow, but a coordinator to maintain)"
+        correct: true
+      - text: "They are identical"
+        correct: false
+      - text: "Choreography requires a database; orchestration doesn't"
+        correct: false
+      - text: "Orchestration means no events are used"
+        correct: false
+    explain: "In choreography each service listens for events and emits its own, so the workflow emerges from local reactions — maximally decoupled but the end-to-end flow is hard to see and debug. In orchestration a coordinator (often a saga orchestrator) explicitly drives 'do step 1, then 2, then 3', making the flow visible and easier to manage compensations, at the cost of a central component. Many systems mix both."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📣 Analogy">
+A command-driven system is a manager phoning each worker: "you, do this; you, do that." An event-driven system is an office where someone announces "the order shipped!" and whoever cares reacts — billing files the invoice, the warehouse updates stock, email notifies the customer — without the announcer knowing or waiting for any of them. Adding a new reaction (fraud check) means adding a new listener, not editing the announcer. The system grows by adding ears, not rewiring calls.
+</Callout>
+
+## Commands vs events
+
+The mental flip of EDA is from *calling* services to *reacting* to facts:
+
+- **Command** — "PlaceOrder": an imperative request to one handler that can accept or reject it.
+- **Event** — "OrderPlaced": an immutable record that something *happened*, published to zero or many subscribers who each react independently.
+
+<Mermaid code={String.raw`graph LR
+  CMD["command: PlaceOrder"] --> H["order service"]
+  H -->|emits| EV["event: OrderPlaced"]
+  EV --> B["billing → invoice"]
+  EV --> W["warehouse → reserve stock"]
+  EV --> N["notifier → email"]
+  EV --> F["fraud → screen (new listener, no edits upstream)"]`} />
+
+Adding the fraud check is a new subscriber — the order service doesn't change. That's the decoupling EDA buys.
+
+## See it: event sourcing
+
+In **event sourcing**, the log of events *is* the source of truth, and current state is derived by **folding** them. This runs here — an account balance rebuilt from its event history, deterministically:
+
+<Playground client:visible title="eventsourcing.go" code={String.raw`package main
+
+import "fmt"
+
+type Event struct {
+	Kind   string // "deposited" | "withdrew"
+	Amount int
+}
+
+// Apply folds one event into the running state. State = fold(events).
+func Apply(balance int, e Event) int {
+	switch e.Kind {
+	case "deposited":
+		return balance + e.Amount
+	case "withdrew":
+		return balance - e.Amount
+	}
+	return balance
+}
+
+func main() {
+	// The event log is the source of truth (append-only, immutable).
+	log := []Event{
+		{"deposited", 100},
+		{"withdrew", 30},
+		{"deposited", 50},
+		{"withdrew", 20},
+	}
+
+	// Current state is a computation over the whole history.
+	balance := 0
+	for _, e := range log {
+		balance = Apply(balance, e)
+	}
+	fmt.Println("balance:", balance) // 100-30+50-20 = 100
+
+	// Time-travel: state as of the first two events.
+	asOf := 0
+	for _, e := range log[:2] {
+		asOf = Apply(asOf, e)
+	}
+	fmt.Println("balance after 2 events:", asOf) // 70
+
+	// Auditability for free: the full history is right there.
+	fmt.Println("events recorded:", len(log))
+}`} />
+
+The balance is never stored — it's `fold(events)`. That gives a complete **audit trail**, the ability to **time-travel** to any past state, and to derive new **projections** (read models) by replaying the log differently. The cost is real complexity, so reserve it for domains where history matters (finance, audit, ledgers).
+
+## CQRS and eventual consistency
+
+Event sourcing pairs with **CQRS** (Command Query Responsibility Segregation): the **write model** appends events; **read models** are query-optimized projections built by consuming those events. Because projections update asynchronously, the system is **eventually consistent** — a brief window where the write side knows something the read side hasn't projected yet. You design for it: show "processing", tolerate slight staleness, and never assume a downstream reacted the instant you published.
+
+Coordinating multi-step workflows is then either **choreography** (services react to each other's events, fully decoupled) or **orchestration** (a coordinator drives the steps explicitly) — the same axis the [saga pattern](/cloud/distributed-transactions/) sits on.
+
+<Callout type="go" title="🐹 Events are immutable facts — model them that way">
+Treat events as append-only, past-tense, immutable records: name them in the past tense (<code>OrderPlaced</code>, not <code>PlaceOrder</code>), never mutate a published event, and version your event schemas so old events still replay as the format evolves (add fields, don't repurpose them). In Go, events are plain structs serialized to JSON/protobuf on the wire; an interface with a sealed set of event types plus a <code>switch</code> in <code>Apply</code> models the fold cleanly. The discipline that makes EDA work is treating the log as history you can append to but never rewrite.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ EDA trades simplicity for decoupling — don't reach for it reflexively">
+Event-driven architecture and event sourcing are powerful but add real cost: eventual consistency to reason about, harder debugging (the flow is implicit across many listeners), event schema versioning, duplicate/ordering handling, and operational complexity. For a CRUD app with simple, synchronous needs, a plain database and direct calls are clearer and correct. Reach for EDA when you genuinely need decoupling, independent scaling, audit history, or many reactions to one fact — not because it sounds advanced. The hardest part isn't publishing events; it's living with eventual consistency.
+</Callout>
+
+## See also
+
+- [Message queues](/cloud/message-queues/) — the transport events travel on.
+- [The outbox pattern](/cloud/the-outbox-pattern/) — publishing events reliably with your data write.
+- [Distributed transactions](/cloud/distributed-transactions/) — sagas for multi-service workflows.
+- [Encoding/JSON (stdlib)](/stdlib/encoding-json/) — serializing events on the wire.
+
+Next: publishing events without losing them — [the outbox pattern](/cloud/the-outbox-pattern/).

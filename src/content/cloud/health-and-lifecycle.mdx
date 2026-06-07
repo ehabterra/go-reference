@@ -1,0 +1,172 @@
+---
+title: "Health Probes & Graceful Lifecycle"
+category: containers
+kind: topic
+order: 4
+difficulty: "Intermediate"
+status: ready
+intent: "Telling Kubernetes the truth about your service — liveness vs readiness vs startup probes, and graceful shutdown that drains in-flight requests so deploys never drop traffic."
+related:
+  - kubernetes-basics
+  - hardening-services
+  - configuration
+quiz:
+  - q: "What's the difference between a liveness and a readiness probe?"
+    options:
+      - text: "Liveness asks 'is the process healthy, or should it be restarted?'; readiness asks 'can it serve traffic right now?' — failing readiness removes it from the load balancer without restarting it"
+        correct: true
+      - text: "They are the same check with different names"
+        correct: false
+      - text: "Liveness checks the database; readiness checks the CPU"
+        correct: false
+      - text: "Readiness restarts the Pod; liveness removes it from the Service"
+        correct: false
+    explain: "Liveness failing → Kubernetes restarts the container (it's wedged). Readiness failing → Kubernetes stops routing traffic to it but leaves it running (it's alive but temporarily can't serve — warming up, or a dependency is down). Confusing them is dangerous: putting a dependency check in liveness can cause restart storms when that dependency blips."
+  - q: "What should a liveness probe check?"
+    options:
+      - text: "Only that the process itself is functioning (e.g. the HTTP server responds) — NOT external dependencies"
+        correct: true
+      - text: "That the database, cache, and all downstreams are up"
+        correct: false
+      - text: "That the CPU is below 50%"
+        correct: false
+      - text: "Nothing; liveness should always return 200"
+        correct: false
+    explain: "Liveness must be cheap and self-contained: if it checks the database and the DB has a brief outage, every replica fails liveness and Kubernetes restarts them all at once — turning a small blip into a full outage (a restart storm). Keep dependency checks in readiness (remove from LB, don't restart). Liveness = 'is this process wedged?'"
+  - q: "What is a startup probe for?"
+    options:
+      - text: "Slow-starting apps — it gives them time to initialize before liveness/readiness kick in, so a long boot isn't mistaken for a hang and killed"
+        correct: true
+      - text: "Checking the app at shutdown"
+        correct: false
+      - text: "Running database migrations"
+        correct: false
+      - text: "Replacing the readiness probe entirely"
+        correct: false
+    explain: "An app with a long initialization (warming caches, loading models) could fail an aggressive liveness probe during boot and be killed in a loop. A startup probe runs first with a generous timeout; only once it passes do liveness/readiness begin. This lets you keep liveness/readiness tight for the running state without punishing a slow start."
+  - q: "What does graceful shutdown accomplish on a deploy or scale-down?"
+    options:
+      - text: "The server stops accepting new connections but lets in-flight requests finish before exiting, so rolling deploys don't drop or error active requests"
+        correct: true
+      - text: "It makes the Pod restart faster"
+        correct: false
+      - text: "It deletes the container image"
+        correct: false
+      - text: "It is only needed for databases"
+        correct: false
+    explain: "On a deploy/scale-down, Kubernetes sends SIGTERM and removes the Pod from the Service. The app should catch SIGTERM, stop accepting new requests, and let active ones complete (http.Server.Shutdown), then exit before the grace period ends. Without it, in-flight requests are killed mid-flight on every deploy — intermittent 502s users can't explain."
+  - q: "Why fail readiness during shutdown BEFORE you stop the server?"
+    options:
+      - text: "So Kubernetes removes the Pod from the load balancer first, letting traffic drain to other replicas before this one stops accepting — avoiding a race where new requests arrive mid-shutdown"
+        correct: true
+      - text: "Readiness has no role in shutdown"
+        correct: false
+      - text: "To make shutdown instantaneous"
+        correct: false
+      - text: "To restart the Pod faster"
+        correct: false
+    explain: "There's a propagation delay between SIGTERM and the load balancer noticing the Pod is gone. If you stop accepting immediately, requests routed in that window get refused. The robust sequence: on SIGTERM, flip readiness to failing (LB stops sending new traffic), wait a moment, then Shutdown() to drain the rest. This eliminates the shutdown-race 502s."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🚦 Analogy">
+A health probe is the difference between a shop's "Open" sign and a heartbeat monitor. <strong>Liveness</strong> is the heartbeat: if it flatlines, call the paramedics (restart). <strong>Readiness</strong> is the Open sign: the shop can flip it to "Closed — back in 5" while restocking, without anyone calling an ambulance. Mixing them up — calling paramedics every time the shop briefly closes — causes chaos. And graceful shutdown is locking the door but serving the customers already inside before you leave.
+</Callout>
+
+## Three probes, three jobs
+
+<Mermaid code={String.raw`graph TD
+  START["Pod starts"] --> SU["startupProbe<br/>(generous: still booting?)"]
+  SU -->|passes| LR["liveness + readiness begin"]
+  LR --> LV["livenessProbe<br/>process wedged? → RESTART"]
+  LR --> RD["readinessProbe<br/>can serve now? → add/remove from LB"]`} />
+
+- **Liveness** — "is the process wedged?" Fails → Kubernetes **restarts** the container. Keep it cheap and **self-contained**; never check external dependencies here.
+- **Readiness** — "can I serve traffic right now?" Fails → Kubernetes **removes the Pod from the Service** but leaves it running. Put dependency checks (DB reachable, caches warm) here.
+- **Startup** — for slow boots: gives the app time to initialize before liveness/readiness apply, so a long startup isn't mistaken for a hang.
+
+## See it: liveness and readiness handlers
+
+`/healthz` is cheap and always-200 while the process runs; `/readyz` reflects whether dependencies are ready. This runs here via `httptest` — readiness starts failing (503) and flips to 200 once initialized:
+
+<Playground client:visible title="probes.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+)
+
+func main() {
+	var ready atomic.Bool // flipped true once dependencies are up
+
+	mux := http.NewServeMux()
+	// Liveness: only reports the process is running. No dependency checks!
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
+	// Readiness: 503 until ready, 200 after — controls load-balancer traffic.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if ready.Load() {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, "ready")
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintln(w, "not ready")
+		}
+	})
+
+	probe := func(path string) int {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		return rec.Code
+	}
+
+	fmt.Println("before init:  /healthz", probe("/healthz"), " /readyz", probe("/readyz"))
+	ready.Store(true) // dependencies connected, caches warmed
+	fmt.Println("after init:   /healthz", probe("/healthz"), " /readyz", probe("/readyz"))
+}`} />
+
+Liveness is 200 throughout (the process is fine); readiness is 503 until initialization completes, so Kubernetes only routes traffic once the app can actually serve it.
+
+## Graceful shutdown
+
+On a deploy or scale-down, Kubernetes sends **SIGTERM** and removes the Pod from the Service — but there's a propagation delay. The robust sequence avoids dropping in-flight requests (fenced — needs a real server and signals):
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+defer stop()
+
+go srv.ListenAndServe()
+<-ctx.Done() // SIGTERM received
+
+ready.Store(false)          // 1. fail readiness so the LB stops sending new traffic
+time.Sleep(3 * time.Second) // 2. wait for the LB to notice (propagation delay)
+
+shutCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+defer cancel()
+srv.Shutdown(shutCtx)       // 3. stop accepting, drain in-flight requests, exit
+```
+
+The order matters: **fail readiness first**, pause, *then* `Shutdown`. That drains traffic to other replicas before this Pod stops accepting — eliminating the intermittent 502s that plague naive shutdowns. See [hardening services](/security/hardening-services/) for the server-side `Shutdown` details.
+
+<Callout type="go" title="🐹 Probes should be cheap and honest">
+A probe is hit every few seconds on every replica, so keep it <strong>fast and side-effect-free</strong> — no heavy queries, no writes. Make readiness <em>honest</em>: report not-ready while caches warm, during shutdown, or when a critical dependency is unreachable, so the load balancer routes around you. But don't over-couple — if readiness flips off every time a non-critical downstream hiccups, you'll yo-yo Pods out of rotation. Check only what you truly need to serve a request, and set probe <code>periodSeconds</code>/<code>failureThreshold</code> so a single blip doesn't trigger action.
+</Callout>
+
+<Callout type="gotcha" title="⚠️ Don't put dependency checks in the liveness probe">
+The classic outage amplifier: a liveness probe that checks the database. The DB has a 30-second blip → <em>every</em> replica fails liveness simultaneously → Kubernetes restarts them all at once → the restart storm and cold caches turn a minor blip into a major outage, and the restarts may even prevent recovery. Liveness answers only "is <em>this process</em> stuck?" (it should almost never fail). Dependency health belongs in <strong>readiness</strong>, which removes the Pod from the load balancer without the nuclear option of a restart.
+</Callout>
+
+## See also
+
+- [Kubernetes basics](/cloud/kubernetes-basics/) — where the probe fields live in the Pod spec.
+- [Hardening services](/security/hardening-services/) — server timeouts and `Shutdown` internals.
+- [Configuration](/cloud/configuration/) — probe paths and grace periods as config.
+- [context (concurrency)](/concurrency/context/) — the cancellation that drives graceful shutdown.
+
+Next: feeding the service its configuration the 12-factor way — [configuration](/cloud/configuration/).
