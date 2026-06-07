@@ -100,7 +100,7 @@ What makes any of these safe isn't the traffic shape — it's **gating each step
 
 ## See it: a canary promotion gate
 
-A canary controller is just: observe the new version's metrics, and promote, hold, or abort. This deterministic decision is the core of progressive delivery. This runs here:
+The runnable below is an **illustration of the decision logic**, not a deployment tool you install — it shows how a canary controller observes the new version's metrics and decides to promote, hold, or abort. Real progressive-delivery controllers (<a href="https://argoproj.github.io/rollouts/" target="_blank" rel="noopener">Argo Rollouts</a>, <a href="https://flagger.app/" target="_blank" rel="noopener">Flagger</a>) run this same kind of logic against live Prometheus metrics. This runs here:
 
 <Playground client:visible title="canary.go" code={String.raw`package main
 

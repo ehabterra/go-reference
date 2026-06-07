@@ -286,6 +286,7 @@ function initLang() {
     root.dataset.lang = lang;
     root.dir = ar ? 'rtl' : 'ltr';
     if (btn) btn.textContent = ar ? 'EN' : 'عربي';
+    markExternalLinks(); // AR content swaps innerHTML → re-mark new anchors
   }
 
   apply(root.dataset.lang === 'ar' ? 'ar' : 'en'); // honor the persisted choice on load
@@ -315,8 +316,23 @@ function initQuizShuffle() {
   });
 }
 
+/* ---------- open every external link in a new tab ----------
+   Applies to all <a href> pointing at another origin — covers static HTML,
+   the .astro pages, and (because apply() calls it again) the Arabic content
+   swapped in at runtime, whose translated anchors may lack target/rel. */
+function markExternalLinks() {
+  document.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(href)) return; // skip internal / anchors / mailto
+    if (a.host === location.host) return; // skip same-site absolute links
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  });
+}
+
 function boot() {
   initLang();
+  markExternalLinks();
   initQuizShuffle();
   initScroll();
   initReveal();

@@ -117,7 +117,7 @@ In **GitOps**, the *desired state* of the cluster lives in a Git repo (Kubernete
 
 ## See it: the reconcile loop at the heart of GitOps
 
-The whole idea is a control loop that drives *actual* toward *desired*, correcting drift each tick. This runs here:
+**This playground is a self-contained illustration** — a ~30-line model of the reconcile *algorithm* so you can watch it work. It is **not** Argo CD's source and it's **not** something you deploy; the real controllers (<a href="https://argo-cd.readthedocs.io/" target="_blank" rel="noopener">Argo CD</a>, <a href="https://fluxcd.io/" target="_blank" rel="noopener">Flux</a>) run this *same* loop continuously inside the cluster against the live Kubernetes API. The idea: drive *actual* state toward the *desired* state declared in Git, correcting any drift on each tick. This runs here:
 
 <Playground client:visible title="reconcile.go" code={String.raw`package main
 
@@ -169,7 +169,7 @@ func main() {
 	fmt.Println("drift detected, correcting:", reconcile(desired, &actual))
 }`} />
 
-The loop is **idempotent** (a no-op when already converged) and **self-healing** (drift gets reverted). That's exactly what Argo CD/Flux do against a real cluster.
+The loop is **idempotent** (a no-op when already converged) and **self-healing** (drift gets reverted). Take that exact idea, run it continuously against a real cluster, and compare the Git-declared desired state to live state — that *is* what Argo CD and Flux are. Your production code stays a normal Go service; the controller is a separate, off-the-shelf component you install, not something you write.
 
 <Callout type="go" title="🐹 Go services are a natural fit for this pipeline">
 Go makes CI/CD pleasant: <code>go build</code>/<code>go test -race</code> are fast and built-in (no external test runner), the output is a single static binary, and <a href="/cloud/dockerizing-go/">a tiny container</a> drops straight into a registry. Stamp the build with version info via <code>-ldflags "-X main.version=$GIT_SHA"</code> so the running service can report exactly which commit it is. Then reference that image <strong>by digest</strong> in your Git-tracked manifest — full traceability, and rollback is a one-line <code>git revert</code> that the GitOps controller reconciles back to the previous known-good image. The same reconcile loop you saw above is also how Kubernetes itself works.
