@@ -496,6 +496,7 @@
   "intent.websockets": "اتصالات دائمة مزدوجة الاتجاه على مقبس TCP واحد — مصافحة HTTP Upgrade، والإطارات (frames)، و ping/pong، ومتى تختارها بدل SSE أو polling.",
   "intent.server-sent-events": "دفع أحادي الاتجاه عبر HTTP عادي — صيغة text/event-stream، ودفق الأحداث (flushing)، وإعادة الاتصال التلقائي بـ Last-Event-ID، ومتى يتفوّق SSE على WebSockets.",
   "intent.polling": "حين يسأل العميل مجدّدًا — الـ polling القصير على مؤقّت مقابل الـ long polling الذي يُبقي الطلب مفتوحًا، وتكاليفهما، ومتى يكون polling الخيار البسيط الصحيح.",
+  "intent.webhooks": "الجهة الأخرى من الـ polling — خدمة خارجية تُرسِل POST إلى نقطة نهايتك عند وقوع شيء ما. كيف تستقبله بأمان: تحقّق من التوقيع، وأكّد بسرعة، وأزِل التكرار من أجل الـ idempotency، وعالِج خارج المسار.",
   "intent.rpc-and-serialization": "استدعاء دوال Go عبر السلك — net/rpc و JSON-RPC، إضافةً إلى خيارات التسلسل تحتها: gob مقابل JSON مقابل protobuf ومفاضلاتها.",
   "intent.database-sql": "طبقة SQL غير المرتبطة بمحرّك في Go — sql.Open يُرجع تجمّع اتصالات، والاستعلامات ذات المعاملات تمنع الحقن، و Scan يقرأ الصفوف، وتُغلقها دائمًا.",
   "intent.sql-transactions": "Begin و Commit و Rollback — تجميع العبارات في وحدات الكل-أو-لا-شيء، ونمط defer-rollback الآمن، و ACID، ومستويات العزل.",
