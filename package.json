@@ -3,7 +3,14 @@
   "type": "module",
   "version": "0.1.0",
   "private": true,
-  "description": "The Go Reference — a visual, Go-first guide to design patterns and concurrency.",
+  "description": "The Go Reference — a visual, Go-first guide spanning the language, concurrency, internals, systems, the standard library, the web, security, cloud-native and architecture.",
+  "author": "Ehab Terra",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/ehabterra/go-reference#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ehabterra/go-reference.git"
+  },
   "scripts": {
     "dev": "astro dev",
     "build": "astro build && node scripts/write-assetsignore.mjs",
