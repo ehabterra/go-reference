@@ -22,9 +22,14 @@ export default defineConfig({
       // the `server.browser` build under workerd — that build references
       // `MessageChannel`, which the Workers runtime doesn't expose, so SSR
       // crashes at startup. Force the Web-Streams `server.edge` build instead.
-      alias: {
-        'react-dom/server': 'react-dom/server.edge',
-      },
+      //
+      // Build-only: `server.edge.js` is CommonJS and loads correctly under
+      // workerd, but `astro dev` runs SSR in Node, where its `require` calls
+      // throw "require is not defined". In dev we let `react-dom/server`
+      // resolve to its Node build as usual.
+      alias: process.argv.includes('build')
+        ? { 'react-dom/server': 'react-dom/server.edge' }
+        : {},
     },
   },
 });

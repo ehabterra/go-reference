@@ -75,7 +75,7 @@ No env vars are required. Connecting the GitHub repo to Cloudflare's CI (build c
 
 ## Content status
 
-Eleven tracks, ~196 pages in total:
+Eleven tracks, ~197 pages in total:
 
 | Track | Pages |
 |---|---|
@@ -84,7 +84,7 @@ Eleven tracks, ~196 pages in total:
 | Concurrency (`/concurrency/`) | 15 |
 | Data Structures & Algorithms (`/dsa/`) | 18 |
 | Standard Library & Tooling (`/stdlib/`) | 18 |
-| Networking & Web (`/web/`) | 20 |
+| Networking & Web (`/web/`) | 21 |
 | Go Internals (`/internals/`) | 12 |
 | Systems Programming (`/systems/`) | 10 |
 | Security (`/security/`) | 22 |

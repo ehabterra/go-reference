@@ -1,0 +1,219 @@
+---
+title: "Webhooks"
+category: apis
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "The other side of polling — an external service POSTs to your endpoint when something happens. How to receive one safely: verify the signature, ack fast, dedupe for idempotency, and process out of band."
+related:
+  - polling
+  - server-sent-events
+  - websockets
+  - web-security
+  - rest-apis
+quiz:
+  - q: "Why verify a webhook's signature instead of just trusting the request?"
+    options:
+      - text: "Your endpoint is public, so anyone can POST to it — an HMAC signature over the raw body proves the request came from the provider holding the shared secret"
+        correct: true
+      - text: "Signatures compress the payload"
+        correct: false
+      - text: "It lets you skip TLS"
+        correct: false
+      - text: "It guarantees exactly-once delivery"
+        correct: false
+    explain: "A webhook URL is just an HTTP endpoint on the open internet; nothing stops a third party from forging events. The provider signs the raw bytes with a shared secret (HMAC-SHA256); you recompute it and compare. No signature = no trust."
+  - q: "Why compare signatures with hmac.Equal rather than ==?"
+    options:
+      - text: "== returns as soon as two bytes differ, leaking timing info that lets an attacker recover the signature byte-by-byte; hmac.Equal compares in constant time"
+        correct: true
+      - text: "== doesn't work on strings"
+        correct: false
+      - text: "hmac.Equal is faster"
+        correct: false
+      - text: "== panics on different lengths"
+        correct: false
+    explain: "A normal comparison short-circuits on the first differing byte, so response time reveals how many leading bytes matched — a timing side-channel. hmac.Equal (which wraps crypto/subtle.ConstantTimeCompare) always scans the full length."
+  - q: "Why must a webhook handler be idempotent?"
+    options:
+      - text: "Providers retry on any non-2xx or timeout, and networks duplicate, so the same event can arrive more than once — dedupe by the event's unique id"
+        correct: true
+      - text: "Because HTTP forbids duplicate POSTs"
+        correct: false
+      - text: "Because Go handlers run concurrently"
+        correct: false
+      - text: "It isn't — providers send each event exactly once"
+        correct: false
+    explain: "Webhook delivery is at-least-once. If your 200 is slow or lost, the provider re-sends. Record each event id you've processed and skip repeats, so a duplicate 'payment.succeeded' doesn't charge twice."
+  - q: "Why acknowledge with 200 immediately and do the real work afterward?"
+    options:
+      - text: "Providers enforce short delivery timeouts and retry if you're slow; ack fast, then process the event out of band (queue/goroutine)"
+        correct: true
+      - text: "Because you can't read the body and respond in the same handler"
+        correct: false
+      - text: "Because 200 must be sent before reading the body"
+        correct: false
+      - text: "To avoid TLS renegotiation"
+        correct: false
+    explain: "If you run a slow job inline, you risk blowing the provider's timeout — it gives up, marks delivery failed, and retries, so you do the work twice. Verify, persist/enqueue, return 2xx, then process asynchronously."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="📮 Analogy">
+[Polling](/web/polling/) is calling the post office every hour to ask if a parcel arrived. A **webhook** is the opposite arrangement: you give the sender your address, and they knock on your door the moment it's ready. The catch is that anyone can knock — so before you accept the parcel you check the courier's ID (the **signature**), and because they'll knock again if you don't answer quickly, you take it, say "got it" right away, and unpack it later.
+</Callout>
+
+## What a webhook is
+
+A webhook is an **inbound HTTP POST** that an external service sends *you* when an event happens — Stripe on a payment, GitHub on a push, Slack on a message. Where polling has the client repeatedly ask, a webhook flips control: the provider pushes, server-to-server, with no connection held open in between.
+
+That makes receiving a webhook *mostly* just an [HTTP handler](/web/http-server/). The interesting part is everything around it — proving who sent it, not processing it twice, and answering fast enough.
+
+<Mermaid code={String.raw`sequenceDiagram
+  participant P as Provider (e.g. Stripe)
+  participant Y as Your endpoint
+  participant W as Worker / queue
+  P->>Y: POST /webhooks (event + signature)
+  Y->>Y: verify HMAC signature
+  Y->>Y: dedupe by event id
+  Y-->>P: 200 OK (ack fast)
+  Y->>W: enqueue for processing
+  Note over P,Y: no 2xx in time? provider retries`} />
+
+## Receiving one safely
+
+Read the **raw body**, recompute the HMAC over those exact bytes with the shared secret, and compare in constant time. Only then is the request trustworthy enough to act on.
+
+<Playground client:visible title="webhook.go" code={String.raw`package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+)
+
+const secret = "whsec_topsecret" // shared with the provider, out of band
+
+// sign is what the *sender* does: HMAC-SHA256 over the raw body, hex-encoded.
+func sign(body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body) // verify over the RAW bytes, before parsing
+	want := sign(body)
+	got := r.Header.Get("X-Signature")
+
+	// constant-time compare — hmac.Equal wraps crypto/subtle.ConstantTimeCompare
+	if !hmac.Equal([]byte(got), []byte(want)) {
+		http.Error(w, "bad signature", http.StatusUnauthorized)
+		return
+	}
+	// 2xx tells the sender "received — stop retrying"
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "accepted")
+}
+
+func deliver(label, body, sig string) {
+	req := httptest.NewRequest("POST", "/webhooks", strings.NewReader(body))
+	req.Header.Set("X-Signature", sig)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	fmt.Printf("%-8s -> %d %s\n", label, rec.Code, rec.Body.String())
+}
+
+func main() {
+	body := ` + "`" + `{"event":"payment.succeeded","id":"evt_123"}` + "`" + `
+
+	deliver("genuine", body, sign([]byte(body)))         // signed correctly -> 200
+	deliver("forged", body, strings.Repeat("0", 64))     // wrong signature  -> 401
+}`} />
+
+<Callout type="gotcha" title="Verify the bytes, not the struct">
+Sign and verify over the **raw request body**, before `json.Unmarshal`. If you decode first and re-encode to check the signature, key ordering and whitespace change the bytes and every signature fails. Read the body once (`io.ReadAll`), verify, *then* parse — and cap it with `http.MaxBytesReader` so a giant POST can't exhaust memory.
+</Callout>
+
+## Idempotency: don't process twice
+
+Webhook delivery is **at-least-once**. If your `200` is slow, lost, or the provider isn't sure you got it, it sends the same event again. Every event carries a unique id — record the ones you've handled and skip repeats:
+
+```go
+func process(ev Event) error {
+	// INSERT ... ON CONFLICT DO NOTHING, or a unique index on event_id.
+	inserted, err := db.MarkSeen(ev.ID)
+	if err != nil {
+		return err // a real failure — let the provider retry
+	}
+	if !inserted {
+		return nil // already handled this exact event; ack and move on
+	}
+	return fulfil(ev) // the actual side effect, runs at most once
+}
+```
+
+Without this, a retried `payment.succeeded` ships the order twice. The dedupe key is the provider's event id, not your own — see the [outbox pattern](/cloud/the-outbox-pattern/) for the same idea on the sending side.
+
+## Ack fast, work later
+
+Providers enforce short delivery timeouts (often a few seconds). If you run the real job inline and overrun, the provider marks the delivery failed and retries — so you do the work *twice* and still look down. Verify, persist or enqueue, return `2xx`, then process out of band:
+
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if !validSignature(r.Header.Get("X-Signature"), body) {
+		http.Error(w, "bad signature", http.StatusUnauthorized)
+		return
+	}
+	if err := queue.Enqueue(body); err != nil { // durable hand-off
+		http.Error(w, "try again", http.StatusServiceUnavailable) // 5xx -> retry
+		return
+	}
+	w.WriteHeader(http.StatusOK) // ack immediately; a worker does the rest
+}
+```
+
+The rule of thumb: a `2xx` means **"I durably accepted this"**, not "I finished it." Return `5xx` only when you want the provider to retry; return `4xx` (without retrying) for a bad signature or a payload you'll never accept.
+
+## Which mechanism?
+
+Webhooks join the family of "how does data get from there to here." They're the right tool when the *other* party owns the events and the direction is server-to-server:
+
+<Mermaid code={String.raw`graph TD
+  Q["who has the event, and which way does it flow?"] --> W["an external service, on its own events, to your server<br/>→ webhooks"]
+  Q --> P["you, asking the same endpoint repeatedly<br/>→ polling"]
+  Q --> S["your server, streaming to a browser tab<br/>→ SSE"]
+  Q --> B["both ends, live and two-way<br/>→ WebSockets"]`} />
+
+| | direction | who initiates | holds a connection? |
+|---|---|---|---|
+| **[Polling](/web/polling/)** | client → server | client (repeatedly) | no |
+| **[SSE](/web/server-sent-events/)** | server → client | client opens once | yes (one-way) |
+| **[WebSockets](/web/websockets/)** | both | client opens once | yes (full-duplex) |
+| **Webhooks** | server → server | the provider, on an event | no |
+
+## The other side: sending them
+
+Delivering webhooks reliably is its own problem, and it lives in the [cloud track](/cloud/why-cloud-native/) because it's the same machinery as any event system: emit through the [transactional outbox](/cloud/the-outbox-pattern/) so a delivery is never lost on a crash, push attempts through a [message queue](/cloud/message-queues/) with a worker pool, and wrap each attempt in [resilience patterns](/cloud/resilience-patterns/) — exponential backoff with jitter, a retry cap, and a dead-letter queue for the ones that never succeed. Sign every payload so your receivers can do exactly the verification above.
+
+<Callout type="tip" title="🐹 Receiver checklist">
+A production-ready receiver: **read the raw body** (capped with `MaxBytesReader`) → **verify the HMAC** with `hmac.Equal` → reject a stale or future **timestamp** (replay protection) → **dedupe** by event id → **ack 2xx** → process **asynchronously**. Keep the secret out of the repo, and rotate it by accepting two valid secrets during the overlap window.
+</Callout>
+
+## See also
+
+- [Polling](/web/polling/) — the inverse arrangement, when *you* own the asking.
+- [Web security](/web/web-security/) — constant-time comparison and the timing side-channel in depth.
+- [HTTP server](/web/http-server/) — the handler your endpoint is built on.
+- [The outbox pattern](/cloud/the-outbox-pattern/) · [message queues](/cloud/message-queues/) · [resilience patterns](/cloud/resilience-patterns/) — the delivery side, for when you're the provider.
+
+Next: the wire formats underneath it all — [RPC & Serialization](/web/rpc-and-serialization/).
