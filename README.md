@@ -21,15 +21,15 @@ Eleven tracks today (more can be added the same way):
 ## Develop
 
 ```bash
-npm install
-npm run dev      # http://localhost:4321
-npm run build    # build (static output → .vercel/output/static/)
-npm run preview  # serve the production build
+pnpm install
+pnpm dev      # http://localhost:4321
+pnpm build    # build (output → dist/, including the SSR Worker)
+pnpm preview  # serve the production build
 ```
 
 > The in-page **Go Playground** "Run" button posts to the Astro endpoint `src/pages/api/run.ts`,
-> which proxies the official Go Playground compile API. It runs under `npm run dev` and deploys
-> as a Vercel serverless function — so "Run" works both locally and in production.
+> which proxies the official Go Playground compile API. It runs under `pnpm dev` and deploys
+> as part of the Cloudflare Worker — so "Run" works both locally and in production.
 
 ## How it's organized
 
@@ -44,6 +44,8 @@ npm run preview  # serve the production build
 | `src/lib/consts.ts` | Site metadata + the category lists for each track. |
 | `src/scripts/` | `progress.js` (localStorage progress, quiz, TOC) and `mermaid.js` (lazy diagrams). |
 | `src/pages/api/run.ts` | On-demand endpoint proxying the Go Playground compile API. |
+| `astro.config.mjs` | Astro config — uses the Cloudflare adapter for SSR on Workers. |
+| `wrangler.jsonc` | Cloudflare Worker config (entry, static assets, compatibility flags). |
 
 ## Authoring a page
 
@@ -57,11 +59,19 @@ Adding a whole new **track** = a new collection in `content.config.ts`, a `src/c
 folder, a landing + `[...slug].astro` under `src/pages/<track>/`, and a category list in
 `consts.ts`. The shared components already take `collection` / `base` props.
 
-## Deploy to Vercel
+## Deploy to Cloudflare Workers
 
-1. Create a GitHub repo named `go-reference` and push this folder to it.
-2. Import the repo in Vercel — it auto-detects Astro. No env vars needed.
-3. The static site + the `/api/run` function deploy together.
+The site runs as a Cloudflare Worker (SSR via the `@astrojs/cloudflare` adapter), with
+static assets served from `dist/`. Build first, then deploy with Wrangler:
+
+```bash
+pnpm build
+pnpm wrangler deploy
+```
+
+The Worker entry, static-assets binding, and compatibility settings live in `wrangler.jsonc`.
+No env vars are required. Connecting the GitHub repo to Cloudflare's CI (build command
+`pnpm build`) deploys automatically on push.
 
 ## Content status
 
