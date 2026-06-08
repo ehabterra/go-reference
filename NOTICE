@@ -1,0 +1,15 @@
+The Go Reference
+Copyright 2026 Ehab Terra
+
+This product includes software and educational content developed by
+Ehab Terra (https://github.com/ehabterra/go-reference).
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file
+for the full terms.
+
+---
+
+Third-party components are distributed under their own licenses, including
+but not limited to Astro, React, and Mermaid. The in-page "Run" button
+proxies the public Go Playground compile API (https://go.dev/play/),
+which is operated by the Go team and subject to its own terms.

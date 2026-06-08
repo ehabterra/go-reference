@@ -80,3 +80,14 @@ Eleven tracks, ~196 pages in total:
 | Security (`/security/`) | 22 |
 | Cloud-Native (`/cloud/`) | 23 |
 | Architecture (`/architecture/`) | 6 |
+
+## Contributing
+
+Contributions are welcome — from a one-line typo fix to a whole new track. See
+[CONTRIBUTING.md](./CONTRIBUTING.md) for the workflow, the project layout, and a
+page-authoring checklist.
+
+## License
+
+Licensed under the [Apache License 2.0](./LICENSE) — see [LICENSE](./LICENSE) and
+[NOTICE](./NOTICE). This covers both the code and the written content.
