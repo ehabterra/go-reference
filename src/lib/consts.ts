@@ -1,6 +1,6 @@
 export const SITE_TITLE = 'The Go Reference';
 export const SITE_DESC =
-  'A visual, Go-first reference — every Gang-of-Four design pattern and a deep concurrency guide, with diagrams, runnable code, quizzes and progress tracking.';
+  'A visual, Go-first reference — eleven tracks from the language fundamentals to data structures, concurrency, the standard library, networking, internals, systems, security, cloud-native and architecture, with diagrams, runnable code, quizzes and progress tracking.';
 
 export interface CategoryMeta {
   key: string;
