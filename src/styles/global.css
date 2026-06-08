@@ -42,6 +42,10 @@
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
+  /* safety net: never let a stray wide child force horizontal scroll on
+     mobile. `clip` (unlike `hidden`) does not create a scroll container, so
+     the sticky nav / TOC keep working. */
+  overflow-x: clip;
   background-color: var(--dp-bg);
   background-image:
     radial-gradient(1100px 560px at 92% -8%, rgba(0,194,242,.10), transparent 60%),
@@ -190,7 +194,7 @@ img { max-width: 100%; }
 .dp-tradeoffs__col li { margin: .3rem 0; }
 
 /* features */
-.dp-features { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); margin: 1.4rem 0; }
+.dp-features { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px),1fr)); margin: 1.4rem 0; }
 .dp-feature { background: var(--dp-surface); border: 1px solid var(--dp-border); border-radius: var(--dp-radius); padding: 1.2rem; }
 .dp-feature__icon { font-size: 1.6rem; }
 .dp-feature h3 { margin: .5rem 0 .35rem; font-size: 1.05rem; }
@@ -203,7 +207,7 @@ img { max-width: 100%; }
 .dp-section-head h2 { margin: 0 0 .35rem; display: flex; align-items: center; gap: .6rem; border: 0; padding: 0; }
 .dp-section-head p { margin: 0; color: var(--dp-muted); }
 
-.dp-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); }
+.dp-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 255px), 1fr)); }
 
 .dp-card {
   position: relative; display: flex; flex-direction: column; background: var(--dp-surface);
@@ -316,7 +320,7 @@ img { max-width: 100%; }
 /* =====================================================================
    Prose (rendered markdown body)
    ===================================================================== */
-.dp-prose { font-size: 1.02rem; }
+.dp-prose { font-size: 1.02rem; overflow-wrap: break-word; word-break: break-word; }
 .dp-prose > :first-child { margin-top: 0; }
 .dp-prose h2 { font-size: 1.55rem; margin: 2.6rem 0 1rem; padding-bottom: .35rem; border-bottom: 1px solid var(--dp-border); scroll-margin-top: 86px; letter-spacing: -.01em; }
 .dp-prose h3 { font-size: 1.2rem; margin: 1.8rem 0 .7rem; scroll-margin-top: 86px; }
@@ -336,6 +340,11 @@ img { max-width: 100%; }
 @media (max-width: 640px) {
   .dp-tradeoffs { grid-template-columns: 1fr; }
   .dp-pager { grid-template-columns: 1fr; }
+  /* tighter gutters + softer padding so cards/hero use the full phone width */
+  .dp-container { padding: 0 1rem; }
+  .dp-hero { padding: 1.9rem 1.3rem; margin: 1.4rem 0; }
+  .dp-quiz { padding: 1.1rem 1.1rem; }
+  .dp-prose pre { padding: .85rem .9rem; }
 }
 
 /* =====================================================================
@@ -456,7 +465,7 @@ img { max-width: 100%; }
 .dp-card[data-cat="arch-structure"]   { --c: var(--dp-arch-structure); }
 
 /* hub topic cards */
-.dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1.2rem 0; }
+.dp-topics { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); margin: 1.2rem 0; }
 .dp-topic {
   position: relative; display: flex; flex-direction: column; gap: .55rem;
   padding: 1.7rem 1.6rem 1.5rem; border: 1px solid var(--dp-border); border-radius: var(--dp-radius);
@@ -692,7 +701,7 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 
 /* ---------- glossary ---------- */
 .dp-gloss-sec { margin: 2.2rem 0; }
-.dp-gloss { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); margin: 1rem 0 0; }
+.dp-gloss { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); margin: 1rem 0 0; }
 .dp-gloss__item { border: 1px solid var(--dp-border); border-radius: var(--dp-radius); padding: .85rem 1rem; background: var(--dp-surface); }
 .dp-gloss__term { font-weight: 700; color: var(--dp-text); display: flex; align-items: center; gap: .4rem; }
 .dp-gloss__link { color: var(--dp-accent); text-decoration: none; font-weight: 700; }
