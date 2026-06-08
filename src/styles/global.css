@@ -247,11 +247,15 @@ img { max-width: 100%; }
    ===================================================================== */
 .dp-breadcrumb { margin: 1.2rem 0; }
 .dp-breadcrumb a { color: var(--dp-muted); }
-.dp-article { display: grid; grid-template-columns: 1fr; gap: 2.4rem; margin-top: 1.5rem; }
+.dp-article { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2.4rem; margin-top: 1.5rem; }
+/* grid/flex children default to min-width:auto and refuse to shrink below
+   their content — a wide code block, table or diagram then forces the whole
+   page past the viewport on mobile. Pin min-width:0 at ALL widths. */
+.dp-article__body, .dp-article__toc { min-width: 0; }
 @media (min-width: 1040px) {
   .dp-article { grid-template-columns: minmax(0,1fr) 240px; }
   .dp-article__toc { order: 2; }
-  .dp-article__body { order: 1; min-width: 0; }
+  .dp-article__body { order: 1; }
 }
 .dp-article__toc-inner { position: sticky; top: 86px; }
 .dp-toc-title { font-size: .76rem; text-transform: uppercase; letter-spacing: .14em; color: var(--dp-muted); margin: 0 0 .6rem; }
