@@ -712,3 +712,55 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-gloss__link:hover { text-decoration: underline; }
 .dp-gloss__def { margin: .35rem 0 0; color: var(--dp-muted); font-size: .92rem; line-height: 1.5; }
 .dp-gloss__def code { font-size: .85em; }
+
+/* ---------- page likes ---------- */
+.dp-like-row {
+  display: flex; align-items: center; justify-content: center; gap: .9rem; flex-wrap: wrap;
+  margin: 2.2rem 0 1rem; padding: 1.1rem 1.25rem;
+  border: 1px solid var(--dp-border); border-radius: var(--dp-radius); background: var(--dp-surface);
+}
+.dp-like-row__label { color: var(--dp-muted); font-size: .92rem; }
+.dp-like {
+  display: inline-flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
+  border-radius: 999px; border: 1px solid var(--dp-border-strong);
+  background: var(--dp-surface-2); color: var(--dp-text);
+  font: inherit; font-size: .9rem; font-weight: 600; cursor: pointer;
+  transition: transform .18s var(--dp-ease), border-color .18s, box-shadow .18s, background .18s;
+}
+.dp-like:hover { transform: translateY(-2px); border-color: #fb7185; }
+.dp-like.is-on { border-color: #fb7185; background: rgba(251, 113, 133, .12); box-shadow: 0 8px 22px -10px rgba(251, 113, 133, .55); }
+.dp-like__heart { font-size: 1.05rem; line-height: 1; color: #fb7185; }
+.dp-like.is-pop .dp-like__heart { animation: dp-like-pop .45s var(--dp-ease); }
+.dp-like__count {
+  font-family: var(--font-mono); font-size: .8rem; color: var(--dp-muted);
+  background: var(--dp-bg); border: 1px solid var(--dp-border);
+  padding: .06rem .5rem; border-radius: 999px;
+}
+@keyframes dp-like-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.6); }
+  70% { transform: scale(.9); }
+  100% { transform: scale(1); }
+}
+.dp-like-wrap { display: flex; flex-direction: column; align-items: center; gap: .7rem; }
+.dp-like-form { display: flex; align-items: center; justify-content: center; gap: .5rem; flex-wrap: wrap; }
+.dp-like-form input[type="email"] {
+  min-width: 230px; padding: .48rem .9rem;
+  border-radius: 999px; border: 1px solid var(--dp-border-strong);
+  background: var(--dp-bg); color: var(--dp-text);
+  font: inherit; font-size: .88rem;
+}
+.dp-like-form input[type="email"]:focus { outline: none; border-color: var(--dp-accent); }
+.dp-like-form__note { flex-basis: 100%; text-align: center; color: var(--dp-muted); font-size: .8rem; }
+.dp-like-form__note.is-err { color: #fb7185; }
+.dp-like-change {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--dp-muted); font: inherit; font-size: .78rem;
+  text-decoration: underline dotted;
+}
+.dp-like-change:hover { color: var(--dp-text); }
+
+/* ---------- comments (giscus) ---------- */
+.dp-comments { margin: 2.6rem 0 1rem; padding-top: 1.8rem; border-top: 1px solid var(--dp-border); }
+.dp-comments__title { font-size: 1.35rem; margin: 0 0 .3rem; }
+.dp-comments__hint { color: var(--dp-muted); font-size: .9rem; margin: 0 0 1.2rem; }
