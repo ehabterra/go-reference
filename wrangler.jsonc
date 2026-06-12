@@ -8,6 +8,16 @@
     "binding": "ASSETS",
     "directory": "./dist"
   },
+  // Likes live in D1. Locally this runs against Miniflare's SQLite
+  // (.wrangler/state) — any id works. Before the first production deploy run
+  // `wrangler d1 create go-reference` and paste the real database_id here.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "go-reference",
+      "database_id": "82c227d9-df1b-42d9-b757-620af62149eb"
+    }
+  ],
   "observability": {
     "enabled": true
   }

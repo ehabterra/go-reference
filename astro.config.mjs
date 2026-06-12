@@ -9,7 +9,10 @@ export default defineConfig({
   // Update to your custom domain once attached to the Worker.
   site: 'https://go-reference.workers.dev',
   integrations: [mdx(), react()],
-  adapter: cloudflare(),
+  adapter: cloudflare({
+    // Expose wrangler.jsonc bindings (D1) under `astro dev` via Miniflare.
+    platformProxy: { enabled: true },
+  }),
   markdown: {
     shikiConfig: {
       theme: 'github-dark-default',

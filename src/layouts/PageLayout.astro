@@ -6,6 +6,8 @@ import Tradeoffs from '../components/Tradeoffs.astro';
 import Related from '../components/Related.astro';
 import QuizBlock from '../components/QuizBlock.astro';
 import Pager from '../components/Pager.astro';
+import Comments from '../components/Comments.astro';
+import LikeButton from '../components/islands/LikeButton.tsx';
 
 const {
   entry,
@@ -39,7 +41,12 @@ const contentAr = (contentModules[`../i18n/content/${entry.id}.json`] as any)?.d
         <Tradeoffs data={d} />
         <Related related={d.related} collection={collection} base={base} heading={relatedHeading} />
         {d.quiz.length > 0 && <QuizBlock quiz={d.quiz} />}
+        <div class="dp-like-row">
+          <span class="dp-like-row__label">Enjoyed this page?</span>
+          <LikeButton client:visible page={`${base}/${entry.id}`} />
+        </div>
         <Pager slug={entry.id} collection={collection} base={base} />
+        <Comments />
       </div>
 
       <aside class="dp-article__toc" aria-label="On this page">
