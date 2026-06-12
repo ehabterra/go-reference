@@ -5,6 +5,7 @@
 import { userEmail, visitorHash } from './visitor';
 import { loadReview, saveReview } from './review-store';
 import { loadStreak, adoptStreak } from './streak-store';
+import { loadChallenges, saveChallenges } from './challenge-store';
 
 const LAST_KEY = 'dp-last';
 
@@ -33,6 +34,10 @@ export function streakItem(s) {
 
 export function lastItem(rec) {
   return { k: 'last', v: JSON.stringify(rec), u: rec.when || 0 };
+}
+
+export function chalItem(id, rec) {
+  return { k: `chal:${id}`, v: JSON.stringify(rec), u: rec.u || 0 };
 }
 
 /* Pull the server copy, adopt whatever is newer there, push whatever is
@@ -72,6 +77,27 @@ export async function syncState() {
   });
   if (reviewChanged) saveReview(review);
   toPush.push(...reviewItems(review, newerHere));
+
+  // solved challenges: solving is permanent, so LWW per key acts as a union
+  const chal = loadChallenges();
+  let chalChanged = false;
+  for (const [k, it] of server) {
+    if (!k.startsWith('chal:')) continue;
+    let v;
+    try { v = JSON.parse(it.v); } catch { continue; }
+    const cid = k.slice('chal:'.length);
+    if (!chal[cid]) {
+      chal[cid] = v;
+      chalChanged = true;
+    }
+  }
+  for (const cid of Object.keys(chal)) {
+    if (!server.has(`chal:${cid}`)) toPush.push(chalItem(cid, chal[cid]));
+  }
+  if (chalChanged) {
+    saveChallenges(chal);
+    window.dispatchEvent(new CustomEvent('dp:chal', { detail: {} }));
+  }
 
   // streak: adopt the newer record, never lose the better "best"
   const localStreak = loadStreak();

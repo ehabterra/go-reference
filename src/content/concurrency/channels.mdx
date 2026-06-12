@@ -70,6 +70,7 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Challenge from '../../components/islands/Challenge.tsx';
 
 <Callout type="analogy" title="🚇 Analogy">
 A channel is a conveyor belt between workers. An **unbuffered** belt is hand-to-hand: you cannot put a part down until someone takes it (a rendezvous). A **buffered** belt has slots — you keep working until the slots fill up, and the next worker keeps working until they run out. Closing the belt tells everyone downstream "no more parts are coming." The belt does double duty: it moves the part *and* it synchronizes the two workers, which is the whole point.
@@ -336,5 +337,32 @@ A channel is a heap-allocated `hchan` struct: a ring buffer (for buffered channe
 - **`range` over a channel never ends if no one closes it.** A `for range ch` on a channel that is written but never closed is a leak: the consumer blocks forever once the producer stops. Always close, or use a `done`/`context` to break out.
 - **Receiving the zero value is ambiguous without comma-ok.** A real `0` and "closed" look identical unless you check `ok`.
 - **`cap` is fixed at creation.** There is no way to resize a channel's buffer; make a new one if you need a different capacity.
+
+## 🐞 Fix the bug
+
+An unbuffered send blocks until someone receives — and in this program, nobody ever can. The deadlock detector kills it on the spot. Edit until **Run & check** matches.
+
+<Challenge client:visible id="channels-deadlock" title="deadlock.go"
+  brief="The send on line 7 blocks forever: the receive below it can never run because main is stuck on the send. Unblock the handoff."
+  expected="ping"
+  hint="Two ways out: give the channel a buffer (make(chan string, 1)) so the send completes immediately, or move the send into its own goroutine so the two sides can rendezvous."
+  code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan string)
+	ch <- "ping"
+	fmt.Println(<-ch)
+}`}
+  solution={String.raw`package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan string)
+	go func() { ch <- "ping" }()
+	fmt.Println(<-ch)
+}`} />
 
 Next: wait on many channels at once with [select](/concurrency/select/).

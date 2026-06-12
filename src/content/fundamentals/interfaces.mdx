@@ -70,6 +70,7 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Challenge from '../../components/islands/Challenge.tsx';
 
 <Callout type="analogy" title="🔌 Analogy">
 An interface is a wall socket. It promises a *shape* — two prongs and a voltage — not a brand. Any appliance that fits plugs in. Go never asks a type "do you declare yourself a Plug?"; it just checks "do you have the right prongs?" That check is the type's [method set](/fundamentals/methods/). This one idea — describe behavior, not identity — is the backbone of idiomatic Go design.
@@ -289,5 +290,59 @@ fmt.Println(err == nil) // false! — the famous typed-nil bug
 
 This bites hardest when a function declares `var err *MyError`, maybe-assigns it, and returns it as `error`: callers see a non-nil error even on the success path. **Fix:** return the `error` interface type directly and `return nil` explicitly on success — never return a concrete pointer type for errors.
 </Callout>
+
+## 🐞 Fix the bug
+
+The most famous interface gotcha in Go: a **typed nil** inside an interface is not `nil`. Valid input still takes the error branch here. Edit until **Run & check** matches.
+
+<Challenge client:visible id="interfaces-typed-nil" title="typed-nil.go"
+  brief="validate returns a nil *validationError, but the caller's err != nil check still fires — the interface holds a type, so it isn't nil. Make valid input report as valid."
+  expected="valid input"
+  hint="Returning a nil typed pointer wraps it in a non-nil interface. When there is no error, return the literal nil — don't funnel the result through a typed variable."
+  code={String.raw`package main
+
+import "fmt"
+
+type validationError struct{ msg string }
+
+func (e *validationError) Error() string { return e.msg }
+
+func validate(input string) error {
+	var err *validationError
+	if input == "" {
+		err = &validationError{"input is empty"}
+	}
+	return err
+}
+
+func main() {
+	if err := validate("gopher"); err != nil {
+		fmt.Println("failed:", err)
+		return
+	}
+	fmt.Println("valid input")
+}`}
+  solution={String.raw`package main
+
+import "fmt"
+
+type validationError struct{ msg string }
+
+func (e *validationError) Error() string { return e.msg }
+
+func validate(input string) error {
+	if input == "" {
+		return &validationError{"input is empty"}
+	}
+	return nil // a literal nil interface, not a typed nil pointer
+}
+
+func main() {
+	if err := validate("gopher"); err != nil {
+		fmt.Println("failed:", err)
+		return
+	}
+	fmt.Println("valid input")
+}`} />
 
 Next: how types borrow behavior by embedding others — [struct & interface embedding](/fundamentals/embedding/).

@@ -70,6 +70,7 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Challenge from '../../components/islands/Challenge.tsx';
 
 <Callout type="analogy" title="🧵 Analogy">
 A string is a sealed strip of **bytes** — like film: the strip never changes (it's immutable), and what looks like one "picture" (a character) might span several frames (bytes). Reading frame-by-frame gives you raw bytes; reading picture-by-picture (with `range`) decodes UTF-8 and hands you whole characters, called **runes**.
@@ -248,5 +249,33 @@ The standard library deliberately stops at runes. For grapheme-cluster segmentat
 <Callout type="gotcha" title="⚠️ Slicing a string slices bytes, not characters">
 `s[a:b]` cuts on **byte** boundaries. If `a` or `b` lands in the middle of a multi-byte character, the substring is invalid UTF-8 (you'll see a replacement char `�`). When you need to slice by characters, convert to `[]rune` first, or use `unicode/utf8` to find safe boundaries. Also: a string slice still shares the original bytes — but since strings are immutable, that sharing is always safe to read. See [slices](/fundamentals/slices/) for the analogous (mutable) view semantics.
 </Callout>
+
+## 🐞 Fix the bug
+
+`héllo` has five letters, but this program insists on six. Edit until **Run & check** matches.
+
+<Challenge client:visible id="runes-count" title="rune-count.go"
+  brief="len(word) counts bytes, and é takes two bytes in UTF-8. Count the letters (runes), not the bytes."
+  expected="letters in héllo: 5"
+  hint="The unicode/utf8 package has a function that counts runes in a string. Converting to []rune and taking len of that works too."
+  code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	word := "héllo"
+	fmt.Println("letters in", word+":", len(word))
+}`}
+  solution={String.raw`package main
+
+import (
+	"fmt"
+	"unicode/utf8"
+)
+
+func main() {
+	word := "héllo"
+	fmt.Println("letters in", word+":", utf8.RuneCountInString(word))
+}`} />
 
 Next: giving your types behavior — [methods](/fundamentals/methods/).
