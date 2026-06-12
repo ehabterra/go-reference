@@ -31,6 +31,29 @@ const architectureCount = architecture.filter((p) => p.data.kind !== 'pattern').
 
 // unified progress across every page in the reference
 const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdlib, ...web, ...internals, ...systems, ...security, ...cloud, ...architecture].map((p) => p.id).join(',');
+
+// Ordered per-track manifest (same order the Pager uses) — embedded as JSON
+// so the client-side resume card can name the last page and pick "next up".
+const trackList = [
+  { base: '/fundamentals', name: 'Go Fundamentals', entries: fundamentals },
+  { base: '/patterns', name: 'Design Patterns', entries: patterns },
+  { base: '/concurrency', name: 'Concurrency', entries: concurrency },
+  { base: '/dsa', name: 'Data Structures & Algorithms', entries: dsa },
+  { base: '/stdlib', name: 'Standard Library & Tooling', entries: stdlib },
+  { base: '/web', name: 'Networking & Web', entries: web },
+  { base: '/internals', name: 'Go Internals', entries: internals },
+  { base: '/systems', name: 'Systems Programming', entries: systems },
+  { base: '/security', name: 'Security', entries: security },
+  { base: '/cloud', name: 'Cloud-Native', entries: cloud },
+  { base: '/architecture', name: 'Architecture', entries: architecture },
+];
+const resumeManifest = trackList.map((t) => ({
+  base: t.base,
+  name: t.name,
+  pages: [...t.entries]
+    .sort((a, b) => a.data.order - b.data.order)
+    .map((e) => ({ id: e.id, title: e.data.title, ...(e.data.quiz?.length ? { q: 1 } : {}) })),
+}));
 ---
 <BaseLayout>
   <header class="dp-hero">
@@ -43,6 +66,36 @@ const allSlugs = [...patterns, ...concurrency, ...dsa, ...fundamentals, ...stdli
       and progress that sticks. Pick a track and start.
     </p>
   </header>
+
+  <section class="dp-resume" data-dp-resume hidden>
+    <div class="dp-resume__info">
+      <p class="dp-resume__kicker" data-i18n="home.resumeKicker">Continue where you left off</p>
+      <h2 class="dp-resume__title" data-dp-resume-title></h2>
+      <p class="dp-resume__meta">
+        <span data-dp-resume-track></span> · <span data-dp-resume-count></span>
+        <span data-i18n="home.learnedSuffix">learned</span>
+      </p>
+    </div>
+    <div class="dp-resume__actions">
+      <a class="dp-btn dp-btn--primary" data-dp-resume-link><span data-i18n="home.resume">Resume</span> →</a>
+      <a class="dp-btn dp-btn--ghost" data-dp-resume-next hidden>
+        <span data-i18n="home.nextUp">Next up</span>: <span data-dp-resume-next-title></span>
+      </a>
+    </div>
+  </section>
+  <section class="dp-resume dp-resume--review" data-dp-review-card hidden>
+    <div class="dp-resume__info">
+      <p class="dp-resume__kicker" data-i18n="home.reviewKicker">Daily review</p>
+      <h2 class="dp-resume__title">
+        <span data-dp-review-count>0</span> <span data-i18n="home.reviewDue">pages due for a quick recall</span>
+      </h2>
+      <p class="dp-resume__meta" data-i18n="home.reviewNote">A few minutes of answering from memory is what makes it stick for good.</p>
+    </div>
+    <div class="dp-resume__actions">
+      <a class="dp-btn dp-btn--primary" href="/review/"><span data-i18n="home.reviewStart">Start review</span> →</a>
+    </div>
+  </section>
+  <script type="application/json" id="dp-resume-manifest" set:html={JSON.stringify(resumeManifest).replace(/</g, '\\u003c')}></script>
 
   <div class="dp-overall">
     <div class="dp-overall__top">

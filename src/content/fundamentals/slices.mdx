@@ -70,6 +70,7 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Challenge from '../../components/islands/Challenge.tsx';
 
 <Callout type="analogy" title="🪟 Analogy">
 A slice is a **window** onto a row of boxes (the backing array). The window knows where it starts, how many boxes it currently shows (`len`), and how many it *could* show before needing a bigger row (`cap`). Slide or resize the window and you're still looking at the same boxes — until you grow past the edge and Go quietly rents a longer row and moves your boxes into it.
@@ -154,7 +155,7 @@ The **three-index** form `s[a:b:c]` adds control over capacity: `len` is `b-a` a
 
 Because a sub-slice shares the parent's array, `append`ing to the sub-slice can **overwrite the parent's elements** if there's spare capacity — a silent, capacity-dependent bug. Capping capacity with the three-index form prevents it:
 
-<Playground client:visible title="aliasing-trap.go" code={String.raw`package main
+<Playground client:visible predict title="aliasing-trap.go" code={String.raw`package main
 
 import "fmt"
 
@@ -162,10 +163,10 @@ func main() {
 	// THE TRAP: a sub-slice shares the parent's backing array. If the sub-slice
 	// has spare capacity, append WRITES THROUGH into the parent.
 	parent := []int{1, 2, 3, 4, 5}
-	sub := parent[1:3] // [2 3], but cap reaches to the end of parent (cap 4)
+	sub := parent[1:3] // which elements? and how far does cap reach?
 	fmt.Printf("sub: %v  len=%d cap=%d\\n", sub, len(sub), cap(sub))
 
-	sub = append(sub, 99) // spare cap -> overwrites parent[3] in place!
+	sub = append(sub, 99) // there is spare cap — so where does 99 land?
 	fmt.Println("parent after append to sub:", parent)
 
 	// THE FIX: a full three-index slice s[a:b:c] caps the sub-slice's capacity
@@ -321,5 +322,36 @@ Because slices share a backing array, `append`ing to a sub-slice can overwrite e
 - [Structs](/fundamentals/structs/) — the element type you'll most often store in a slice; note its shallow-copy semantics interact with slice fields.
 - [Maps](/fundamentals/maps/) — the other built-in collection, for key-value lookups.
 - [Strings & runes](/fundamentals/strings-and-runes/) — a string is an immutable byte slice; `[]byte(s)` and `[]rune(s)` convert.
+
+## 🐞 Fix the bug
+
+`append` looks innocent — but when the slice still has spare capacity, it writes into the **shared backing array**. Here that write corrupts `nums`. Edit until **Run & check** matches.
+
+<Challenge client:visible id="slices-append-alias" title="aliasing.go"
+  brief="Appending 99 to prefix overwrites nums[2] because they share a backing array. prefix should grow without touching nums."
+  expected={"[1 2 99]\n[1 2 3]"}
+  hint="prefix := nums[:2] has capacity 3, so append writes in place. A full slice expression — nums[:2:2] — caps the capacity at 2 and forces append to allocate a fresh array. (An explicit copy works too.)"
+  code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	nums := []int{1, 2, 3}
+	prefix := nums[:2]
+	prefix = append(prefix, 99)
+	fmt.Println(prefix)
+	fmt.Println(nums)
+}`}
+  solution={String.raw`package main
+
+import "fmt"
+
+func main() {
+	nums := []int{1, 2, 3}
+	prefix := nums[:2:2] // cap the capacity: append must reallocate
+	prefix = append(prefix, 99)
+	fmt.Println(prefix)
+	fmt.Println(nums)
+}`} />
 
 Next: key-value lookups in (amortized) constant time — [maps](/fundamentals/maps/).

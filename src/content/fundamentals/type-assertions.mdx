@@ -253,7 +253,7 @@ So if your switch does the *same thing* in every arm — just over different ele
 Three things bite here. **First**, the single-result `x.(T)` **panics** on the wrong type — always use comma-ok unless you're certain. **Second**, you assert against the *dynamic type*, so a non-nil interface holding a **typed nil** (a nil `*T`) does **not** match `case nil` — its type half is filled, so it matches a `*T` or interface case instead. This is the same trap that makes `err == nil` lie when a function returns a typed nil error. **Third**, asserting to an interface tests the *method set*, so a value with a pointer-receiver method satisfies the interface only when the interface holds the *pointer* — the [method-set rule from interfaces](/fundamentals/interfaces/) applies to assertions too.
 </Callout>
 
-<Playground client:visible title="typed-nil.go" code={String.raw`package main
+<Playground client:visible predict title="typed-nil.go" code={String.raw`package main
 
 import "fmt"
 
@@ -261,8 +261,8 @@ type myErr struct{}
 
 func (*myErr) Error() string { return "boom" }
 
-// classify shows the typed-nil trap: a non-nil interface holding a nil *myErr
-// does NOT match case nil, because its dynamic type is non-nil.
+// classify probes the typed-nil trap: which case does an interface
+// holding a nil *myErr actually match?
 func classify(x any) string {
 	switch v := x.(type) {
 	case nil:

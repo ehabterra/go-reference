@@ -70,6 +70,7 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Challenge from '../../components/islands/Challenge.tsx';
 
 <Callout type="analogy" title="📖 Analogy">
 A map is a dictionary: you look something up by its **key** (the headword) and instantly get its **value** (the definition) — no scanning page by page. The keys are unordered, each appears once, and finding one takes about the same time whether the book has ten entries or ten million. That last property — near-constant lookup regardless of size — is the whole reason maps exist.
@@ -302,5 +303,32 @@ Also handy: `maps.Copy(dst, src)` merges entries, and `maps.DeleteFunc(m, pred)`
 <Callout type="gotcha" title="⚠️ You can't take the address of a map element">
 A map value isn't addressable, so `&m[k]` is a compile error and `m[k].Field = x` won't compile when the value is a struct — the map hands back a *copy*. To update a struct in a map, read it out, change the copy, and write it back: `v := m[k]; v.Field = x; m[k] = v`. (Or store pointers: `map[K]*T`, then `m[k].Field = x` works because you're mutating through the pointer.) The root cause is the same one from the internals section: growth relocates entries, so an element has no stable address to point at.
 </Callout>
+
+## 🐞 Fix the bug
+
+Reading from a nil map is safe — writing to one is not. This program compiles fine and then dies at runtime. Edit it until **Run & check** matches the expected output.
+
+<Challenge client:visible id="maps-nil-write" title="nil-map.go"
+  brief="The map is declared but never initialized, so the write panics. Make the program run and print the expected output."
+  expected="13"
+  hint="A nil map behaves like an empty map for reads, but any write panics. Something needs to allocate the map before the assignment — make() or a map literal."
+  code={String.raw`package main
+
+import "fmt"
+
+func main() {
+	var ages map[string]int
+	ages["gopher"] = 13
+	fmt.Println(ages["gopher"])
+}`}
+  solution={String.raw`package main
+
+import "fmt"
+
+func main() {
+	ages := make(map[string]int)
+	ages["gopher"] = 13
+	fmt.Println(ages["gopher"])
+}`} />
 
 Next: text up close, bytes and runes and UTF-8 — [strings & runes](/fundamentals/strings-and-runes/).

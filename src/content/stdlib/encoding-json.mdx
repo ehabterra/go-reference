@@ -70,6 +70,7 @@ quiz:
 import Callout from '../../components/Callout.astro';
 import Mermaid from '../../components/Mermaid.astro';
 import Playground from '../../components/islands/Playground.tsx';
+import Challenge from '../../components/islands/Challenge.tsx';
 
 <Callout type="analogy" title="📦 Analogy">
 JSON is a shipping container for data: `Marshal` packs a Go value into the standard box so it can travel over a network or into a file, and `Unmarshal` unpacks a box back into a Go value. Struct tags are the packing slip — they say which Go field maps to which label on the box, and which items to leave out.
@@ -246,5 +247,54 @@ Pass a **pointer** to `Unmarshal` (`&u`) — it has to write into your value; pa
 - [structs](/fundamentals/structs/) — struct tags, exported fields, and embedding (which flattens into JSON).
 - [reflection](/fundamentals/reflection/) — the mechanism `encoding/json` uses to read tags and fields at runtime.
 - [REST APIs](/web/rest-apis/) — decoding request bodies and encoding responses in handlers.
+
+## 🐞 Fix the bug
+
+`Marshal` runs without an error here — and produces `{}`. The struct's fields are invisible to `encoding/json`. Edit until **Run & check** matches.
+
+<Challenge client:visible id="json-unexported" title="marshal.go"
+  brief="encoding/json silently skips unexported fields, so nothing is emitted. Make it output both fields — with lowercase keys."
+  expected={'{"name":"Gopher","age":13}'}
+  hint="Marshal can only see exported (Capitalized) fields — reflection can't touch unexported ones. Export the fields, then use json struct tags to keep the lowercase key names."
+  code={String.raw`package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type user struct {
+	name string
+	age  int
+}
+
+func main() {
+	u := user{name: "Gopher", age: 13}
+	data, err := json.Marshal(u)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(data))
+}`}
+  solution={String.raw`package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type user struct {
+	Name string `+"`"+`json:"name"`+"`"+`
+	Age  int    `+"`"+`json:"age"`+"`"+`
+}
+
+func main() {
+	u := user{Name: "Gopher", Age: 13}
+	data, err := json.Marshal(u)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(data))
+}`} />
 
 Next: generating text and safe HTML from data — [templates](/stdlib/templates/).

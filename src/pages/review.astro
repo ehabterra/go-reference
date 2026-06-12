@@ -1,0 +1,90 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+// The full quiz bank, embedded at build time. Only pages with quizzes are
+// included; review.js intersects it with the visitor's learned set and the
+// dp-review schedule to build a session.
+const collections = [
+  { base: '/fundamentals', name: 'Go Fundamentals', entries: await getCollection('fundamentals') },
+  { base: '/patterns', name: 'Design Patterns', entries: await getCollection('patterns') },
+  { base: '/concurrency', name: 'Concurrency', entries: await getCollection('concurrency') },
+  { base: '/dsa', name: 'Data Structures & Algorithms', entries: await getCollection('dsa') },
+  { base: '/stdlib', name: 'Standard Library & Tooling', entries: await getCollection('stdlib') },
+  { base: '/web', name: 'Networking & Web', entries: await getCollection('web') },
+  { base: '/internals', name: 'Go Internals', entries: await getCollection('internals') },
+  { base: '/systems', name: 'Systems Programming', entries: await getCollection('systems') },
+  { base: '/security', name: 'Security', entries: await getCollection('security') },
+  { base: '/cloud', name: 'Cloud-Native', entries: await getCollection('cloud') },
+  { base: '/architecture', name: 'Architecture', entries: await getCollection('architecture') },
+];
+const bank = collections.flatMap((c) =>
+  c.entries
+    .filter((e) => e.data.quiz?.length)
+    .map((e) => ({
+      id: e.id,
+      title: e.data.title,
+      url: `${c.base}/${e.id}/`,
+      track: c.name,
+      quiz: e.data.quiz,
+    }))
+);
+---
+<BaseLayout title="Daily review" description="Spaced-repetition recall of the Go pages you've learned.">
+  <div class="dp-review">
+    <header class="dp-review__head">
+      <p class="dp-resume__kicker" data-i18n="home.reviewKicker">Daily review</p>
+      <h1 data-i18n="review.title">Check what stuck</h1>
+      <p class="dp-review__lede" data-i18n="review.lede">
+        Quick questions from pages you've marked as learned — each one comes back
+        right before you'd forget it. Answer well and it returns later; miss it
+        and it returns tomorrow.
+      </p>
+    </header>
+
+    <div class="dp-review__empty" data-dp-review-empty hidden>
+      <p class="dp-review__emoji">🎉</p>
+      <h2 data-i18n="review.none">Nothing due right now</h2>
+      <p class="dp-review__hint" data-dp-review-nextwrap hidden>
+        <span data-i18n="review.nextAt">Your next review unlocks</span>
+        <strong data-dp-review-next></strong>
+      </p>
+      <p class="dp-review__hint" data-dp-review-nolearned hidden data-i18n="review.empty">
+        Mark pages as “learned” while you read and their quiz questions will come
+        back here on a schedule designed to beat forgetting.
+      </p>
+      <a class="dp-btn dp-btn--primary" href="/" data-i18n="review.browse">Browse the tracks →</a>
+    </div>
+
+    <div data-dp-review-session hidden>
+      <div class="dp-review__meta">
+        <span class="dp-review__progress" data-dp-review-progress></span>
+        <a class="dp-review__src" data-dp-review-src href="#"></a>
+      </div>
+      <div class="dp-quiz dp-review__quiz" data-dp-review-q></div>
+      <div class="dp-review__nav">
+        <button class="dp-btn dp-btn--primary" data-dp-review-nextbtn hidden>
+          <span data-i18n="review.next">Next</span> →
+        </button>
+      </div>
+    </div>
+
+    <div class="dp-review__empty" data-dp-review-done hidden>
+      <p class="dp-review__emoji">✅</p>
+      <h2><span data-i18n="review.scorePrefix">You remembered</span> <span data-dp-review-score></span></h2>
+      <p class="dp-review__hint" data-i18n="review.comeback">
+        What you got right comes back later — misses come back tomorrow.
+      </p>
+      <p class="dp-review__hint" data-dp-review-streak hidden>
+        🔥 <strong data-dp-review-streak-n></strong>
+        <span data-i18n="review.streak">day streak — see you tomorrow!</span>
+      </p>
+      <a class="dp-btn dp-btn--ghost" href="/" data-i18n="review.browse">Browse the tracks →</a>
+    </div>
+  </div>
+
+  {/* <-escape: quiz text contains literal "</script>" (web-security), which
+      would otherwise terminate this script element mid-JSON */}
+  <script type="application/json" id="dp-review-bank" set:html={JSON.stringify(bank).replace(/</g, '\\u003c')}></script>
+  <script>import '../scripts/review.js';</script>
+</BaseLayout>

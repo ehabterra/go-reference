@@ -1,6 +1,7 @@
 // Shared plumbing for the social endpoints (/api/likes, /api/progress).
-// Identity is the visitor's email (asked once, kept in localStorage) — the
-// database only ever sees a salted SHA-256 of it, never the address itself.
+// Identity is a SHA-256 fingerprint of the visitor's email, computed in the
+// browser (src/lib/visitor.ts) — the address itself never reaches the server,
+// so neither the Worker nor the database ever see it.
 
 // Minimal structural types for the D1 binding so we don't need
 // @cloudflare/workers-types for a couple of tables.
@@ -15,11 +16,12 @@ export interface D1Database {
   batch(statements: D1PreparedStatement[]): Promise<unknown>;
 }
 
-const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/;
+// A visitor id is the lowercase hex of a SHA-256 digest, nothing else.
+const VISITOR_RE = /^[a-f0-9]{64}$/;
 
-export function normalizeEmail(raw: unknown): string {
-  const email = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-  return email.length <= 254 && EMAIL_RE.test(email) ? email : '';
+export function normalizeVisitor(raw: unknown): string {
+  const visitor = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return VISITOR_RE.test(visitor) ? visitor : '';
 }
 
 export function json(obj: unknown, status = 200) {
@@ -31,17 +33,4 @@ export function json(obj: unknown, status = 200) {
 
 export function getDB(locals: unknown): D1Database | null {
   return (locals as any)?.runtime?.env?.DB ?? null;
-}
-
-// Salting keeps the stored hashes from being reversed with a dictionary of
-// known addresses. Optionally set a private LIKES_SALT in production
-// (`wrangler secret put LIKES_SALT`); changing it later orphans old data.
-function getSalt(locals: unknown): string {
-  return (locals as any)?.runtime?.env?.LIKES_SALT || 'go-reference-likes-v1';
-}
-
-export async function visitorFor(locals: unknown, email: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`${getSalt(locals)}:${email}`);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
