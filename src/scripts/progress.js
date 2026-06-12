@@ -2,6 +2,7 @@
 import { EMAIL_RE, userEmail, setUserEmail, visitorHash, maskEmail } from '../lib/visitor';
 import { t } from '../lib/i18n-client';
 import { loadReview, saveReview, scheduleNew, dropSlug, seed, dueSlugs } from '../lib/review-store';
+import { touchStreak, currentStreak } from '../lib/streak-store';
 
 const STORE_KEY = 'dp-progress';
 
@@ -23,6 +24,7 @@ function setLearned(slug, on) {
   const review = loadReview();
   if (on) scheduleNew(review, slug); else dropSlug(review, slug);
   saveReview(review);
+  if (on) touchStreak();
   window.dispatchEvent(new CustomEvent('dp:progress', { detail: { slug, on } }));
 }
 
@@ -275,6 +277,115 @@ function initProgressViews() {
   });
 }
 
+/* --- milestones & streak ------------------------------------------------ */
+const MILESTONES = [
+  { pct: 25, emoji: '🥉', key: 'ms.apprentice', name: 'Apprentice' },
+  { pct: 50, emoji: '🥈', key: 'ms.journeyman', name: 'Journeyman' },
+  { pct: 75, emoji: '🥇', key: 'ms.expert', name: 'Expert' },
+  { pct: 100, emoji: '🏆', key: 'ms.master', name: 'Master Gopher' },
+];
+const MS_SEEN_KEY = 'dp-ms-seen';
+
+function confettiBurst() {
+  const wrap = document.createElement('div');
+  wrap.className = 'dp-confetti';
+  const colors = ['#00c2f2', '#34d399', '#fbbf24', '#a78bfa', '#fb7185', '#6bd7ee'];
+  for (let i = 0; i < 60; i++) {
+    const p = document.createElement('i');
+    p.style.left = Math.random() * 100 + 'vw';
+    p.style.background = colors[i % colors.length];
+    p.style.animationDelay = Math.random() * 0.4 + 's';
+    p.style.animationDuration = 1.8 + Math.random() * 1.4 + 's';
+    wrap.appendChild(p);
+  }
+  document.body.appendChild(wrap);
+  setTimeout(() => wrap.remove(), 3800);
+}
+
+function showToast(text) {
+  const el = document.createElement('div');
+  el.className = 'dp-nudge dp-nudge--toast';
+  el.setAttribute('role', 'status');
+  const p = document.createElement('p');
+  p.className = 'dp-nudge__text';
+  p.textContent = text;
+  el.appendChild(p);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+/* Celebrate crossing 25/50/75/100% of the current track, at the moment the
+   page is marked learned. dp-ms-seen remembers the highest celebrated pct
+   per track so un-learning and re-learning doesn't re-fire the party. */
+function initMilestoneWatch() {
+  const el = document.getElementById('dp-track-info');
+  if (!el) return;
+  let info;
+  try { info = JSON.parse(el.textContent || ''); } catch { return; }
+  if (!info?.slugs?.length) return;
+  window.addEventListener('dp:progress', (e) => {
+    const { slug, on } = e.detail || {};
+    if (!on || !info.slugs.includes(slug)) return;
+    const total = info.slugs.length;
+    const done = info.slugs.filter(isLearned).length;
+    const before = ((done - 1) / total) * 100;
+    const after = (done / total) * 100;
+    const crossed = MILESTONES.filter((m) => before < m.pct && after >= m.pct).pop();
+    if (!crossed) return;
+    let seen = {};
+    try { seen = JSON.parse(localStorage.getItem(MS_SEEN_KEY) || '{}') || {}; } catch {}
+    if ((seen[info.name] || 0) >= crossed.pct) return;
+    seen[info.name] = crossed.pct;
+    try { localStorage.setItem(MS_SEEN_KEY, JSON.stringify(seen)); } catch {}
+    confettiBurst();
+    showToast(`${crossed.emoji} ${info.name} · ${crossed.pct}% — ${t(crossed.key, crossed.name)}!`);
+  });
+}
+
+/* Badge chips under every track/overall progress bar (injected, like the
+   sync buttons, so the 12 landing templates stay untouched). */
+function initMilestoneChips() {
+  document.querySelectorAll('.dp-overall [data-dp-progress]').forEach((bar) => {
+    const slugs = (bar.getAttribute('data-slugs') || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (slugs.length < 4) return;
+    const row = document.createElement('div');
+    row.className = 'dp-ms';
+    const render = () => {
+      const pct = (slugs.filter(isLearned).length / slugs.length) * 100;
+      row.innerHTML = '';
+      for (const m of MILESTONES) {
+        const chip = document.createElement('span');
+        chip.className = 'dp-ms__chip' + (pct >= m.pct ? ' is-on' : '');
+        chip.textContent = `${m.emoji} ${t(m.key, m.name)}`;
+        chip.title = `${m.pct}%`;
+        row.appendChild(chip);
+      }
+    };
+    bar.insertAdjacentElement('afterend', row);
+    window.addEventListener('dp:progress', render);
+    render();
+  });
+}
+
+/* "🔥 N" chip beside the overall progress title on the hub. */
+function initStreakChip() {
+  if (location.pathname !== '/') return;
+  const top = document.querySelector('.dp-overall__top');
+  if (!top) return;
+  const chip = document.createElement('span');
+  chip.className = 'dp-streak';
+  const render = () => {
+    const { c, b } = currentStreak();
+    chip.hidden = c < 2; // only show once it's a real streak
+    chip.textContent = `🔥 ${c}`;
+    chip.title = `${c} ${t('streak.days', 'day learning streak')} · ${t('streak.best', 'best')} ${b}`;
+  };
+  window.addEventListener('dp:streak', render);
+  window.addEventListener('dp:progress', render);
+  top.querySelector('strong')?.insertAdjacentElement('afterend', chip);
+  render();
+}
+
 /* --- resume card: remember the last visited page, surface it on the hub --- */
 const LAST_KEY = 'dp-last';
 
@@ -437,6 +548,9 @@ function boot() {
   recordVisit();
   initResume();
   initReviewCard();
+  initMilestoneWatch();
+  initMilestoneChips();
+  initStreakChip();
   initToc();
   initQuiz();
 }

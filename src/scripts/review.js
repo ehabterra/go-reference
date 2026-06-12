@@ -2,6 +2,7 @@
    Reuses the page-quiz styling (.dp-q / .dp-opt) but runs one question at a
    time, interleaved across pages, then reschedules each page by result. */
 import { loadReview, saveReview, seed, dueSlugs, nextDue, applyResult } from '../lib/review-store';
+import { touchStreak } from '../lib/streak-store';
 
 const MAX_QUESTIONS = 12; // ≈ a five-minute session
 const PER_PAGE = 2;
@@ -87,6 +88,15 @@ function boot() {
     sessionEl.hidden = true;
     doneEl.hidden = false;
     doneEl.querySelector('[data-dp-review-score]').textContent = `${totalRight} / ${session.length}`;
+    // a finished review is a learning action — it keeps the streak alive
+    const streak = touchStreak();
+    if (streak.c >= 2) {
+      const line = doneEl.querySelector('[data-dp-review-streak]');
+      if (line) {
+        line.hidden = false;
+        line.querySelector('[data-dp-review-streak-n]').textContent = String(streak.c);
+      }
+    }
   }
 
   function show() {

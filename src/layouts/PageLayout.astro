@@ -1,4 +1,5 @@
 ---
+import { getCollection } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
 import PageHeader from '../components/PageHeader.astro';
 import DraftScaffold from '../components/DraftScaffold.astro';
@@ -25,6 +26,14 @@ const catLabel = cap(d.category.replace(/-/g, ' '));
 // Per-page Arabic content (ordered to match the runtime block collector).
 const contentModules = import.meta.glob('../i18n/content/*.json', { eager: true });
 const contentAr = (contentModules[`../i18n/content/${entry.id}.json`] as any)?.default ?? [];
+
+// The track's full slug list, so marking a page learned can detect milestone
+// crossings (25/50/75/100%) right at the moment they happen.
+const trackEntries = await getCollection(collection);
+const trackInfo = {
+  name: sectionTitle,
+  slugs: [...trackEntries].sort((a, b) => a.data.order - b.data.order).map((e) => e.id),
+};
 ---
 <BaseLayout title={d.title} description={d.intent}>
   <article>
@@ -63,5 +72,6 @@ const contentAr = (contentModules[`../i18n/content/${entry.id}.json`] as any)?.d
   </article>
 
   <script type="application/json" id="dp-content-ar" set:html={JSON.stringify(contentAr)}></script>
+  <script type="application/json" id="dp-track-info" set:html={JSON.stringify(trackInfo).replace(/</g, '\\u003c')}></script>
   <script>import '../scripts/mermaid.js';</script>
 </BaseLayout>
