@@ -391,6 +391,49 @@ function initStreakChip() {
   render();
 }
 
+/* --- light / dark theme toggle (default dark; light is opt-in) --- */
+function applyGiscusTheme(light) {
+  const frame = document.querySelector('iframe.giscus-frame');
+  frame?.contentWindow?.postMessage(
+    { giscus: { setConfig: { theme: light ? 'light' : 'transparent_dark' } } },
+    'https://giscus.app'
+  );
+}
+
+function initTheme() {
+  const root = document.documentElement;
+  const btn = document.querySelector('[data-dp-theme]');
+  const render = () => {
+    if (btn) btn.textContent = root.dataset.theme === 'light' ? '🌙' : '☀️';
+  };
+  btn?.addEventListener('click', () => {
+    const light = root.dataset.theme !== 'light';
+    if (light) root.dataset.theme = 'light';
+    else delete root.dataset.theme;
+    try {
+      if (light) localStorage.setItem('dp-theme', 'light');
+      else localStorage.removeItem('dp-theme');
+    } catch {}
+    render();
+    applyGiscusTheme(light);
+    window.dispatchEvent(new CustomEvent('dp:theme', { detail: { light } }));
+  });
+  render();
+  // giscus loads lazily with a dark default — re-theme it for light-mode
+  // visitors once its iframe shows up
+  if (root.dataset.theme === 'light') {
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (document.querySelector('iframe.giscus-frame')) {
+        clearInterval(timer);
+        setTimeout(() => applyGiscusTheme(true), 800);
+      } else if (++tries > 30) {
+        clearInterval(timer);
+      }
+    }, 500);
+  }
+}
+
 /* --- "most liked pages" strip on the hub — social proof from real likes --- */
 function initTopLikes() {
   const wrap = document.querySelector('[data-dp-toplikes]');
@@ -619,6 +662,7 @@ function initQuiz() {
 }
 
 function boot() {
+  initTheme();
   initLearnButton();
   initProgressViews();
   initReset();

@@ -984,3 +984,67 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-comments { margin: 2.6rem 0 1rem; padding-top: 1.8rem; border-top: 1px solid var(--dp-border); }
 .dp-comments__title { font-size: 1.35rem; margin: 0 0 .3rem; }
 .dp-comments__hint { color: var(--dp-muted); font-size: .9rem; margin: 0 0 1.2rem; }
+
+/* =====================================================================
+   Light theme — opt-in via the ☀️ toggle ([data-theme="light"] on <html>).
+   Everything token-driven adapts from the overrides below; the rest are
+   spot fixes for dark-assuming values.
+   ===================================================================== */
+/* Shiki emits both palettes as CSS vars (defaultColor:false) — pick here. */
+.astro-code, .astro-code span { color: var(--shiki-dark); }
+[data-theme="light"] .astro-code, [data-theme="light"] .astro-code span { color: var(--shiki-light); }
+
+[data-theme="light"] {
+  --dp-accent:        #0792b4;
+  --dp-accent-2:      #056a85;
+  --dp-bg:            #f4f7fa;
+  --dp-bg-2:          #e9eef4;
+  --dp-surface:       #ffffff;
+  --dp-surface-2:     #f1f5f9;
+  --dp-surface-3:     #e2e8f0;
+  --dp-border:        #d9e1ea;
+  --dp-border-strong: #bfcad7;
+  --dp-text:          #16202b;
+  --dp-muted:         #51647a;
+  --dp-shadow:        0 18px 50px -12px rgba(15, 30, 50, .18);
+  --dp-shadow-sm:     0 6px 20px -8px rgba(15, 30, 50, .12);
+  --dp-glow:          0 0 0 1px rgba(7, 146, 180, .22), 0 14px 40px -10px rgba(7, 146, 180, .16);
+}
+[data-theme="light"] a:hover,
+[data-theme="light"] .dp-brand:hover,
+[data-theme="light"] .dp-btn:hover { color: #0a1320; }
+[data-theme="light"] .dp-card:hover,
+[data-theme="light"] .dp-topic:not(.dp-topic--soon):hover { color: #0a1320; }
+[data-theme="light"] .dp-hero h1 {
+  background: linear-gradient(92deg, #16202b, var(--dp-accent));
+  -webkit-background-clip: text; background-clip: text;
+}
+[data-theme="light"] .dp-prose tr:nth-child(even) td { background: rgba(15, 30, 50, .03); }
+[data-theme="light"] .dp-btn--primary,
+[data-theme="light"] .dp-btn--primary:hover { color: #ffffff; }
+[data-theme="light"] .dp-brand__mark { color: #ffffff; }
+
+/* inline code: dark-fixed text color → readable dark-on-light */
+[data-theme="light"] .dp-prose code:not(pre code) { color: #15324a; }
+
+/* code blocks: light canvas (the Shiki vars above supply light tokens) */
+[data-theme="light"] .dp-prose pre:not(.mermaid) { background: #f6f8fa !important; }
+
+/* mermaid: the diagram renders with the `neutral` theme on light — drop the
+   dark prose-pre canvas behind it */
+[data-theme="light"] .dp-prose pre.mermaid { background: transparent !important; }
+
+/* playground & challenges: light editor canvas + a light prism palette */
+[data-theme="light"] .dp-pg__editor { background: #fbfdff; color: #1d2935; caret-color: #1d2935; }
+[data-theme="light"] .dp-pg .token.comment, [data-theme="light"] .dp-pg .token.prolog,
+[data-theme="light"] .dp-pg .token.doctype, [data-theme="light"] .dp-pg .token.cdata { color: #64748b; }
+[data-theme="light"] .dp-pg .token.string, [data-theme="light"] .dp-pg .token.char { color: #047857; }
+[data-theme="light"] .dp-pg .token.keyword { color: #7c3aed; }
+[data-theme="light"] .dp-pg .token.boolean, [data-theme="light"] .dp-pg .token.number,
+[data-theme="light"] .dp-pg .token.constant, [data-theme="light"] .dp-pg .token.symbol { color: #b45309; }
+[data-theme="light"] .dp-pg .token.function, [data-theme="light"] .dp-pg .token.builtin,
+[data-theme="light"] .dp-pg .token.class-name { color: #1d4ed8; }
+[data-theme="light"] .dp-pg .token.operator, [data-theme="light"] .dp-pg .token.punctuation { color: #475569; }
+[data-theme="light"] .dp-pg__out--err { color: #b91c1c; }
+[data-theme="light"] .dp-pg__out--ok { color: #047857; }
+[data-theme="light"] .dp-chal__expected pre { color: #047857; }
