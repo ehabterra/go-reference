@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { getDB, json, normalizeEmail, visitorFor, type D1Database } from '../../lib/social-db';
 
 // Per-page likes, stored in Cloudflare D1 (binding `DB` in wrangler.jsonc).
 // A like is keyed by the visitor's email (asked once, kept in localStorage) —
@@ -10,48 +11,7 @@ import type { APIRoute } from 'astro';
 //   POST /api/likes  { page, email, liked }               → { count, liked }
 export const prerender = false;
 
-// Minimal structural types for the D1 binding so we don't need
-// @cloudflare/workers-types for a single table.
-interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(): Promise<T | null>;
-  run(): Promise<unknown>;
-}
-interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-}
-
 const PAGE_RE = /^\/[a-z0-9][a-z0-9/_-]{0,199}$/i;
-const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/;
-
-function normalizeEmail(raw: unknown): string {
-  const email = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-  return email.length <= 254 && EMAIL_RE.test(email) ? email : '';
-}
-
-// Salting keeps the stored hashes from being reversed with a dictionary of
-// known addresses. Optionally set a private LIKES_SALT in production
-// (`wrangler secret put LIKES_SALT`); changing it later orphans old likes.
-function getSalt(locals: unknown): string {
-  return (locals as any)?.runtime?.env?.LIKES_SALT || 'go-reference-likes-v1';
-}
-
-async function hashEmail(email: string, salt: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`${salt}:${email}`);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function json(obj: unknown, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-function getDB(locals: unknown): D1Database | null {
-  return (locals as any)?.runtime?.env?.DB ?? null;
-}
 
 // Bootstrap the table on the first request per isolate — IF NOT EXISTS makes
 // it a no-op afterwards, and it spares both dev and prod a migration step.
@@ -99,7 +59,7 @@ export const GET: APIRoute = async ({ url, locals }) => {
 
   try {
     await ensureSchema(db);
-    const visitor = email ? await hashEmail(email, getSalt(locals)) : '';
+    const visitor = email ? await visitorFor(locals, email) : '';
     return json(await state(db, page, visitor));
   } catch {
     return json({ error: 'Storage unavailable.' }, 503);
@@ -126,7 +86,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
   try {
     await ensureSchema(db);
-    const visitor = await hashEmail(email, getSalt(locals));
+    const visitor = await visitorFor(locals, email);
     if (liked) {
       await db
         .prepare('INSERT OR IGNORE INTO likes (page, visitor_id) VALUES (?1, ?2)')
