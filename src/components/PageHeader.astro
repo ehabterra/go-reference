@@ -1,5 +1,5 @@
 ---
-const { data: d, slug, topicLabel = 'Concurrency' } = Astro.props;
+const { data: d, slug, topicLabel = 'Concurrency', minutes } = Astro.props;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const catLabel = cap(d.category.replace(/-/g, ' '));
 const eyebrow =
@@ -17,6 +17,7 @@ const eyebrow =
   <div class="dp-badges" style="margin-top:1.1rem">
     <span class="dp-badge" data-cat={d.category}><span class="dp-dot"></span>{catLabel}</span>
     {d.difficulty && <span class="dp-badge dp-badge--muted">{d.difficulty}</span>}
+    {minutes && <span class="dp-badge dp-badge--muted">⏱ {minutes} min read</span>}
     <span class="dp-badge dp-badge--muted">{d.status === 'ready' ? 'Complete' : 'Draft — more coming'}</span>
   </div>
   {(d.source || d.playground) && (

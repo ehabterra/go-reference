@@ -9,6 +9,7 @@ import QuizBlock from '../components/QuizBlock.astro';
 import Pager from '../components/Pager.astro';
 import Comments from '../components/Comments.astro';
 import LikeButton from '../components/islands/LikeButton.tsx';
+import { readingTime } from '../lib/reading-time';
 
 const {
   entry,
@@ -41,7 +42,7 @@ const trackInfo = {
       <a href={sectionHref}>{sectionTitle}</a> › <span>{catLabel}</span> › <span>{d.title}</span>
     </nav>
 
-    <PageHeader data={d} slug={entry.id} topicLabel={topicLabel} />
+    <PageHeader data={d} slug={entry.id} topicLabel={topicLabel} minutes={readingTime(entry.body)} />
 
     <div class="dp-article">
       <div class="dp-article__body dp-prose">

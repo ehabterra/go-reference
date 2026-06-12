@@ -3,6 +3,7 @@ import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
 import Card from '../../components/Card.astro';
+import { readingTime } from '../../lib/reading-time';
 import SkillTree from '../../components/SkillTree.astro';
 import { INTERNALS_CATEGORIES } from '../../lib/consts';
 
@@ -57,6 +58,7 @@ const cheat = topics.find((t) => t.id === 'internals-cheatsheet');
           intent={cheat.data.intent}
           numLabel={`REFERENCE · ${cheat.data.difficulty}`}
           footLabel="One-page recap"
+          minutes={readingTime(cheat.body)}
           base="/internals"
         />
       </div>
