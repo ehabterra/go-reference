@@ -1,12 +1,13 @@
 import type { APIRoute } from 'astro';
-import { getDB, json, normalizeEmail, visitorFor, type D1Database } from '../../lib/social-db';
+import { getDB, json, normalizeVisitor, type D1Database } from '../../lib/social-db';
 
-// Cross-device "mark as learned" sync, keyed by the same hashed email as
-// likes. localStorage stays the source of truth on each device; this endpoint
-// lets devices that share an email converge on the union of their marks.
+// Cross-device "mark as learned" sync, keyed by the same browser-computed
+// email fingerprint as likes (the address never reaches the server).
+// localStorage stays the source of truth on each device; this endpoint lets
+// devices that share an email converge on the union of their marks.
 //
-//   GET  /api/progress?email=<email>          → { slugs: string[] }
-//   POST /api/progress { email, slugs, learned } → { ok, count }
+//   GET  /api/progress?visitor=<hash>              → { slugs: string[] }
+//   POST /api/progress { visitor, slugs, learned } → { ok, count }
 export const prerender = false;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9/_-]{0,199}$/i;
@@ -33,15 +34,14 @@ function ensureSchema(db: D1Database) {
 }
 
 export const GET: APIRoute = async ({ url, locals }) => {
-  const email = normalizeEmail(url.searchParams.get('email'));
-  if (!email) return json({ error: 'A valid email is required.' }, 400);
+  const visitor = normalizeVisitor(url.searchParams.get('visitor'));
+  if (!visitor) return json({ error: 'A visitor id is required.' }, 400);
 
   const db = getDB(locals);
   if (!db) return json({ error: 'Progress sync is not configured.' }, 503);
 
   try {
     await ensureSchema(db);
-    const visitor = await visitorFor(locals, email);
     const { results } = await db
       .prepare('SELECT slug FROM progress WHERE visitor_id = ?1')
       .bind(visitor)
@@ -53,19 +53,19 @@ export const GET: APIRoute = async ({ url, locals }) => {
 };
 
 export const POST: APIRoute = async ({ request, locals }) => {
-  let email = '';
+  let visitor = '';
   let slugs: string[] = [];
   let learned = false;
   try {
     const body = await request.json();
-    email = normalizeEmail(body?.email);
+    visitor = normalizeVisitor(body?.visitor);
     const raw = Array.isArray(body?.slugs) ? body.slugs : [body?.slug];
     slugs = raw.filter((s: unknown): s is string => typeof s === 'string' && SLUG_RE.test(s));
     learned = body?.learned === true;
   } catch {
     return json({ error: 'Invalid request body.' }, 400);
   }
-  if (!email) return json({ error: 'A valid email is required.' }, 400);
+  if (!visitor) return json({ error: 'A visitor id is required.' }, 400);
   if (!slugs.length) return json({ error: 'No valid slugs.' }, 400);
   if (slugs.length > MAX_BULK) slugs = slugs.slice(0, MAX_BULK);
 
@@ -74,7 +74,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
   try {
     await ensureSchema(db);
-    const visitor = await visitorFor(locals, email);
     const sql = learned
       ? 'INSERT OR IGNORE INTO progress (visitor_id, slug) VALUES (?1, ?2)'
       : 'DELETE FROM progress WHERE visitor_id = ?1 AND slug = ?2';

@@ -1,5 +1,18 @@
 /* Progress tracking, quiz, TOC + scrollspy — no framework, runs on every page. */
+import { EMAIL_RE, userEmail, setUserEmail, visitorHash, maskEmail } from '../lib/visitor';
+
 const STORE_KEY = 'dp-progress';
+
+/* Injected strings, translated through the same dict ui.js uses. */
+function t(key, fallback) {
+  try {
+    if (localStorage.getItem('dp-lang') !== 'ar') return fallback;
+    const dict = JSON.parse(document.getElementById('dp-i18n')?.textContent || '{}');
+    return dict[key] || fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function loadLearned() {
   try { return new Set(JSON.parse(localStorage.getItem(STORE_KEY) || '[]')); }
@@ -18,32 +31,26 @@ function setLearned(slug, on) {
   window.dispatchEvent(new CustomEvent('dp:progress', { detail: { slug, on } }));
 }
 
-/* --- cross-device sync — same email (and hashed storage) as page likes --- */
-const EMAIL_KEY = 'dp-email';
-const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/;
-
-function userEmail() {
-  try { return localStorage.getItem(EMAIL_KEY) || ''; } catch { return ''; }
-}
-function setUserEmail(email) {
-  try { localStorage.setItem(EMAIL_KEY, email); } catch {}
-}
-
-function pushProgress(slugs, on) {
+/* --- cross-device sync — same email fingerprint as page likes --- */
+async function pushProgress(slugs, on) {
   const email = userEmail();
   if (!email || !slugs.length) return;
-  fetch('/api/progress', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, slugs, learned: on }),
-  }).catch(() => {});
+  try {
+    const visitor = await visitorHash(email);
+    fetch('/api/progress', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visitor, slugs, learned: on }),
+    }).catch(() => {});
+  } catch {}
 }
 
 async function syncProgress() {
   const email = userEmail();
   if (!email) return;
   try {
-    const res = await fetch('/api/progress?email=' + encodeURIComponent(email));
+    const visitor = await visitorHash(email);
+    const res = await fetch('/api/progress?visitor=' + visitor);
     if (!res.ok) return;
     const server = new Set((await res.json()).slugs || []);
     const localOnly = [...learned].filter((s) => !server.has(s));
@@ -110,69 +117,158 @@ function initReset() {
   });
 }
 
-/* "Sync across devices" UI — injected next to every Reset button (track
-   landings) and under the sidebar's learn button, so no template changes. */
-function maskEmail(email) {
-  const at = email.indexOf('@');
-  const user = email.slice(0, at);
-  return (user.length > 2 ? user.slice(0, 2) + '…' : user) + email.slice(at);
+/* --- the one email entry point: the header dialog (Nav.astro) ------------
+   Everything else — like button, sync buttons, the nudge — just opens it
+   (via openAccountDialog / the dp:ask-email event) and listens for dp:email. */
+let accountDialog = null;
+
+function openAccountDialog() {
+  if (!accountDialog) return;
+  const input = accountDialog.querySelector('input[type="email"]');
+  input.value = userEmail();
+  accountDialog.showModal();
+  input.focus();
 }
 
-function buildSyncUI() {
-  const wrap = document.createElement('div');
-  wrap.className = 'dp-sync';
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'dp-btn dp-btn--ghost dp-btn--sm dp-sync__btn';
-  const form = document.createElement('form');
-  form.className = 'dp-sync__form';
-  form.hidden = true;
-  const input = document.createElement('input');
-  input.type = 'email';
-  input.required = true;
-  input.placeholder = 'you@example.com';
-  input.setAttribute('aria-label', 'Your email');
-  const save = document.createElement('button');
-  save.type = 'submit';
-  save.className = 'dp-btn dp-btn--sm dp-btn--primary';
-  save.textContent = 'Sync';
-  const note = document.createElement('span');
-  note.className = 'dp-sync__note';
-  note.textContent = 'Saves your progress under this email (stored hashed) so you can pick it up on any device.';
-  form.append(input, save, note);
+function initAccount() {
+  accountDialog = document.querySelector('[data-dp-account]');
+  const trigger = document.querySelector('[data-dp-account-btn]');
+  if (!accountDialog || !trigger) return;
+  const label = trigger.querySelector('[data-dp-account-label]');
+  const status = accountDialog.querySelector('[data-dp-account-status]');
+  const statusEmail = accountDialog.querySelector('[data-dp-account-email]');
+  const form = accountDialog.querySelector('[data-dp-account-form]');
+  const input = form.querySelector('input[type="email"]');
+  const removeBtn = accountDialog.querySelector('[data-dp-account-remove]');
+  const cancelBtn = accountDialog.querySelector('[data-dp-account-cancel]');
+
   const render = () => {
     const email = userEmail();
-    btn.textContent = email ? `⇅ Synced · ${maskEmail(email)}` : '⇅ Sync across devices…';
-    btn.title = email
-      ? 'Progress is saved under this email. Click to change it.'
-      : 'Enter your email to keep your progress on any device.';
+    trigger.classList.toggle('is-on', !!email);
+    if (email) {
+      // a masked address mustn't be overwritten by the i18n pass
+      label.removeAttribute('data-i18n');
+      label.textContent = maskEmail(email);
+    } else {
+      label.setAttribute('data-i18n', 'nav.sync');
+      label.textContent = t('nav.sync', 'Sync');
+    }
+    status.hidden = !email;
+    if (email) statusEmail.textContent = email;
+    removeBtn.hidden = !email;
   };
-  btn.addEventListener('click', () => {
-    form.hidden = !form.hidden;
-    if (!form.hidden) { input.value = userEmail(); input.focus(); }
+
+  trigger.addEventListener('click', openAccountDialog);
+  cancelBtn.addEventListener('click', () => accountDialog.close());
+  removeBtn.addEventListener('click', () => {
+    setUserEmail('');
+    accountDialog.close();
+    window.dispatchEvent(new CustomEvent('dp:email', { detail: { email: '' } }));
   });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const email = input.value.trim().toLowerCase();
     if (!EMAIL_RE.test(email)) return;
     setUserEmail(email);
-    form.hidden = true;
+    accountDialog.close();
     window.dispatchEvent(new CustomEvent('dp:email', { detail: { email } }));
   });
+  window.addEventListener('dp:ask-email', openAccountDialog);
   window.addEventListener('dp:email', render);
   render();
-  wrap.append(btn, form);
-  return wrap;
+}
+
+/* Small "⇅ Sync" openers next to every Reset button and under the sidebar's
+   learn button — injected, so no template changes across the landings. */
+function buildSyncButton() {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dp-btn dp-btn--ghost dp-btn--sm dp-sync__btn';
+  const render = () => {
+    const email = userEmail();
+    btn.textContent = email
+      ? `⇅ ${maskEmail(email)}`
+      : `⇅ ${t('sync.cta', 'Sync across devices…')}`;
+    btn.title = email
+      ? 'Progress and likes sync under this email. Click to change it.'
+      : 'Add your email to keep your progress on any device.';
+  };
+  btn.addEventListener('click', openAccountDialog);
+  window.addEventListener('dp:email', render);
+  render();
+  return btn;
 }
 
 function initSync() {
   document.querySelectorAll('[data-dp-reset]').forEach((reset) => {
-    reset.insertAdjacentElement('beforebegin', buildSyncUI());
+    reset.insertAdjacentElement('beforebegin', buildSyncButton());
   });
   const learn = document.querySelector('[data-dp-learn]');
-  if (learn) learn.insertAdjacentElement('afterend', buildSyncUI());
+  if (learn) learn.insertAdjacentElement('afterend', buildSyncButton());
   window.addEventListener('dp:email', () => syncProgress());
   syncProgress();
+}
+
+/* A one-time, dismissible nudge: once the visitor has real progress and no
+   email yet, gently point at the sync dialog. Never shown again after either
+   dismissing it or adding an email. */
+const NUDGE_KEY = 'dp-sync-nudge';
+
+function nudgeDone() {
+  try { return !!localStorage.getItem(NUDGE_KEY); } catch { return true; }
+}
+function setNudgeDone() {
+  try { localStorage.setItem(NUDGE_KEY, '1'); } catch {}
+}
+
+function showNudge() {
+  if (userEmail() || nudgeDone() || document.querySelector('.dp-nudge')) return;
+  const el = document.createElement('div');
+  el.className = 'dp-nudge';
+  el.setAttribute('role', 'status');
+  const text = document.createElement('p');
+  text.className = 'dp-nudge__text';
+  text.textContent = '💡 ' + t(
+    'nudge.text',
+    'Nice progress! Add your email to keep it on any device — it never leaves this browser, nothing is saved but an anonymous fingerprint.'
+  );
+  const row = document.createElement('div');
+  row.className = 'dp-nudge__row';
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'dp-btn dp-btn--sm dp-btn--primary';
+  add.textContent = t('nudge.add', 'Add email');
+  add.addEventListener('click', () => { setNudgeDone(); el.remove(); openAccountDialog(); });
+  const later = document.createElement('button');
+  later.type = 'button';
+  later.className = 'dp-btn dp-btn--sm dp-btn--ghost';
+  later.textContent = t('nudge.later', 'No thanks');
+  later.addEventListener('click', () => { setNudgeDone(); el.remove(); });
+  row.append(add, later);
+  el.append(text, row);
+  document.body.appendChild(el);
+}
+
+function initNudge() {
+  if (userEmail() || nudgeDone()) return;
+  window.addEventListener('dp:email', (e) => {
+    if (e.detail?.email) {
+      setNudgeDone();
+      document.querySelector('.dp-nudge')?.remove();
+    }
+  });
+  if (learned.size) {
+    setTimeout(showNudge, 1500);
+  } else {
+    // ...or right after they mark their first page — the moment progress
+    // becomes worth keeping.
+    const onFirstMark = () => {
+      if (!learned.size) return;
+      window.removeEventListener('dp:progress', onFirstMark);
+      setTimeout(showNudge, 800);
+    };
+    window.addEventListener('dp:progress', onFirstMark);
+  }
 }
 
 function initProgressViews() {
@@ -182,6 +278,62 @@ function initProgressViews() {
   window.addEventListener('storage', (e) => {
     if (e.key === STORE_KEY) { learned = loadLearned(); paintCards(); paintBars(); }
   });
+}
+
+/* --- resume card: remember the last visited page, surface it on the hub --- */
+const LAST_KEY = 'dp-last';
+
+function recordVisit() {
+  const btn = document.querySelector('[data-dp-learn]');
+  if (!btn) return; // only content pages carry the learn button
+  try {
+    localStorage.setItem(LAST_KEY, JSON.stringify({
+      slug: btn.getAttribute('data-dp-learn'),
+      path: location.pathname,
+      when: Date.now(),
+    }));
+  } catch {}
+}
+
+function initResume() {
+  const card = document.querySelector('[data-dp-resume]');
+  const data = document.getElementById('dp-resume-manifest');
+  if (!card || !data) return;
+  let last = null;
+  let manifest = [];
+  try {
+    last = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
+    manifest = JSON.parse(data.textContent || '[]');
+  } catch {}
+  if (!last || !last.slug) return; // first visit — the hero CTA is the entry point
+  const track =
+    manifest.find((t) => (last.path || '').startsWith(t.base + '/')) ||
+    manifest.find((t) => t.pages.some((p) => p.id === last.slug));
+  if (!track) return;
+  const idx = track.pages.findIndex((p) => p.id === last.slug);
+  if (idx === -1) return;
+
+  const render = () => {
+    const done = track.pages.filter((p) => isLearned(p.id)).length;
+    card.querySelector('[data-dp-resume-title]').textContent = track.pages[idx].title;
+    card.querySelector('[data-dp-resume-track]').textContent = track.name;
+    card.querySelector('[data-dp-resume-count]').textContent = `${done} / ${track.pages.length}`;
+    card.querySelector('[data-dp-resume-link]').href = `${track.base}/${last.slug}/`;
+    // next unlearned page after the current one, wrapping around the track
+    const ahead = [...track.pages.slice(idx + 1), ...track.pages.slice(0, idx)];
+    const next = ahead.find((p) => !isLearned(p.id));
+    const nextEl = card.querySelector('[data-dp-resume-next]');
+    if (next) {
+      nextEl.hidden = false;
+      nextEl.href = `${track.base}/${next.id}/`;
+      card.querySelector('[data-dp-resume-next-title]').textContent = next.title;
+    } else {
+      nextEl.hidden = true;
+    }
+  };
+  window.addEventListener('dp:progress', render); // server sync can change counts
+  render();
+  card.hidden = false;
 }
 
 function slugify(s) {
@@ -262,7 +414,11 @@ function boot() {
   initLearnButton();
   initProgressViews();
   initReset();
+  initAccount();
   initSync();
+  initNudge();
+  recordVisit();
+  initResume();
   initToc();
   initQuiz();
 }

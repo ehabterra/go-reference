@@ -1,14 +1,14 @@
 import type { APIRoute } from 'astro';
-import { getDB, json, normalizeEmail, visitorFor, type D1Database } from '../../lib/social-db';
+import { getDB, json, normalizeVisitor, type D1Database } from '../../lib/social-db';
 
 // Per-page likes, stored in Cloudflare D1 (binding `DB` in wrangler.jsonc).
-// A like is keyed by the visitor's email (asked once, kept in localStorage) —
-// not verified, but enough to count one like per person without a login.
-// Emails never reach the database: rows store a salted SHA-256 of the email,
-// so the DB holds no addresses while one-like-per-person still holds.
+// A like is keyed by the visitor's email — but only as a SHA-256 fingerprint
+// computed in the browser (src/lib/visitor.ts); the address itself never
+// reaches this endpoint. Not verified, but enough to count one like per
+// person without a login.
 //
-//   GET  /api/likes?page=/patterns/strategy&email=<email> → { count, liked }
-//   POST /api/likes  { page, email, liked }               → { count, liked }
+//   GET  /api/likes?page=/patterns/strategy&visitor=<hash> → { count, liked }
+//   POST /api/likes  { page, visitor, liked }              → { count, liked }
 export const prerender = false;
 
 const PAGE_RE = /^\/[a-z0-9][a-z0-9/_-]{0,199}$/i;
@@ -51,7 +51,7 @@ async function state(db: D1Database, page: string, visitor: string) {
 
 export const GET: APIRoute = async ({ url, locals }) => {
   const page = url.searchParams.get('page') ?? '';
-  const email = normalizeEmail(url.searchParams.get('email'));
+  const visitor = normalizeVisitor(url.searchParams.get('visitor'));
   if (!PAGE_RE.test(page)) return json({ error: 'Bad page.' }, 400);
 
   const db = getDB(locals);
@@ -59,7 +59,6 @@ export const GET: APIRoute = async ({ url, locals }) => {
 
   try {
     await ensureSchema(db);
-    const visitor = email ? await visitorFor(locals, email) : '';
     return json(await state(db, page, visitor));
   } catch {
     return json({ error: 'Storage unavailable.' }, 503);
@@ -68,25 +67,24 @@ export const GET: APIRoute = async ({ url, locals }) => {
 
 export const POST: APIRoute = async ({ request, locals }) => {
   let page = '';
-  let email = '';
+  let visitor = '';
   let liked = false;
   try {
     const body = await request.json();
     page = typeof body?.page === 'string' ? body.page : '';
-    email = normalizeEmail(body?.email);
+    visitor = normalizeVisitor(body?.visitor);
     liked = body?.liked === true;
   } catch {
     return json({ error: 'Invalid request body.' }, 400);
   }
   if (!PAGE_RE.test(page)) return json({ error: 'Bad page.' }, 400);
-  if (!email) return json({ error: 'A valid email is required.' }, 400);
+  if (!visitor) return json({ error: 'A visitor id is required.' }, 400);
 
   const db = getDB(locals);
   if (!db) return json({ error: 'Likes are not configured.' }, 503);
 
   try {
     await ensureSchema(db);
-    const visitor = await visitorFor(locals, email);
     if (liked) {
       await db
         .prepare('INSERT OR IGNORE INTO likes (page, visitor_id) VALUES (?1, ?2)')

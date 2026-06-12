@@ -33,6 +33,9 @@ import { REPO_URL } from '../lib/consts';
     </nav>
 
     <div class="dp-nav__actions">
+      <button class="dp-account-btn" data-dp-account-btn aria-haspopup="dialog" title="Sync your progress and likes across devices">
+        ⇅ <span data-dp-account-label data-i18n="nav.sync">Sync</span>
+      </button>
       <button class="dp-lang-btn" data-dp-lang aria-label="Switch language / تبديل اللغة">عربي</button>
       <button class="dp-search-btn" data-dp-search aria-label="Search (Cmd K)">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -44,4 +47,25 @@ import { REPO_URL } from '../lib/consts';
       </button>
     </div>
   </div>
+
+  <dialog class="dp-account" data-dp-account>
+    <h3 class="dp-account__title" data-i18n="account.title">Sync across devices</h3>
+    <p class="dp-account__desc" data-i18n="account.desc">
+      Add your email to keep your learning progress and likes with you on any device.
+      No account and no emails from us — your address is never saved anywhere: it stays
+      in this browser, and only an anonymous fingerprint of it is used.
+    </p>
+    <p class="dp-account__status" data-dp-account-status hidden>
+      <span data-i18n="account.syncingAs">Currently syncing as</span>
+      <strong data-dp-account-email></strong>
+    </p>
+    <form class="dp-account__form" data-dp-account-form>
+      <input type="email" required placeholder="you@example.com" aria-label="Your email" />
+      <div class="dp-account__row">
+        <button type="submit" class="dp-btn dp-btn--sm dp-btn--primary" data-i18n="account.save">Save</button>
+        <button type="button" class="dp-btn dp-btn--sm dp-btn--ghost" data-dp-account-cancel data-i18n="account.cancel">Cancel</button>
+        <button type="button" class="dp-btn dp-btn--sm dp-btn--ghost dp-account__remove" data-dp-account-remove hidden data-i18n="account.remove">Remove from this browser</button>
+      </div>
+    </form>
+  </dialog>
 </header>
