@@ -52,7 +52,7 @@ const resumeManifest = trackList.map((t) => ({
   name: t.name,
   pages: [...t.entries]
     .sort((a, b) => a.data.order - b.data.order)
-    .map((e) => ({ id: e.id, title: e.data.title })),
+    .map((e) => ({ id: e.id, title: e.data.title, ...(e.data.quiz?.length ? { q: 1 } : {}) })),
 }));
 ---
 <BaseLayout>
@@ -83,7 +83,19 @@ const resumeManifest = trackList.map((t) => ({
       </a>
     </div>
   </section>
-  <script type="application/json" id="dp-resume-manifest" set:html={JSON.stringify(resumeManifest)}></script>
+  <section class="dp-resume dp-resume--review" data-dp-review-card hidden>
+    <div class="dp-resume__info">
+      <p class="dp-resume__kicker" data-i18n="home.reviewKicker">Daily review</p>
+      <h2 class="dp-resume__title">
+        <span data-dp-review-count>0</span> <span data-i18n="home.reviewDue">pages due for a quick recall</span>
+      </h2>
+      <p class="dp-resume__meta" data-i18n="home.reviewNote">A few minutes of answering from memory is what makes it stick for good.</p>
+    </div>
+    <div class="dp-resume__actions">
+      <a class="dp-btn dp-btn--primary" href="/review/"><span data-i18n="home.reviewStart">Start review</span> →</a>
+    </div>
+  </section>
+  <script type="application/json" id="dp-resume-manifest" set:html={JSON.stringify(resumeManifest).replace(/</g, '\\u003c')}></script>
 
   <div class="dp-overall">
     <div class="dp-overall__top">

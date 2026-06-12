@@ -1,18 +1,9 @@
 /* Progress tracking, quiz, TOC + scrollspy — no framework, runs on every page. */
 import { EMAIL_RE, userEmail, setUserEmail, visitorHash, maskEmail } from '../lib/visitor';
+import { t } from '../lib/i18n-client';
+import { loadReview, saveReview, scheduleNew, dropSlug, seed, dueSlugs } from '../lib/review-store';
 
 const STORE_KEY = 'dp-progress';
-
-/* Injected strings, translated through the same dict ui.js uses. */
-function t(key, fallback) {
-  try {
-    if (localStorage.getItem('dp-lang') !== 'ar') return fallback;
-    const dict = JSON.parse(document.getElementById('dp-i18n')?.textContent || '{}');
-    return dict[key] || fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 function loadLearned() {
   try { return new Set(JSON.parse(localStorage.getItem(STORE_KEY) || '[]')); }
@@ -28,6 +19,10 @@ function setLearned(slug, on) {
   if (on) learned.add(slug); else learned.delete(slug);
   saveLearned(learned);
   pushProgress([slug], on);
+  // learned pages enter the spaced-repetition deck; unlearned ones leave it
+  const review = loadReview();
+  if (on) scheduleNew(review, slug); else dropSlug(review, slug);
+  saveReview(review);
   window.dispatchEvent(new CustomEvent('dp:progress', { detail: { slug, on } }));
 }
 
@@ -336,6 +331,28 @@ function initResume() {
   card.hidden = false;
 }
 
+/* --- review card on the hub: how many learned pages are due for recall --- */
+function initReviewCard() {
+  const card = document.querySelector('[data-dp-review-card]');
+  const data = document.getElementById('dp-resume-manifest');
+  if (!card || !data) return;
+  let manifest = [];
+  try { manifest = JSON.parse(data.textContent || '[]'); } catch {}
+  const quizSlugs = new Set(
+    manifest.flatMap((tr) => tr.pages.filter((p) => p.q).map((p) => p.id))
+  );
+  const render = () => {
+    const review = loadReview();
+    const candidates = [...learned].filter((s) => quizSlugs.has(s));
+    if (seed(review, candidates)) saveReview(review);
+    const due = dueSlugs(review, candidates);
+    card.querySelector('[data-dp-review-count]').textContent = String(due.length);
+    card.hidden = due.length === 0;
+  };
+  window.addEventListener('dp:progress', render);
+  render();
+}
+
 function slugify(s) {
   return s.toLowerCase().replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -419,6 +436,7 @@ function boot() {
   initNudge();
   recordVisit();
   initResume();
+  initReviewCard();
   initToc();
   initQuiz();
 }

@@ -760,6 +760,26 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-resume__meta { margin: .35rem 0 0; color: var(--dp-muted); font-size: .88rem; }
 .dp-resume__actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 
+/* ---------- review (spaced repetition) ---------- */
+.dp-resume--review .dp-resume__kicker { color: #34d399; }
+.dp-review { max-width: 760px; margin: 0 auto; }
+.dp-review__head { margin: 1rem 0 1.8rem; }
+.dp-review__head h1 { margin: .2rem 0 .6rem; }
+.dp-review__lede { margin: 0; color: var(--dp-muted); line-height: 1.6; }
+.dp-review__empty {
+  text-align: center; padding: 2.5rem 1.2rem;
+  border: 1px solid var(--dp-border); border-radius: var(--dp-radius); background: var(--dp-surface);
+}
+.dp-review__empty[hidden] { display: none; }
+.dp-review__emoji { font-size: 2.2rem; margin: 0 0 .4rem; }
+.dp-review__hint { color: var(--dp-muted); font-size: .92rem; }
+.dp-review__empty .dp-btn { margin-top: .9rem; }
+.dp-review__meta { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.dp-review__progress { font-family: var(--font-mono); font-size: .85rem; color: var(--dp-muted); }
+.dp-review__src { font-size: .85rem; color: var(--dp-accent); text-decoration: none; }
+.dp-review__src:hover { text-decoration: underline; }
+.dp-review__nav { display: flex; justify-content: flex-end; margin-top: 1rem; }
+
 /* ---------- progress sync (cross-device) ---------- */
 .dp-sync__btn { font-size: .78rem; }
 .dp-overall__top .dp-sync__btn { margin-left: auto; }
