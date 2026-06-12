@@ -294,9 +294,9 @@ img { max-width: 100%; }
    Playground island
    ===================================================================== */
 .dp-pg { border: 1px solid var(--dp-border); border-radius: var(--dp-radius); overflow: hidden; margin: 1.6rem 0; background: var(--dp-bg-2); }
-.dp-pg__bar { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .8rem; background: var(--dp-surface); border-bottom: 1px solid var(--dp-border); }
+.dp-pg__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .8rem; background: var(--dp-surface); border-bottom: 1px solid var(--dp-border); }
 .dp-pg__title { font-size: .8rem; color: var(--dp-muted); font-weight: 700; letter-spacing: .04em; }
-.dp-pg__actions { display: flex; gap: .5rem; }
+.dp-pg__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 /* editable code via react-simple-code-editor + Prism (Go). The lib overlays a
    transparent textarea on a Prism-highlighted <pre>; we supply the dark theme. */
 .dp-pg__editor { background: var(--dp-bg-2); color: #e9eef6; min-height: 230px; overflow: auto; caret-color: #e9eef6; }
@@ -984,6 +984,31 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-comments { margin: 2.6rem 0 1rem; padding-top: 1.8rem; border-top: 1px solid var(--dp-border); }
 .dp-comments__title { font-size: 1.35rem; margin: 0 0 .3rem; }
 .dp-comments__hint { color: var(--dp-muted); font-size: .9rem; margin: 0 0 1.2rem; }
+
+/* =====================================================================
+   Mobile pass — narrow-viewport fixes for the newer components.
+   ===================================================================== */
+@media (max-width: 680px) {
+  /* five header controls don't fit with a (masked-email) label — icon only;
+     the dialog itself still shows the full address */
+  .dp-account-btn [data-dp-account-label] { display: none; }
+  .dp-account-btn { padding: 0 .55rem; }
+  .dp-nav__actions { gap: .35rem; }
+  .dp-lang-btn { min-width: 38px; padding: 0 .45rem; }
+}
+@media (max-width: 400px) {
+  /* the smallest phones: keep the {} mark, drop the wordmark */
+  .dp-brand span:not(.dp-brand__mark) { display: none; }
+}
+@media (max-width: 640px) {
+  .dp-nudge { max-width: calc(100vw - 2rem); }
+  .dp-tree { padding: 1rem .95rem; }
+  .dp-resume { padding: 1rem 1.1rem; }
+  .dp-account { padding: 1.1rem 1.1rem; }
+  .dp-review__empty { padding: 1.8rem .95rem; }
+  .dp-like-row { padding: .9rem .95rem; }
+  .dp-comments { padding-top: 1.4rem; }
+}
 
 /* =====================================================================
    Light theme — opt-in via the ☀️ toggle ([data-theme="light"] on <html>).

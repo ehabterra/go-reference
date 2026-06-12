@@ -308,11 +308,7 @@ A map value isn't addressable, so `&m[k]` is a compile error and `m[k].Field = x
 
 Reading from a nil map is safe — writing to one is not. This program compiles fine and then dies at runtime. Edit it until **Run & check** matches the expected output.
 
-<Challenge client:visible id="maps-nil-write" title="nil-map.go"
-  brief="The map is declared but never initialized, so the write panics. Make the program run and print the expected output."
-  expected="13"
-  hint="A nil map behaves like an empty map for reads, but any write panics. Something needs to allocate the map before the assignment — make() or a map literal."
-  code={String.raw`package main
+<Challenge client:visible id="maps-nil-write" title="nil-map.go" brief="The map is declared but never initialized, so the write panics. Make the program run and print the expected output." expected="13" hint="A nil map behaves like an empty map for reads, but any write panics. Something needs to allocate the map before the assignment — make() or a map literal." code={String.raw`package main
 
 import "fmt"
 
@@ -320,8 +316,7 @@ func main() {
 	var ages map[string]int
 	ages["gopher"] = 13
 	fmt.Println(ages["gopher"])
-}`}
-  solution={String.raw`package main
+}`} solution={String.raw`package main
 
 import "fmt"
 
