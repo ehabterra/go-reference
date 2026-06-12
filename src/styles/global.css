@@ -760,6 +760,31 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-resume__meta { margin: .35rem 0 0; color: var(--dp-muted); font-size: .88rem; }
 .dp-resume__actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 
+/* ---------- most liked pages (home hub) ---------- */
+.dp-toplikes { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.dp-toplike {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .75rem .95rem; border-radius: var(--dp-radius);
+  border: 1px solid var(--dp-border); background: var(--dp-surface);
+  text-decoration: none; color: var(--dp-text);
+  transition: transform .2s var(--dp-ease), border-color .2s;
+}
+.dp-toplike:hover { transform: translateY(-2px); border-color: var(--dp-accent); }
+.dp-toplike__rank {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--dp-bg); border: 1px solid var(--dp-border-strong);
+  font-family: var(--font-mono); font-size: .78rem; color: var(--dp-muted); font-weight: 700;
+}
+.dp-toplike:first-child .dp-toplike__rank { color: #fbbf24; border-color: rgba(251, 191, 36, .5); }
+.dp-toplike__body { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.dp-toplike__body strong { font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-toplike__meta { color: var(--dp-muted); font-size: .76rem; }
+.dp-toplike__count {
+  margin-inline-start: auto; flex: none;
+  font-family: var(--font-mono); font-size: .8rem; color: #fb7185;
+}
+
 /* ---------- skill map (track landings) ---------- */
 .dp-tree {
   margin: 1.8rem 0; padding: 1.3rem 1.4rem;

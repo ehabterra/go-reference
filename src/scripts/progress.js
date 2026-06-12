@@ -391,6 +391,53 @@ function initStreakChip() {
   render();
 }
 
+/* --- "most liked pages" strip on the hub — social proof from real likes --- */
+function initTopLikes() {
+  const wrap = document.querySelector('[data-dp-toplikes]');
+  const data = document.getElementById('dp-resume-manifest');
+  if (!wrap || !data) return;
+  let manifest = [];
+  try { manifest = JSON.parse(data.textContent || '[]'); } catch {}
+  const byPath = new Map();
+  for (const tr of manifest) {
+    for (const p of tr.pages) {
+      byPath.set(`${tr.base}/${p.id}`, { title: p.title, track: tr.name, url: `${tr.base}/${p.id}/` });
+    }
+  }
+  fetch('/api/likes?top=6')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const rows = (d?.top || [])
+        .map((row) => ({ ...byPath.get(row.page), count: row.count }))
+        .filter((r) => r.title && r.count > 0);
+      if (rows.length < 3) return; // too little to be social proof — stay hidden
+      const grid = wrap.querySelector('[data-dp-toplikes-grid]');
+      rows.forEach((r, i) => {
+        const a = document.createElement('a');
+        a.className = 'dp-toplike';
+        a.href = r.url;
+        const rank = document.createElement('span');
+        rank.className = 'dp-toplike__rank';
+        rank.textContent = String(i + 1);
+        const body = document.createElement('span');
+        body.className = 'dp-toplike__body';
+        const title = document.createElement('strong');
+        title.textContent = r.title;
+        const meta = document.createElement('span');
+        meta.className = 'dp-toplike__meta';
+        meta.textContent = r.track;
+        body.append(title, meta);
+        const count = document.createElement('span');
+        count.className = 'dp-toplike__count';
+        count.textContent = `♥ ${r.count}`;
+        a.append(rank, body, count);
+        grid.appendChild(a);
+      });
+      wrap.hidden = false;
+    })
+    .catch(() => {});
+}
+
 /* --- skill map on track landings: light learned, pulse the next step --- */
 function initSkillTree() {
   document.querySelectorAll('[data-dp-tree]').forEach((tree) => {
@@ -581,6 +628,7 @@ function boot() {
   recordVisit();
   initResume();
   initReviewCard();
+  initTopLikes();
   initMilestoneWatch();
   initMilestoneChips();
   initStreakChip();
