@@ -155,7 +155,7 @@ The **three-index** form `s[a:b:c]` adds control over capacity: `len` is `b-a` a
 
 Because a sub-slice shares the parent's array, `append`ing to the sub-slice can **overwrite the parent's elements** if there's spare capacity — a silent, capacity-dependent bug. Capping capacity with the three-index form prevents it:
 
-<Playground client:visible title="aliasing-trap.go" code={String.raw`package main
+<Playground client:visible predict title="aliasing-trap.go" code={String.raw`package main
 
 import "fmt"
 
@@ -163,10 +163,10 @@ func main() {
 	// THE TRAP: a sub-slice shares the parent's backing array. If the sub-slice
 	// has spare capacity, append WRITES THROUGH into the parent.
 	parent := []int{1, 2, 3, 4, 5}
-	sub := parent[1:3] // [2 3], but cap reaches to the end of parent (cap 4)
+	sub := parent[1:3] // which elements? and how far does cap reach?
 	fmt.Printf("sub: %v  len=%d cap=%d\\n", sub, len(sub), cap(sub))
 
-	sub = append(sub, 99) // spare cap -> overwrites parent[3] in place!
+	sub = append(sub, 99) // there is spare cap — so where does 99 land?
 	fmt.Println("parent after append to sub:", parent)
 
 	// THE FIX: a full three-index slice s[a:b:c] caps the sub-slice's capacity

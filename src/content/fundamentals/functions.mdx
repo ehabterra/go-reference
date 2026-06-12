@@ -281,21 +281,21 @@ By reference is exactly what you want for a counter and exactly what bit everyon
 
 **Go 1.22 fixed this**: the loop variable is now a fresh copy per iteration, so each closure captures a distinct value. The example below reproduces the old trap on purpose (using a deliberately shared variable) and then shows the per-iteration fix.
 
-<Playground client:visible title="loop-capture.go" code={String.raw`package main
+<Playground client:visible predict title="loop-capture.go" code={String.raw`package main
 
 import "fmt"
 
 func main() {
 	// THE CLASSIC LOOP-CAPTURE BUG (pre-Go 1.22 behavior).
 	// Here we DELIBERATELY share one variable to reproduce the old trap:
-	// every closure captures the SAME variable, so all see its final value.
+	// every closure captures the SAME variable. What do they return?
 	funcs := make([]func() int, 0, 3)
 	shared := 0
 	for shared = 0; shared < 3; shared++ {
 		funcs = append(funcs, func() int { return shared })
 	}
 	for _, f := range funcs {
-		fmt.Print(f(), " ") // 3 3 3 — all read the final shared value
+		fmt.Print(f(), " ")
 	}
 	fmt.Println()
 
@@ -308,7 +308,7 @@ func main() {
 		fixed = append(fixed, func() int { return i })
 	}
 	for _, f := range fixed {
-		fmt.Print(f(), " ") // 0 1 2 — each closure has its own i
+		fmt.Print(f(), " ")
 	}
 	fmt.Println()
 }`} />

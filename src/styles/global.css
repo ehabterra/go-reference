@@ -760,6 +760,25 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-resume__meta { margin: .35rem 0 0; color: var(--dp-muted); font-size: .88rem; }
 .dp-resume__actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 
+/* ---------- predict-the-output mode ---------- */
+.dp-predict { padding: .8rem 1rem; border-top: 1px dashed var(--dp-border); }
+.dp-predict__q { margin: 0 0 .55rem; font-size: .88rem; color: var(--dp-muted); line-height: 1.5; }
+.dp-predict__q strong { color: var(--dp-text); }
+.dp-predict__ta {
+  width: 100%; resize: vertical; min-height: 60px;
+  padding: .6rem .8rem; border-radius: var(--dp-radius-sm);
+  border: 1px solid var(--dp-border-strong); background: var(--dp-bg); color: var(--dp-text);
+  font-family: var(--font-mono); font-size: .84rem; line-height: 1.5;
+}
+.dp-predict__ta:focus { outline: none; border-color: var(--dp-accent); }
+.dp-predict__verdict { padding: .7rem 1rem; font-size: .88rem; border-top: 1px solid var(--dp-border); }
+.dp-predict__verdict--hit { color: #34d399; background: rgba(52, 211, 153, .08); font-weight: 600; }
+.dp-predict__verdict--miss { background: rgba(251, 191, 36, .07); line-height: 1.5; }
+.dp-predict__verdict--miss pre {
+  margin: .4rem 0; font-family: var(--font-mono); font-size: .82rem;
+  color: #fbbf24; white-space: pre-wrap;
+}
+
 /* ---------- fix-the-bug challenges ---------- */
 .dp-chal { border-color: rgba(251, 113, 133, .35); }
 .dp-chal.is-solved { border-color: rgba(52, 211, 153, .4); }

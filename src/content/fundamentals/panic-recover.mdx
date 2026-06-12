@@ -84,23 +84,22 @@ Two rules govern *what* a deferred call sees, and they trip people up constantly
 - **LIFO order.** Deferred calls run last-scheduled-first, like a stack. Acquire A then B, and they release B then A — the natural nesting order.
 - **Arguments are evaluated at defer time.** The instant `defer f(x)` executes, `x` is read and frozen; only the *call* waits until return. A deferred **closure** with no arguments is the exception — it reads variables when it actually runs, so it observes their final values.
 
-<Playground client:visible title="defer.go" code={String.raw`package main
+<Playground client:visible predict title="defer.go" code={String.raw`package main
 
 import "fmt"
 
 func main() {
-	// LIFO: deferred calls fire in reverse of the order scheduled.
+	// Three defers scheduled in a loop — in what order do they fire?
 	for i := 1; i <= 3; i++ {
-		defer fmt.Println("deferred", i) // prints 3, 2, 1
+		defer fmt.Println("deferred", i)
 	}
 
 	// Arguments are evaluated AT defer time, not when the call fires.
 	x := "first"
-	defer fmt.Println("snapshot:", x) // captures "first" right now
+	defer fmt.Println("snapshot:", x)
 	x = "changed"
 
-	// A deferred CLOSURE, by contrast, reads the variable when it runs,
-	// so it sees the final value.
+	// A deferred CLOSURE, by contrast, reads the variable when it runs.
 	defer func() { fmt.Println("closure sees:", x) }()
 	x = "final"
 
