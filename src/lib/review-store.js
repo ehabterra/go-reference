@@ -22,9 +22,10 @@ export function saveReview(state) {
   } catch {}
 }
 
-/* A page just marked learned: first recall lands tomorrow. */
+/* A page just marked learned: first recall lands tomorrow. (`u` is the
+   update timestamp the cross-device sync compares for last-write-wins.) */
 export function scheduleNew(state, slug, now = Date.now()) {
-  if (!state[slug]) state[slug] = { b: 0, d: now + INTERVAL_DAYS[0] * DAY };
+  if (!state[slug]) state[slug] = { b: 0, d: now + INTERVAL_DAYS[0] * DAY, u: now };
 }
 
 export function dropSlug(state, slug) {
@@ -37,7 +38,7 @@ export function seed(state, slugs, now = Date.now()) {
   let changed = false;
   for (const s of slugs) {
     if (!state[s]) {
-      state[s] = { b: 0, d: now };
+      state[s] = { b: 0, d: now, u: now };
       changed = true;
     }
   }
@@ -61,5 +62,5 @@ export function nextDue(state, slugs) {
 export function applyResult(state, slug, correct, now = Date.now()) {
   const prev = state[slug] || { b: 0, d: 0 };
   const b = correct ? Math.min(prev.b + 1, INTERVAL_DAYS.length - 1) : 0;
-  state[slug] = { b, d: now + INTERVAL_DAYS[b] * DAY };
+  state[slug] = { b, d: now + INTERVAL_DAYS[b] * DAY, u: now };
 }

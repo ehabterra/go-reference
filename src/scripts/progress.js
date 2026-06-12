@@ -3,6 +3,7 @@ import { EMAIL_RE, userEmail, setUserEmail, visitorHash, maskEmail } from '../li
 import { t } from '../lib/i18n-client';
 import { loadReview, saveReview, scheduleNew, dropSlug, seed, dueSlugs } from '../lib/review-store';
 import { touchStreak, currentStreak } from '../lib/streak-store';
+import { syncState, pushState, reviewItems, streakItem, lastItem } from '../lib/state-sync';
 
 const STORE_KEY = 'dp-progress';
 
@@ -24,7 +25,10 @@ function setLearned(slug, on) {
   const review = loadReview();
   if (on) scheduleNew(review, slug); else dropSlug(review, slug);
   saveReview(review);
-  if (on) touchStreak();
+  if (on) {
+    const streak = touchStreak();
+    pushState([...reviewItems(review, [slug]), streakItem(streak)]);
+  }
   window.dispatchEvent(new CustomEvent('dp:progress', { detail: { slug, on } }));
 }
 
@@ -202,8 +206,9 @@ function initSync() {
   });
   const learn = document.querySelector('[data-dp-learn]');
   if (learn) learn.insertAdjacentElement('afterend', buildSyncButton());
-  window.addEventListener('dp:email', () => syncProgress());
+  window.addEventListener('dp:email', () => { syncProgress(); syncState(); });
   syncProgress();
+  syncState();
 }
 
 /* A one-time, dismissible nudge: once the visitor has real progress and no
@@ -392,34 +397,34 @@ const LAST_KEY = 'dp-last';
 function recordVisit() {
   const btn = document.querySelector('[data-dp-learn]');
   if (!btn) return; // only content pages carry the learn button
-  try {
-    localStorage.setItem(LAST_KEY, JSON.stringify({
-      slug: btn.getAttribute('data-dp-learn'),
-      path: location.pathname,
-      when: Date.now(),
-    }));
-  } catch {}
+  const rec = {
+    slug: btn.getAttribute('data-dp-learn'),
+    path: location.pathname,
+    when: Date.now(),
+  };
+  try { localStorage.setItem(LAST_KEY, JSON.stringify(rec)); } catch {}
+  pushState([lastItem(rec)]); // resume works from any device
 }
 
 function initResume() {
   const card = document.querySelector('[data-dp-resume]');
   const data = document.getElementById('dp-resume-manifest');
   if (!card || !data) return;
-  let last = null;
   let manifest = [];
-  try {
-    last = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
-    manifest = JSON.parse(data.textContent || '[]');
-  } catch {}
-  if (!last || !last.slug) return; // first visit — the hero CTA is the entry point
-  const track =
-    manifest.find((t) => (last.path || '').startsWith(t.base + '/')) ||
-    manifest.find((t) => t.pages.some((p) => p.id === last.slug));
-  if (!track) return;
-  const idx = track.pages.findIndex((p) => p.id === last.slug);
-  if (idx === -1) return;
+  try { manifest = JSON.parse(data.textContent || '[]'); } catch {}
 
+  // Re-reads dp-last every time: cross-device sync (dp:last) can replace it
+  // after the initial paint. First visit ever → card stays hidden.
   const render = () => {
+    let last = null;
+    try { last = JSON.parse(localStorage.getItem(LAST_KEY) || 'null'); } catch {}
+    if (!last || !last.slug) return;
+    const track =
+      manifest.find((t) => (last.path || '').startsWith(t.base + '/')) ||
+      manifest.find((t) => t.pages.some((p) => p.id === last.slug));
+    if (!track) return;
+    const idx = track.pages.findIndex((p) => p.id === last.slug);
+    if (idx === -1) return;
     const done = track.pages.filter((p) => isLearned(p.id)).length;
     card.querySelector('[data-dp-resume-title]').textContent = track.pages[idx].title;
     card.querySelector('[data-dp-resume-track]').textContent = track.name;
@@ -436,10 +441,11 @@ function initResume() {
     } else {
       nextEl.hidden = true;
     }
+    card.hidden = false;
   };
   window.addEventListener('dp:progress', render); // server sync can change counts
+  window.addEventListener('dp:last', render); // …or replace the pointer itself
   render();
-  card.hidden = false;
 }
 
 /* --- review card on the hub: how many learned pages are due for recall --- */

@@ -18,14 +18,20 @@ function daysBetween(a, b) {
 export function loadStreak() {
   try {
     const s = JSON.parse(localStorage.getItem(STREAK_KEY) || '{}') || {};
-    return { c: s.c || 0, b: s.b || 0, l: s.l || '' };
+    return { c: s.c || 0, b: s.b || 0, l: s.l || '', u: s.u || 0 };
   } catch {
-    return { c: 0, b: 0, l: '' };
+    return { c: 0, b: 0, l: '', u: 0 };
   }
 }
 
 function saveStreak(s) {
   try { localStorage.setItem(STREAK_KEY, JSON.stringify(s)); } catch {}
+}
+
+/* Adopt a streak that arrived from another device via sync. */
+export function adoptStreak(s) {
+  saveStreak(s);
+  window.dispatchEvent(new CustomEvent('dp:streak', { detail: { ...s } }));
 }
 
 /* Record a learning action today. Returns the updated streak. */
@@ -37,6 +43,7 @@ export function touchStreak(now = new Date()) {
   s.c = gap <= 2 ? s.c + 1 : 1; // gap 2 = one missed day → freeze, streak lives
   s.l = today;
   s.b = Math.max(s.b, s.c);
+  s.u = now.getTime(); // for last-write-wins in cross-device sync
   saveStreak(s);
   window.dispatchEvent(new CustomEvent('dp:streak', { detail: { ...s } }));
   return s;

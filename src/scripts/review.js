@@ -3,6 +3,7 @@
    time, interleaved across pages, then reschedules each page by result. */
 import { loadReview, saveReview, seed, dueSlugs, nextDue, applyResult } from '../lib/review-store';
 import { touchStreak } from '../lib/streak-store';
+import { pushState, reviewItems, streakItem } from '../lib/state-sync';
 
 const MAX_QUESTIONS = 12; // ≈ a five-minute session
 const PER_PAGE = 2;
@@ -90,6 +91,7 @@ function boot() {
     doneEl.querySelector('[data-dp-review-score]').textContent = `${totalRight} / ${session.length}`;
     // a finished review is a learning action — it keeps the streak alive
     const streak = touchStreak();
+    pushState([...reviewItems(review, slugsAsked), streakItem(streak)]);
     if (streak.c >= 2) {
       const line = doneEl.querySelector('[data-dp-review-streak]');
       if (line) {
