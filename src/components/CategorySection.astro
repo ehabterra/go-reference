@@ -1,6 +1,7 @@
 ---
 import { getCollection } from 'astro:content';
 import Card from './Card.astro';
+import { readingTime } from '../lib/reading-time';
 
 interface Props {
   cat: string;
@@ -46,6 +47,7 @@ const slugs = items.map((p) => p.id).join(',');
           difficulty={p.data.difficulty}
           status={p.data.status}
           base={base}
+          minutes={readingTime(p.body)}
         />
       ))}
     </div>

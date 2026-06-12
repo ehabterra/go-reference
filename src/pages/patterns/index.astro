@@ -3,6 +3,8 @@ import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
 import Card from '../../components/Card.astro';
+import { readingTime } from '../../lib/reading-time';
+import SkillTree from '../../components/SkillTree.astro';
 import { CATEGORIES } from '../../lib/consts';
 
 const all = await getCollection('patterns');
@@ -43,6 +45,8 @@ const cheat = byId('cheatsheet');
       Saved in your browser — mark a pattern “learned” on its page and watch the bars fill.
     </p>
   </div>
+
+  <SkillTree entries={all} categories={CATEGORIES} base="/patterns" />
 
   <h2 class="dp-section-head" style="border:0;" data-i18n="pat.how">How this guide works</h2>
   <div class="dp-features">
@@ -87,6 +91,7 @@ const cheat = byId('cheatsheet');
           intent={foundations.data.intent}
           numLabel={`START · ${foundations.data.difficulty}`}
           footLabel="Read first"
+          minutes={readingTime(foundations.body)}
         />
       </div>
     </Fragment>
@@ -106,6 +111,7 @@ const cheat = byId('cheatsheet');
         intent={stdlib.data.intent}
         numLabel={`GUIDE · ${stdlib.data.difficulty}`}
         footLabel="Tour"
+        minutes={readingTime(stdlib.body)}
       />
     )}
     {cheat && (
@@ -116,6 +122,7 @@ const cheat = byId('cheatsheet');
         intent={cheat.data.intent}
         numLabel={`PRACTICE · ${cheat.data.difficulty}`}
         footLabel="Revise"
+        minutes={readingTime(cheat.body)}
       />
     )}
   </div>

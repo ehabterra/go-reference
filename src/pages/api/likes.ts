@@ -8,6 +8,7 @@ import { getDB, json, normalizeVisitor, type D1Database } from '../../lib/social
 // person without a login.
 //
 //   GET  /api/likes?page=/patterns/strategy&visitor=<hash> → { count, liked }
+//   GET  /api/likes?top=6                                  → { top: [{ page, count }] }
 //   POST /api/likes  { page, visitor, liked }              → { count, liked }
 export const prerender = false;
 
@@ -50,12 +51,32 @@ async function state(db: D1Database, page: string, visitor: string) {
 }
 
 export const GET: APIRoute = async ({ url, locals }) => {
+  const db = getDB(locals);
+  if (!db) return json({ error: 'Likes are not configured.' }, 503);
+
+  // leaderboard mode: the home hub's "most liked pages" strip
+  const top = url.searchParams.get('top');
+  if (top) {
+    const n = Math.min(Math.max(parseInt(top, 10) || 0, 1), 12);
+    try {
+      await ensureSchema(db);
+      const { results } = await db
+        .prepare('SELECT page, COUNT(*) AS count FROM likes GROUP BY page ORDER BY count DESC, page ASC LIMIT ?1')
+        .bind(n)
+        .all<{ page: string; count: number }>();
+      return new Response(JSON.stringify({ top: results }), {
+        status: 200,
+        // staleness is fine for a leaderboard — let Cloudflare cache it
+        headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=300' },
+      });
+    } catch {
+      return json({ error: 'Storage unavailable.' }, 503);
+    }
+  }
+
   const page = url.searchParams.get('page') ?? '';
   const visitor = normalizeVisitor(url.searchParams.get('visitor'));
   if (!PAGE_RE.test(page)) return json({ error: 'Bad page.' }, 400);
-
-  const db = getDB(locals);
-  if (!db) return json({ error: 'Likes are not configured.' }, 503);
 
   try {
     await ensureSchema(db);

@@ -391,6 +391,123 @@ function initStreakChip() {
   render();
 }
 
+/* --- light / dark theme toggle (default dark; light is opt-in) --- */
+function applyGiscusTheme(light) {
+  const frame = document.querySelector('iframe.giscus-frame');
+  frame?.contentWindow?.postMessage(
+    { giscus: { setConfig: { theme: light ? 'light' : 'transparent_dark' } } },
+    'https://giscus.app'
+  );
+}
+
+function initTheme() {
+  const root = document.documentElement;
+  const btn = document.querySelector('[data-dp-theme]');
+  const render = () => {
+    if (btn) btn.textContent = root.dataset.theme === 'light' ? '🌙' : '☀️';
+  };
+  btn?.addEventListener('click', () => {
+    const light = root.dataset.theme !== 'light';
+    if (light) root.dataset.theme = 'light';
+    else delete root.dataset.theme;
+    try {
+      if (light) localStorage.setItem('dp-theme', 'light');
+      else localStorage.removeItem('dp-theme');
+    } catch {}
+    render();
+    applyGiscusTheme(light);
+    window.dispatchEvent(new CustomEvent('dp:theme', { detail: { light } }));
+  });
+  render();
+  // giscus loads lazily with a dark default — re-theme it for light-mode
+  // visitors once its iframe shows up
+  if (root.dataset.theme === 'light') {
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (document.querySelector('iframe.giscus-frame')) {
+        clearInterval(timer);
+        setTimeout(() => applyGiscusTheme(true), 800);
+      } else if (++tries > 30) {
+        clearInterval(timer);
+      }
+    }, 500);
+  }
+}
+
+/* --- "most liked pages" strip on the hub — social proof from real likes --- */
+function initTopLikes() {
+  const wrap = document.querySelector('[data-dp-toplikes]');
+  const data = document.getElementById('dp-resume-manifest');
+  if (!wrap || !data) return;
+  let manifest = [];
+  try { manifest = JSON.parse(data.textContent || '[]'); } catch {}
+  const byPath = new Map();
+  for (const tr of manifest) {
+    for (const p of tr.pages) {
+      byPath.set(`${tr.base}/${p.id}`, { title: p.title, track: tr.name, url: `${tr.base}/${p.id}/` });
+    }
+  }
+  fetch('/api/likes?top=6')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const rows = (d?.top || [])
+        .map((row) => ({ ...byPath.get(row.page), count: row.count }))
+        .filter((r) => r.title && r.count > 0);
+      if (rows.length < 3) return; // too little to be social proof — stay hidden
+      const grid = wrap.querySelector('[data-dp-toplikes-grid]');
+      rows.forEach((r, i) => {
+        const a = document.createElement('a');
+        a.className = 'dp-toplike';
+        a.href = r.url;
+        const rank = document.createElement('span');
+        rank.className = 'dp-toplike__rank';
+        rank.textContent = String(i + 1);
+        const body = document.createElement('span');
+        body.className = 'dp-toplike__body';
+        const title = document.createElement('strong');
+        title.textContent = r.title;
+        const meta = document.createElement('span');
+        meta.className = 'dp-toplike__meta';
+        meta.textContent = r.track;
+        body.append(title, meta);
+        const count = document.createElement('span');
+        count.className = 'dp-toplike__count';
+        count.textContent = `♥ ${r.count}`;
+        a.append(rank, body, count);
+        grid.appendChild(a);
+      });
+      wrap.hidden = false;
+    })
+    .catch(() => {});
+}
+
+/* --- skill map on track landings: light learned, pulse the next step --- */
+function initSkillTree() {
+  document.querySelectorAll('[data-dp-tree]').forEach((tree) => {
+    const nodes = [...tree.querySelectorAll('[data-tree-slug]')];
+    if (!nodes.length) return;
+    const render = () => {
+      let nextFound = false;
+      for (const n of nodes) {
+        const on = isLearned(n.getAttribute('data-tree-slug'));
+        n.classList.toggle('is-learned', on);
+        const isNext = !on && !nextFound;
+        if (isNext) nextFound = true;
+        n.classList.toggle('is-next', isNext);
+      }
+      tree.querySelectorAll('[data-tree-tier]').forEach((tier) => {
+        const tierNodes = [...tier.querySelectorAll('[data-tree-slug]')];
+        tier.classList.toggle(
+          'is-done',
+          tierNodes.length > 0 && tierNodes.every((n) => n.classList.contains('is-learned'))
+        );
+      });
+    };
+    window.addEventListener('dp:progress', render);
+    render();
+  });
+}
+
 /* --- resume card: remember the last visited page, surface it on the hub --- */
 const LAST_KEY = 'dp-last';
 
@@ -545,6 +662,7 @@ function initQuiz() {
 }
 
 function boot() {
+  initTheme();
   initLearnButton();
   initProgressViews();
   initReset();
@@ -554,9 +672,11 @@ function boot() {
   recordVisit();
   initResume();
   initReviewCard();
+  initTopLikes();
   initMilestoneWatch();
   initMilestoneChips();
   initStreakChip();
+  initSkillTree();
   initToc();
   initQuiz();
 }

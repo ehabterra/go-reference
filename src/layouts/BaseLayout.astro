@@ -43,11 +43,13 @@ const searchIndex = [
     <script is:inline>
       (function () {
         try {
+          var d = document.documentElement;
           if (localStorage.getItem('dp-lang') === 'ar') {
-            var d = document.documentElement;
             d.dataset.lang = 'ar';
             d.dir = 'rtl';
           }
+          // before first paint, so light-theme users never flash dark
+          if (localStorage.getItem('dp-theme') === 'light') d.dataset.theme = 'light';
         } catch (e) {}
       })();
     </script>

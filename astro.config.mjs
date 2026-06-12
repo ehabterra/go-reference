@@ -15,7 +15,10 @@ export default defineConfig({
   }),
   markdown: {
     shikiConfig: {
-      theme: 'github-dark-default',
+      // Dual-theme output: colors come as --shiki-light/--shiki-dark CSS
+      // vars (defaultColor:false), switched by [data-theme] in global.css.
+      themes: { light: 'github-light', dark: 'github-dark-default' },
+      defaultColor: false,
       wrap: false,
     },
   },

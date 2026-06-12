@@ -294,9 +294,9 @@ img { max-width: 100%; }
    Playground island
    ===================================================================== */
 .dp-pg { border: 1px solid var(--dp-border); border-radius: var(--dp-radius); overflow: hidden; margin: 1.6rem 0; background: var(--dp-bg-2); }
-.dp-pg__bar { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .8rem; background: var(--dp-surface); border-bottom: 1px solid var(--dp-border); }
+.dp-pg__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .8rem; background: var(--dp-surface); border-bottom: 1px solid var(--dp-border); }
 .dp-pg__title { font-size: .8rem; color: var(--dp-muted); font-weight: 700; letter-spacing: .04em; }
-.dp-pg__actions { display: flex; gap: .5rem; }
+.dp-pg__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 /* editable code via react-simple-code-editor + Prism (Go). The lib overlays a
    transparent textarea on a Prism-highlighted <pre>; we supply the dark theme. */
 .dp-pg__editor { background: var(--dp-bg-2); color: #e9eef6; min-height: 230px; overflow: auto; caret-color: #e9eef6; }
@@ -760,6 +760,75 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-resume__meta { margin: .35rem 0 0; color: var(--dp-muted); font-size: .88rem; }
 .dp-resume__actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 
+/* ---------- most liked pages (home hub) ---------- */
+.dp-toplikes { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.dp-toplike {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .75rem .95rem; border-radius: var(--dp-radius);
+  border: 1px solid var(--dp-border); background: var(--dp-surface);
+  text-decoration: none; color: var(--dp-text);
+  transition: transform .2s var(--dp-ease), border-color .2s;
+}
+.dp-toplike:hover { transform: translateY(-2px); border-color: var(--dp-accent); }
+.dp-toplike__rank {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--dp-bg); border: 1px solid var(--dp-border-strong);
+  font-family: var(--font-mono); font-size: .78rem; color: var(--dp-muted); font-weight: 700;
+}
+.dp-toplike:first-child .dp-toplike__rank { color: #fbbf24; border-color: rgba(251, 191, 36, .5); }
+.dp-toplike__body { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.dp-toplike__body strong { font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-toplike__meta { color: var(--dp-muted); font-size: .76rem; }
+.dp-toplike__count {
+  margin-inline-start: auto; flex: none;
+  font-family: var(--font-mono); font-size: .8rem; color: #fb7185;
+}
+
+/* ---------- skill map (track landings) ---------- */
+.dp-tree {
+  margin: 1.8rem 0; padding: 1.3rem 1.4rem;
+  border: 1px solid var(--dp-border); border-radius: var(--dp-radius); background: var(--dp-surface);
+}
+.dp-tree__title { margin: 0; font-size: 1.15rem; }
+.dp-tree__hint { margin: .3rem 0 0; color: var(--dp-muted); font-size: .86rem; }
+.dp-tree__tiers { position: relative; display: flex; flex-direction: column; gap: 1.15rem; margin-top: 1.1rem; }
+.dp-tree__tiers::before {
+  content: ''; position: absolute; top: 8px; bottom: 8px; inset-inline-start: 7px;
+  width: 2px; background: linear-gradient(var(--dp-border-strong) 70%, transparent);
+}
+.dp-tree__tier { position: relative; padding-inline-start: 1.7rem; }
+.dp-tree__tier::before {
+  content: ''; position: absolute; inset-inline-start: 0; top: .1rem;
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--dp-border-strong); background: var(--dp-bg);
+  transition: border-color .3s, background .3s;
+}
+.dp-tree__tier.is-done::before { border-color: #34d399; background: rgba(52, 211, 153, .35); }
+.dp-tree__tier-label {
+  font-size: .76rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--dp-muted);
+}
+.dp-tree__nodes { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .5rem; }
+.dp-tree__node {
+  display: inline-flex; align-items: center; gap: .42rem;
+  padding: .32rem .72rem; border-radius: 999px;
+  border: 1px solid var(--dp-border); background: var(--dp-bg);
+  color: var(--dp-muted); font-size: .8rem; text-decoration: none;
+  transition: border-color .2s, color .2s, transform .2s;
+}
+.dp-tree__node:hover { transform: translateY(-2px); color: var(--dp-text); border-color: var(--dp-accent); }
+.dp-tree__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dp-border-strong); flex: none; }
+.dp-tree__node.is-learned { color: var(--dp-text); border-color: rgba(52, 211, 153, .45); background: rgba(52, 211, 153, .08); }
+.dp-tree__node.is-learned .dp-tree__dot { background: #34d399; }
+.dp-tree__node.is-next { color: var(--dp-text); border-color: var(--dp-accent); animation: dp-tree-pulse 2s infinite; }
+.dp-tree__node.is-next .dp-tree__dot { background: var(--dp-accent); }
+@keyframes dp-tree-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 194, 242, .45); }
+  70% { box-shadow: 0 0 0 8px rgba(0, 194, 242, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 194, 242, 0); }
+}
+
 /* ---------- predict-the-output mode ---------- */
 .dp-predict { padding: .8rem 1rem; border-top: 1px dashed var(--dp-border); }
 .dp-predict__q { margin: 0 0 .55rem; font-size: .88rem; color: var(--dp-muted); line-height: 1.5; }
@@ -915,3 +984,92 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-comments { margin: 2.6rem 0 1rem; padding-top: 1.8rem; border-top: 1px solid var(--dp-border); }
 .dp-comments__title { font-size: 1.35rem; margin: 0 0 .3rem; }
 .dp-comments__hint { color: var(--dp-muted); font-size: .9rem; margin: 0 0 1.2rem; }
+
+/* =====================================================================
+   Mobile pass — narrow-viewport fixes for the newer components.
+   ===================================================================== */
+@media (max-width: 680px) {
+  /* five header controls don't fit with a (masked-email) label — icon only;
+     the dialog itself still shows the full address */
+  .dp-account-btn [data-dp-account-label] { display: none; }
+  .dp-account-btn { padding: 0 .55rem; }
+  .dp-nav__actions { gap: .35rem; }
+  .dp-lang-btn { min-width: 38px; padding: 0 .45rem; }
+}
+@media (max-width: 400px) {
+  /* the smallest phones: keep the {} mark, drop the wordmark */
+  .dp-brand span:not(.dp-brand__mark) { display: none; }
+}
+@media (max-width: 640px) {
+  .dp-nudge { max-width: calc(100vw - 2rem); }
+  .dp-tree { padding: 1rem .95rem; }
+  .dp-resume { padding: 1rem 1.1rem; }
+  .dp-account { padding: 1.1rem 1.1rem; }
+  .dp-review__empty { padding: 1.8rem .95rem; }
+  .dp-like-row { padding: .9rem .95rem; }
+  .dp-comments { padding-top: 1.4rem; }
+}
+
+/* =====================================================================
+   Light theme — opt-in via the ☀️ toggle ([data-theme="light"] on <html>).
+   Everything token-driven adapts from the overrides below; the rest are
+   spot fixes for dark-assuming values.
+   ===================================================================== */
+/* Shiki emits both palettes as CSS vars (defaultColor:false) — pick here. */
+.astro-code, .astro-code span { color: var(--shiki-dark); }
+[data-theme="light"] .astro-code, [data-theme="light"] .astro-code span { color: var(--shiki-light); }
+
+[data-theme="light"] {
+  --dp-accent:        #0792b4;
+  --dp-accent-2:      #056a85;
+  --dp-bg:            #f4f7fa;
+  --dp-bg-2:          #e9eef4;
+  --dp-surface:       #ffffff;
+  --dp-surface-2:     #f1f5f9;
+  --dp-surface-3:     #e2e8f0;
+  --dp-border:        #d9e1ea;
+  --dp-border-strong: #bfcad7;
+  --dp-text:          #16202b;
+  --dp-muted:         #51647a;
+  --dp-shadow:        0 18px 50px -12px rgba(15, 30, 50, .18);
+  --dp-shadow-sm:     0 6px 20px -8px rgba(15, 30, 50, .12);
+  --dp-glow:          0 0 0 1px rgba(7, 146, 180, .22), 0 14px 40px -10px rgba(7, 146, 180, .16);
+}
+[data-theme="light"] a:hover,
+[data-theme="light"] .dp-brand:hover,
+[data-theme="light"] .dp-btn:hover { color: #0a1320; }
+[data-theme="light"] .dp-card:hover,
+[data-theme="light"] .dp-topic:not(.dp-topic--soon):hover { color: #0a1320; }
+[data-theme="light"] .dp-hero h1 {
+  background: linear-gradient(92deg, #16202b, var(--dp-accent));
+  -webkit-background-clip: text; background-clip: text;
+}
+[data-theme="light"] .dp-prose tr:nth-child(even) td { background: rgba(15, 30, 50, .03); }
+[data-theme="light"] .dp-btn--primary,
+[data-theme="light"] .dp-btn--primary:hover { color: #ffffff; }
+[data-theme="light"] .dp-brand__mark { color: #ffffff; }
+
+/* inline code: dark-fixed text color → readable dark-on-light */
+[data-theme="light"] .dp-prose code:not(pre code) { color: #15324a; }
+
+/* code blocks: light canvas (the Shiki vars above supply light tokens) */
+[data-theme="light"] .dp-prose pre:not(.mermaid) { background: #f6f8fa !important; }
+
+/* mermaid: the diagram renders with the `neutral` theme on light — drop the
+   dark prose-pre canvas behind it */
+[data-theme="light"] .dp-prose pre.mermaid { background: transparent !important; }
+
+/* playground & challenges: light editor canvas + a light prism palette */
+[data-theme="light"] .dp-pg__editor { background: #fbfdff; color: #1d2935; caret-color: #1d2935; }
+[data-theme="light"] .dp-pg .token.comment, [data-theme="light"] .dp-pg .token.prolog,
+[data-theme="light"] .dp-pg .token.doctype, [data-theme="light"] .dp-pg .token.cdata { color: #64748b; }
+[data-theme="light"] .dp-pg .token.string, [data-theme="light"] .dp-pg .token.char { color: #047857; }
+[data-theme="light"] .dp-pg .token.keyword { color: #7c3aed; }
+[data-theme="light"] .dp-pg .token.boolean, [data-theme="light"] .dp-pg .token.number,
+[data-theme="light"] .dp-pg .token.constant, [data-theme="light"] .dp-pg .token.symbol { color: #b45309; }
+[data-theme="light"] .dp-pg .token.function, [data-theme="light"] .dp-pg .token.builtin,
+[data-theme="light"] .dp-pg .token.class-name { color: #1d4ed8; }
+[data-theme="light"] .dp-pg .token.operator, [data-theme="light"] .dp-pg .token.punctuation { color: #475569; }
+[data-theme="light"] .dp-pg__out--err { color: #b91c1c; }
+[data-theme="light"] .dp-pg__out--ok { color: #047857; }
+[data-theme="light"] .dp-chal__expected pre { color: #047857; }
