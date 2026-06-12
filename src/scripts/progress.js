@@ -14,7 +14,47 @@ function isLearned(slug) { return learned.has(slug); }
 function setLearned(slug, on) {
   if (on) learned.add(slug); else learned.delete(slug);
   saveLearned(learned);
+  pushProgress([slug], on);
   window.dispatchEvent(new CustomEvent('dp:progress', { detail: { slug, on } }));
+}
+
+/* --- cross-device sync — same email (and hashed storage) as page likes --- */
+const EMAIL_KEY = 'dp-email';
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(\.[^\s@.]+)+$/;
+
+function userEmail() {
+  try { return localStorage.getItem(EMAIL_KEY) || ''; } catch { return ''; }
+}
+function setUserEmail(email) {
+  try { localStorage.setItem(EMAIL_KEY, email); } catch {}
+}
+
+function pushProgress(slugs, on) {
+  const email = userEmail();
+  if (!email || !slugs.length) return;
+  fetch('/api/progress', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, slugs, learned: on }),
+  }).catch(() => {});
+}
+
+async function syncProgress() {
+  const email = userEmail();
+  if (!email) return;
+  try {
+    const res = await fetch('/api/progress?email=' + encodeURIComponent(email));
+    if (!res.ok) return;
+    const server = new Set((await res.json()).slugs || []);
+    const localOnly = [...learned].filter((s) => !server.has(s));
+    let merged = false;
+    server.forEach((s) => { if (!learned.has(s)) { learned.add(s); merged = true; } });
+    if (merged) {
+      saveLearned(learned);
+      window.dispatchEvent(new CustomEvent('dp:progress', { detail: {} }));
+    }
+    pushProgress(localOnly, true); // a device's pre-sync marks count too
+  } catch {}
 }
 
 function pct(done, total) { return total ? Math.round((done / total) * 100) : 0; }
@@ -51,6 +91,7 @@ function initLearnButton() {
     btn.style.borderColor = on ? 'transparent' : '';
   };
   btn.addEventListener('click', () => { setLearned(slug, !isLearned(slug)); render(); });
+  window.addEventListener('dp:progress', render); // re-render after a server merge
   render();
 }
 
@@ -58,10 +99,80 @@ function initReset() {
   const btn = document.querySelector('[data-dp-reset]');
   if (!btn) return;
   btn.addEventListener('click', () => {
-    if (!confirm('Reset your learning progress? This clears all “learned” marks.')) return;
+    const synced = !!userEmail();
+    const msg = synced
+      ? 'Reset your learning progress? This clears all “learned” marks on every synced device.'
+      : 'Reset your learning progress? This clears all “learned” marks.';
+    if (!confirm(msg)) return;
+    pushProgress([...learned], false); // clear server copy too, or sync restores it
     learned = new Set(); saveLearned(learned);
     paintCards(); paintBars();
   });
+}
+
+/* "Sync across devices" UI — injected next to every Reset button (track
+   landings) and under the sidebar's learn button, so no template changes. */
+function maskEmail(email) {
+  const at = email.indexOf('@');
+  const user = email.slice(0, at);
+  return (user.length > 2 ? user.slice(0, 2) + '…' : user) + email.slice(at);
+}
+
+function buildSyncUI() {
+  const wrap = document.createElement('div');
+  wrap.className = 'dp-sync';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dp-btn dp-btn--ghost dp-btn--sm dp-sync__btn';
+  const form = document.createElement('form');
+  form.className = 'dp-sync__form';
+  form.hidden = true;
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.required = true;
+  input.placeholder = 'you@example.com';
+  input.setAttribute('aria-label', 'Your email');
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'dp-btn dp-btn--sm dp-btn--primary';
+  save.textContent = 'Sync';
+  const note = document.createElement('span');
+  note.className = 'dp-sync__note';
+  note.textContent = 'Saves your progress under this email (stored hashed) so you can pick it up on any device.';
+  form.append(input, save, note);
+  const render = () => {
+    const email = userEmail();
+    btn.textContent = email ? `⇅ Synced · ${maskEmail(email)}` : '⇅ Sync across devices…';
+    btn.title = email
+      ? 'Progress is saved under this email. Click to change it.'
+      : 'Enter your email to keep your progress on any device.';
+  };
+  btn.addEventListener('click', () => {
+    form.hidden = !form.hidden;
+    if (!form.hidden) { input.value = userEmail(); input.focus(); }
+  });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const email = input.value.trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) return;
+    setUserEmail(email);
+    form.hidden = true;
+    window.dispatchEvent(new CustomEvent('dp:email', { detail: { email } }));
+  });
+  window.addEventListener('dp:email', render);
+  render();
+  wrap.append(btn, form);
+  return wrap;
+}
+
+function initSync() {
+  document.querySelectorAll('[data-dp-reset]').forEach((reset) => {
+    reset.insertAdjacentElement('beforebegin', buildSyncUI());
+  });
+  const learn = document.querySelector('[data-dp-learn]');
+  if (learn) learn.insertAdjacentElement('afterend', buildSyncUI());
+  window.addEventListener('dp:email', () => syncProgress());
+  syncProgress();
 }
 
 function initProgressViews() {
@@ -151,6 +262,7 @@ function boot() {
   initLearnButton();
   initProgressViews();
   initReset();
+  initSync();
   initToc();
   initQuiz();
 }

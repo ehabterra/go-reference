@@ -45,10 +45,26 @@ export default function LikeButton({ page }: Props) {
       .catch(() => {});
   }
 
+  const emailRef = useRef('');
+
   useEffect(() => {
     const saved = storedEmail();
+    emailRef.current = saved;
     setEmail(saved);
     fetchState(saved);
+  }, [page]);
+
+  // The progress "Sync across devices" form saves the same email — follow it.
+  useEffect(() => {
+    const onEmail = (e: Event) => {
+      const next = (e as CustomEvent).detail?.email ?? storedEmail();
+      if (next === emailRef.current) return;
+      emailRef.current = next;
+      setEmail(next);
+      fetchState(next);
+    };
+    window.addEventListener('dp:email', onEmail);
+    return () => window.removeEventListener('dp:email', onEmail);
   }, [page]);
 
   useEffect(() => {
@@ -111,9 +127,11 @@ export default function LikeButton({ page }: Props) {
     try {
       localStorage.setItem(EMAIL_KEY, next);
     } catch {}
+    emailRef.current = next;
     setEmail(next);
     setError('');
     setAsking(false);
+    window.dispatchEvent(new CustomEvent('dp:email', { detail: { email: next } }));
     if (mode === 'like') send(next, true);
     else fetchState(next);
   }
