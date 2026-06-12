@@ -2,6 +2,7 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
+import SkillTree from '../../components/SkillTree.astro';
 import { SECURITY_CATEGORIES } from '../../lib/consts';
 
 const topics = await getCollection('security');
@@ -46,6 +47,8 @@ const slugs = topics.filter((t) => t.data.kind !== 'pattern').map((t) => t.id).j
     </div>
     <p class="dp-kicker" style="margin:.7rem 0 0;" data-i18n="security.progressNote">Mark a topic “learned” on its page and watch the bars fill.</p>
   </div>
+
+  <SkillTree entries={topics} categories={SECURITY_CATEGORIES} base="/security" />
 
   {SECURITY_CATEGORIES.map((c) => (
     <CategorySection cat={c.key} title={c.title} blurb={c.blurb} collection="security" base="/security" />

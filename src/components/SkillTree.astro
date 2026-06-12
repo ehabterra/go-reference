@@ -1,0 +1,42 @@
+---
+// A compact skill map of the track: tiers are the track's categories, nodes
+// its pages in reading order. progress.js (initSkillTree) lights learned
+// nodes, pulses the next unlearned one, and marks completed tiers.
+const { entries, categories, base } = Astro.props as {
+  entries: any[];
+  categories: { key: string; title: string }[];
+  base: string;
+};
+const tiers = categories
+  .map((c) => ({
+    key: c.key,
+    title: c.title,
+    pages: entries
+      .filter((e) => e.data.category === c.key)
+      .sort((a, b) => a.data.order - b.data.order),
+  }))
+  .filter((t) => t.pages.length > 0);
+---
+<section class="dp-tree" data-dp-tree>
+  <div class="dp-tree__head">
+    <h2 class="dp-tree__title" data-i18n="tree.title">Skill map</h2>
+    <p class="dp-tree__hint" data-i18n="tree.hint">
+      Learned nodes light up — the glowing one is your next step. Click any node to jump in.
+    </p>
+  </div>
+  <div class="dp-tree__tiers">
+    {tiers.map((t) => (
+      <div class="dp-tree__tier" data-tree-tier>
+        <span class="dp-tree__tier-label">{t.title}</span>
+        <div class="dp-tree__nodes">
+          {t.pages.map((p) => (
+            <a class="dp-tree__node" href={`${base}/${p.id}/`} data-tree-slug={p.id}>
+              <span class="dp-tree__dot" aria-hidden="true"></span>
+              {p.data.title}
+            </a>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+</section>

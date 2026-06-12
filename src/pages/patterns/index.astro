@@ -3,6 +3,7 @@ import { getCollection } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import CategorySection from '../../components/CategorySection.astro';
 import Card from '../../components/Card.astro';
+import SkillTree from '../../components/SkillTree.astro';
 import { CATEGORIES } from '../../lib/consts';
 
 const all = await getCollection('patterns');
@@ -43,6 +44,8 @@ const cheat = byId('cheatsheet');
       Saved in your browser — mark a pattern “learned” on its page and watch the bars fill.
     </p>
   </div>
+
+  <SkillTree entries={all} categories={CATEGORIES} base="/patterns" />
 
   <h2 class="dp-section-head" style="border:0;" data-i18n="pat.how">How this guide works</h2>
   <div class="dp-features">

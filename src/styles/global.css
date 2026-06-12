@@ -760,6 +760,50 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-resume__meta { margin: .35rem 0 0; color: var(--dp-muted); font-size: .88rem; }
 .dp-resume__actions { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 
+/* ---------- skill map (track landings) ---------- */
+.dp-tree {
+  margin: 1.8rem 0; padding: 1.3rem 1.4rem;
+  border: 1px solid var(--dp-border); border-radius: var(--dp-radius); background: var(--dp-surface);
+}
+.dp-tree__title { margin: 0; font-size: 1.15rem; }
+.dp-tree__hint { margin: .3rem 0 0; color: var(--dp-muted); font-size: .86rem; }
+.dp-tree__tiers { position: relative; display: flex; flex-direction: column; gap: 1.15rem; margin-top: 1.1rem; }
+.dp-tree__tiers::before {
+  content: ''; position: absolute; top: 8px; bottom: 8px; inset-inline-start: 7px;
+  width: 2px; background: linear-gradient(var(--dp-border-strong) 70%, transparent);
+}
+.dp-tree__tier { position: relative; padding-inline-start: 1.7rem; }
+.dp-tree__tier::before {
+  content: ''; position: absolute; inset-inline-start: 0; top: .1rem;
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--dp-border-strong); background: var(--dp-bg);
+  transition: border-color .3s, background .3s;
+}
+.dp-tree__tier.is-done::before { border-color: #34d399; background: rgba(52, 211, 153, .35); }
+.dp-tree__tier-label {
+  font-size: .76rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--dp-muted);
+}
+.dp-tree__nodes { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .5rem; }
+.dp-tree__node {
+  display: inline-flex; align-items: center; gap: .42rem;
+  padding: .32rem .72rem; border-radius: 999px;
+  border: 1px solid var(--dp-border); background: var(--dp-bg);
+  color: var(--dp-muted); font-size: .8rem; text-decoration: none;
+  transition: border-color .2s, color .2s, transform .2s;
+}
+.dp-tree__node:hover { transform: translateY(-2px); color: var(--dp-text); border-color: var(--dp-accent); }
+.dp-tree__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dp-border-strong); flex: none; }
+.dp-tree__node.is-learned { color: var(--dp-text); border-color: rgba(52, 211, 153, .45); background: rgba(52, 211, 153, .08); }
+.dp-tree__node.is-learned .dp-tree__dot { background: #34d399; }
+.dp-tree__node.is-next { color: var(--dp-text); border-color: var(--dp-accent); animation: dp-tree-pulse 2s infinite; }
+.dp-tree__node.is-next .dp-tree__dot { background: var(--dp-accent); }
+@keyframes dp-tree-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 194, 242, .45); }
+  70% { box-shadow: 0 0 0 8px rgba(0, 194, 242, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 194, 242, 0); }
+}
+
 /* ---------- predict-the-output mode ---------- */
 .dp-predict { padding: .8rem 1rem; border-top: 1px dashed var(--dp-border); }
 .dp-predict__q { margin: 0 0 .55rem; font-size: .88rem; color: var(--dp-muted); line-height: 1.5; }

@@ -391,6 +391,33 @@ function initStreakChip() {
   render();
 }
 
+/* --- skill map on track landings: light learned, pulse the next step --- */
+function initSkillTree() {
+  document.querySelectorAll('[data-dp-tree]').forEach((tree) => {
+    const nodes = [...tree.querySelectorAll('[data-tree-slug]')];
+    if (!nodes.length) return;
+    const render = () => {
+      let nextFound = false;
+      for (const n of nodes) {
+        const on = isLearned(n.getAttribute('data-tree-slug'));
+        n.classList.toggle('is-learned', on);
+        const isNext = !on && !nextFound;
+        if (isNext) nextFound = true;
+        n.classList.toggle('is-next', isNext);
+      }
+      tree.querySelectorAll('[data-tree-tier]').forEach((tier) => {
+        const tierNodes = [...tier.querySelectorAll('[data-tree-slug]')];
+        tier.classList.toggle(
+          'is-done',
+          tierNodes.length > 0 && tierNodes.every((n) => n.classList.contains('is-learned'))
+        );
+      });
+    };
+    window.addEventListener('dp:progress', render);
+    render();
+  });
+}
+
 /* --- resume card: remember the last visited page, surface it on the hub --- */
 const LAST_KEY = 'dp-last';
 
@@ -557,6 +584,7 @@ function boot() {
   initMilestoneWatch();
   initMilestoneChips();
   initStreakChip();
+  initSkillTree();
   initToc();
   initQuiz();
 }
