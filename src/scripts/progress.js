@@ -179,33 +179,9 @@ function initAccount() {
   render();
 }
 
-/* Small "⇅ Sync" openers next to every Reset button and under the sidebar's
-   learn button — injected, so no template changes across the landings. */
-function buildSyncButton() {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'dp-btn dp-btn--ghost dp-btn--sm dp-sync__btn';
-  const render = () => {
-    const email = userEmail();
-    btn.textContent = email
-      ? `⇅ ${maskEmail(email)}`
-      : `⇅ ${t('sync.cta', 'Sync across devices…')}`;
-    btn.title = email
-      ? 'Progress and likes sync under this email. Click to change it.'
-      : 'Add your email to keep your progress on any device.';
-  };
-  btn.addEventListener('click', openAccountDialog);
-  window.addEventListener('dp:email', render);
-  render();
-  return btn;
-}
-
 function initSync() {
-  document.querySelectorAll('[data-dp-reset]').forEach((reset) => {
-    reset.insertAdjacentElement('beforebegin', buildSyncButton());
-  });
-  const learn = document.querySelector('[data-dp-learn]');
-  if (learn) learn.insertAdjacentElement('afterend', buildSyncButton());
+  // No injected sync openers anymore — the central "⇅ Sync" in the header is
+  // the single entry point. This just wires the actual sync to run.
   window.addEventListener('dp:email', () => { syncProgress(); syncState(); });
   syncProgress();
   syncState();
