@@ -74,6 +74,27 @@ export const GET: APIRoute = async ({ url, locals }) => {
     }
   }
 
+  // "my liked pages" mode: every page this visitor liked, newest first, each
+  // with the page's total like count.
+  const mine = normalizeVisitor(url.searchParams.get('mine'));
+  if (url.searchParams.has('mine')) {
+    if (!mine) return json({ error: 'Bad visitor.' }, 400);
+    try {
+      await ensureSchema(db);
+      const { results } = await db
+        .prepare(
+          `SELECT page, created_at AS liked_at,
+                  (SELECT COUNT(*) FROM likes a WHERE a.page = likes.page) AS count
+           FROM likes WHERE visitor_id = ?1 ORDER BY created_at DESC LIMIT 100`
+        )
+        .bind(mine)
+        .all<{ page: string; liked_at: string; count: number }>();
+      return json({ pages: results });
+    } catch {
+      return json({ error: 'Storage unavailable.' }, 503);
+    }
+  }
+
   const page = url.searchParams.get('page') ?? '';
   const visitor = normalizeVisitor(url.searchParams.get('visitor'));
   if (!PAGE_RE.test(page)) return json({ error: 'Bad page.' }, 400);
