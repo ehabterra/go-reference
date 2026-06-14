@@ -179,33 +179,9 @@ function initAccount() {
   render();
 }
 
-/* Small "⇅ Sync" openers next to every Reset button and under the sidebar's
-   learn button — injected, so no template changes across the landings. */
-function buildSyncButton() {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'dp-btn dp-btn--ghost dp-btn--sm dp-sync__btn';
-  const render = () => {
-    const email = userEmail();
-    btn.textContent = email
-      ? `⇅ ${maskEmail(email)}`
-      : `⇅ ${t('sync.cta', 'Sync across devices…')}`;
-    btn.title = email
-      ? 'Progress and likes sync under this email. Click to change it.'
-      : 'Add your email to keep your progress on any device.';
-  };
-  btn.addEventListener('click', openAccountDialog);
-  window.addEventListener('dp:email', render);
-  render();
-  return btn;
-}
-
 function initSync() {
-  document.querySelectorAll('[data-dp-reset]').forEach((reset) => {
-    reset.insertAdjacentElement('beforebegin', buildSyncButton());
-  });
-  const learn = document.querySelector('[data-dp-learn]');
-  if (learn) learn.insertAdjacentElement('afterend', buildSyncButton());
+  // No injected sync openers anymore — the central "⇅ Sync" in the header is
+  // the single entry point. This just wires the actual sync to run.
   window.addEventListener('dp:email', () => { syncProgress(); syncState(); });
   syncProgress();
   syncState();
@@ -481,6 +457,64 @@ function initTopLikes() {
     .catch(() => {});
 }
 
+/* --- "my liked pages" on the hub — the pages this visitor has liked --- */
+function initMyLikes() {
+  const wrap = document.querySelector('[data-dp-mylikes]');
+  const data = document.getElementById('dp-resume-manifest');
+  if (!wrap || !data) return;
+  let manifest = [];
+  try { manifest = JSON.parse(data.textContent || '[]'); } catch {}
+  const byPath = new Map();
+  for (const tr of manifest) {
+    for (const p of tr.pages) {
+      byPath.set(`${tr.base}/${p.id}`, { title: p.title, track: tr.name, url: `${tr.base}/${p.id}/` });
+    }
+  }
+  const grid = wrap.querySelector('[data-dp-mylikes-grid]');
+
+  const render = async () => {
+    const email = userEmail();
+    if (!email) { wrap.hidden = true; return; } // likes need an email — nothing to show
+    try {
+      const res = await fetch('/api/likes?mine=' + (await visitorHash(email)));
+      if (!res.ok) return;
+      const locale = document.documentElement.lang === 'ar' ? 'ar' : undefined;
+      const fmtDate = (s) => {
+        if (!s) return '';
+        // created_at is a UTC "YYYY-MM-DD HH:MM:SS" string from SQLite
+        const d = new Date(s.replace(' ', 'T') + 'Z');
+        return isNaN(d) ? '' : d.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' });
+      };
+      const rows = ((await res.json()).pages || [])
+        .map((row) => ({ ...byPath.get(row.page), count: row.count, likedAt: fmtDate(row.liked_at) }))
+        .filter((r) => r.title);
+      grid.innerHTML = '';
+      if (!rows.length) { wrap.hidden = true; return; }
+      for (const r of rows) {
+        const a = document.createElement('a');
+        a.className = 'dp-toplike';
+        a.href = r.url;
+        const body = document.createElement('span');
+        body.className = 'dp-toplike__body';
+        const title = document.createElement('strong');
+        title.textContent = r.title;
+        const meta = document.createElement('span');
+        meta.className = 'dp-toplike__meta';
+        meta.textContent = r.likedAt ? `${r.track} · ${r.likedAt}` : r.track;
+        body.append(title, meta);
+        const count = document.createElement('span');
+        count.className = 'dp-toplike__count';
+        count.textContent = `♥ ${r.count}`;
+        a.append(body, count);
+        grid.appendChild(a);
+      }
+      wrap.hidden = false;
+    } catch {}
+  };
+  render();
+  window.addEventListener('dp:email', render); // populate the moment an email is set
+}
+
 /* --- skill map on track landings: light learned, pulse the next step --- */
 function initSkillTree() {
   document.querySelectorAll('[data-dp-tree]').forEach((tree) => {
@@ -673,6 +707,7 @@ function boot() {
   initResume();
   initReviewCard();
   initTopLikes();
+  initMyLikes();
   initMilestoneWatch();
   initMilestoneChips();
   initStreakChip();

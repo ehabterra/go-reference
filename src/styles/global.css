@@ -714,12 +714,16 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-gloss__def code { font-size: .85em; }
 
 /* ---------- page likes ---------- */
-.dp-like-row {
-  display: flex; align-items: center; justify-content: center; gap: .9rem; flex-wrap: wrap;
-  margin: 2.2rem 0 1rem; padding: 1.1rem 1.25rem;
-  border: 1px solid var(--dp-border); border-radius: var(--dp-radius); background: var(--dp-surface);
+/* Like lives in the sticky sidebar (always visible while reading). On mobile
+   the sidebar stacks to the page bottom, so the dock floats instead — pinned
+   bottom-left to clear the bottom-right nudge toast. */
+.dp-like-dock { margin: .8rem 0; }
+@media (max-width: 1039px) {
+  .dp-like-dock {
+    position: fixed; bottom: 1rem; inset-inline-start: 1rem; z-index: 80; margin: 0;
+  }
+  .dp-like-dock .dp-like { box-shadow: var(--dp-shadow); }
 }
-.dp-like-row__label { color: var(--dp-muted); font-size: .92rem; }
 .dp-like {
   display: inline-flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
   border-radius: 999px; border: 1px solid var(--dp-border-strong);
@@ -926,11 +930,6 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-review__src:hover { text-decoration: underline; }
 .dp-review__nav { display: flex; justify-content: flex-end; margin-top: 1rem; }
 
-/* ---------- progress sync (cross-device) ---------- */
-.dp-sync__btn { font-size: .78rem; }
-.dp-overall__top .dp-sync__btn { margin-left: auto; }
-.dp-article__toc-inner .dp-sync__btn { margin-top: .7rem; }
-
 /* header sync button + the central email dialog */
 .dp-account-btn {
   display: inline-flex; align-items: center; gap: .35rem; height: 34px;
@@ -1006,7 +1005,6 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
   .dp-resume { padding: 1rem 1.1rem; }
   .dp-account { padding: 1.1rem 1.1rem; }
   .dp-review__empty { padding: 1.8rem .95rem; }
-  .dp-like-row { padding: .9rem .95rem; }
   .dp-comments { padding-top: 1.4rem; }
 }
 

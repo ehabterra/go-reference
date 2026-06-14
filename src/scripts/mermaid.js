@@ -4,9 +4,12 @@ let mermaidImport = null;
 async function renderMermaid() {
   const nodes = document.querySelectorAll('pre.mermaid');
   if (!nodes.length) return;
-  // keep the source so a theme toggle can re-render from scratch
+  // Keep the source so a theme toggle can re-render from scratch. NB: must NOT
+  // be `data-src` — Prism's file-highlight plugin (bundled with the playground)
+  // treats any `<pre data-src>` as a file URL to fetch, which fails noisily
+  // ("File does not exist or is empty") on the diagram text.
   nodes.forEach((n) => {
-    if (!n.dataset.src) n.dataset.src = n.textContent;
+    if (!n.dataset.mermaidSrc) n.dataset.mermaidSrc = n.textContent;
   });
   const { default: mermaid } = await (mermaidImport ??= import('mermaid'));
   const light = document.documentElement.dataset.theme === 'light';
@@ -33,9 +36,9 @@ window.addEventListener('dp:theme', () => {
   const nodes = document.querySelectorAll('pre.mermaid');
   if (!nodes.length) return;
   nodes.forEach((n) => {
-    if (n.dataset.src) {
+    if (n.dataset.mermaidSrc) {
       n.removeAttribute('data-processed');
-      n.textContent = n.dataset.src;
+      n.textContent = n.dataset.mermaidSrc;
     }
   });
   renderMermaid();

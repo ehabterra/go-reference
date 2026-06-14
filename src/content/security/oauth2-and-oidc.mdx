@@ -89,7 +89,7 @@ This is the recommended flow for SPAs, mobile, and server apps alike:
   participant U as User browser
   participant C as Your app
   participant A as Auth server (IdP)
-  C->>C: make code_verifier; challenge = S256(verifier)
+  C->>C: make code_verifier, then challenge = S256(verifier)
   C->>A: /authorize?...&code_challenge=challenge&state=xyz
   U->>A: log in + consent
   A-->>C: redirect ?code=AUTH_CODE&state=xyz
