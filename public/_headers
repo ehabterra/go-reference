@@ -1,0 +1,7 @@
+# Cloudflare Workers Static Assets reads this file (copied from public/ to the
+# dist/ root at build). Everything under /_astro/ is content-hashed by Astro —
+# the filename changes whenever the bytes change — so these assets are safe to
+# cache forever. This turns the default "revalidate every visit" into a one-
+# time download for mermaid, prism, react and every other chunk.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
