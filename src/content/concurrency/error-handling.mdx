@@ -92,9 +92,9 @@ The compiler will not even let you write `err := go f()`. So the first mental sh
 The workhorse idiom: define a struct that carries *either* a successful value *or* an error, and send it on a channel. The worker fills in the struct; the consumer reads it and decides what to do. This keeps the two halves of an operation — its output and its failure — travelling together, so a result is never silently divorced from the error that explains it.
 
 <Mermaid code={String.raw`graph LR
-  W1["worker 1"] -->|Result{Value}| CH(("results chan"))
-  W2["worker 2 (fails)"] -->|Result{Err}| CH
-  W3["worker 3"] -->|Result{Value}| CH
+  W1["worker 1"] -->|"Result{Value}"| CH(("results chan"))
+  W2["worker 2 (fails)"] -->|"Result{Err}"| CH
+  W3["worker 3"] -->|"Result{Value}"| CH
   CH --> C["consumer: decide retry / skip / abort"]`} />
 
 Here we **fan out** one goroutine per job, each sending a `Result`, and collect them. Sorting the collected results makes the output deterministic no matter what order the goroutines finish in. **Run** it:
