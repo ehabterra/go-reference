@@ -287,6 +287,9 @@ function initLang() {
     root.dir = ar ? 'rtl' : 'ltr';
     if (btn) btn.textContent = ar ? 'EN' : 'عربي';
     markExternalLinks(); // AR content swaps innerHTML → re-mark new anchors
+    // the innerHTML swaps above wipe any injected nodes (e.g. highlight marks);
+    // let listeners re-apply themselves against the now-current language
+    window.dispatchEvent(new CustomEvent('dp:lang', { detail: { lang } }));
   }
 
   apply(root.dataset.lang === 'ar' ? 'ar' : 'en'); // honor the persisted choice on load

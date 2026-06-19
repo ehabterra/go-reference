@@ -387,6 +387,9 @@ function initContentPage() {
   });
   window.addEventListener('dp:highlights', reconcile);
   // a cross-device sync merges into the store, then fires dp:highlights → reconcile
+  // a language switch re-renders the prose innerHTML (dropping our marks) — the
+  // marks whose text exists in the now-current language get re-applied
+  window.addEventListener('dp:lang', reconcile);
 }
 
 /* --- the /highlights/ collection page ------------------------------------ */
