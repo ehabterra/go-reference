@@ -202,13 +202,18 @@ function initSearch() {
     const base = data.filter(passesFilters);
     if (!q) { results = base.slice(0, 50); active = 0; render(); return; }
 
+    // Carry the query so the destination page can highlight occurrences.
+    const enc = encodeURIComponent(q);
+    const link = (base, anchor) => `${base}?q=${enc}${anchor ? '#' + anchor : ''}`;
+
     // 1) Page-level matches (title / intent / category) via the inline index.
+    //    Build fresh objects — never mutate the shared inline index items.
     const pageHits = base
       .map((item) => ({ item, score: fuzzyScore(q, item) }))
       .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score)
-      .map((x) => x.item);
-    const seen = new Set(pageHits.map((r) => r.u));
+      .map((x) => ({ t: x.item.t, c: x.item.c, s: x.item.s, d: x.item.d, u: link(x.item.u), key: x.item.u }));
+    const seen = new Set(pageHits.map((r) => r.key));
 
     // 2) Content matches: sections whose text contains every query token. Each
     //    deep-links to its heading anchor and shows a marked excerpt.
@@ -220,12 +225,12 @@ function initSearch() {
         for (const sec of pg.secs) {
           const hay = (sec.h + ' ' + sec.x).toLowerCase();
           if (!tokens.every((t) => hay.includes(t))) continue;
-          const u = sec.a ? pg.u + '#' + sec.a : pg.u;
-          if (seen.has(u)) continue;
-          seen.add(u);
+          const key = sec.a ? pg.u + '#' + sec.a : pg.u;
+          if (seen.has(key)) continue;
+          seen.add(key);
           const inHeading = tokens.some((t) => sec.h.toLowerCase().includes(t));
           secHits.push({
-            t: pg.t, u, c: pg.c, s: pg.s, d: pg.d, h: sec.h,
+            t: pg.t, u: link(pg.u, sec.a), c: pg.c, s: pg.s, d: pg.d, h: sec.h,
             snip: makeSnippet(sec.x || sec.h, tokens[0]),
             _score: inHeading ? 90 : 50,
           });
@@ -391,6 +396,60 @@ function markExternalLinks() {
   });
 }
 
+/* ---------- highlight search hits on the landing page ----------
+   When you open a result, the query rides along as `?q=…`. We mark every
+   occurrence in the prose with the CSS Custom Highlight API — no DOM mutation,
+   so it never clashes with the user-highlight <mark>s or the bilingual swap —
+   then scroll the first hit into view (the #anchor only gets you to the
+   section; this lands you on the actual word). */
+function initSearchHighlight() {
+  if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') return;
+  const q = (new URLSearchParams(location.search).get('q') || '').trim().toLowerCase();
+  if (!q) return;
+  const body = document.querySelector('.dp-article__body');
+  if (!body) return;
+  const tokens = [...new Set(q.split(/\s+/).filter((t) => t.length >= 2))];
+  if (!tokens.length) return;
+
+  const ranges = [];
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      if (node.parentElement.closest('pre, code, script, style, .dp-mermaid'))
+        return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const text = n.nodeValue.toLowerCase();
+    for (const tok of tokens) {
+      for (let i = text.indexOf(tok); i !== -1; i = text.indexOf(tok, i + tok.length)) {
+        const r = document.createRange();
+        r.setStart(n, i);
+        r.setEnd(n, i + tok.length);
+        ranges.push(r);
+      }
+    }
+  }
+  if (!ranges.length) return;
+  CSS.highlights.set('dp-search', new Highlight(...ranges));
+
+  // Land on the first occurrence — prefer its enclosing heading if it is one,
+  // otherwise centre the matched text itself.
+  const firstEl = ranges[0].startContainer.parentElement;
+  const target = firstEl && (firstEl.closest('h2, h3, h4') || firstEl);
+  if (target) requestAnimationFrame(() => target.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+
+  // Esc clears the highlight and strips ?q from the URL (keep the #anchor).
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    CSS.highlights.delete('dp-search');
+    history.replaceState(null, '', location.pathname + location.hash);
+    document.removeEventListener('keydown', onKey);
+  };
+  document.addEventListener('keydown', onKey);
+}
+
 function boot() {
   initLang();
   markExternalLinks();
@@ -400,6 +459,7 @@ function boot() {
   initMenu();
   initCopy();
   initSearch();
+  initSearchHighlight();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
 else boot();
