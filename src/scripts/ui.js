@@ -107,6 +107,20 @@ function fuzzyScore(q, item) {
   return 0;
 }
 
+const escapeHtml = (s) =>
+  s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const escapeReg = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A short excerpt around the first occurrence of `q`, with the match marked.
+function makeSnippet(text, q) {
+  const i = text.toLowerCase().indexOf(q);
+  if (i < 0) return escapeHtml(text.slice(0, 120)) + (text.length > 120 ? ' …' : '');
+  const start = Math.max(0, i - 50);
+  const end = Math.min(text.length, i + q.length + 90);
+  const frag = (start > 0 ? '… ' : '') + text.slice(start, end) + (end < text.length ? ' …' : '');
+  return escapeHtml(frag).replace(new RegExp(escapeReg(q), 'ig'), (m) => `<mark>${m}</mark>`);
+}
+
 function initSearch() {
   const modal = document.getElementById('dp-cmdk');
   const input = document.getElementById('dp-cmdk-input');
@@ -120,6 +134,19 @@ function initSearch() {
   let results = [];
   let active = 0;
   let lastFocus = null;
+
+  // Full-text content index (page bodies, split into sections), fetched lazily
+  // on first open. Until it lands, search falls back to titles/intents only.
+  let content = null;
+  let contentTried = false;
+  const loadContent = () => {
+    if (content || contentTried) return;
+    contentTried = true;
+    fetch('/search-index.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (Array.isArray(d)) { content = d; if (modal.classList.contains('is-open')) search(input.value); } })
+      .catch(() => {});
+  };
 
   // ---- level & track filters ----
   const filtersEl = document.getElementById('dp-cmdk-filters');
@@ -153,11 +180,15 @@ function initSearch() {
     }
     list.innerHTML = results.map((r, i) => {
       const color = CAT_COLOR[r.c] || '#93a1b5';
-      const cat = r.c.replace(/-/g, ' ');
+      const cat = (r.c || '').replace(/-/g, ' ');
+      // Content (section) hits show the heading + a marked excerpt; page hits
+      // keep the original section · level subtitle.
+      const sub = r.h ? `${r.s} › ${escapeHtml(r.h)}` : `${r.s}${r.d ? ' · ' + r.d : ''}`;
       return `<li class="dp-cmdk__item ${i === active ? 'is-active' : ''}" data-i="${i}" data-u="${r.u}">
         <div class="dp-cmdk__item-main">
           <div class="dp-cmdk__item-title">${r.t}</div>
-          <div class="dp-cmdk__item-sub">${r.s}${r.d ? ' · ' + r.d : ''} · ${r.i || ''}</div>
+          <div class="dp-cmdk__item-sub">${sub}</div>
+          ${r.snip ? `<div class="dp-cmdk__item-snip">${r.snip}</div>` : ''}
         </div>
         <span class="dp-cmdk__tag" data-cat="${r.c}" style="color:${color}">${cat}</span>
       </li>`;
@@ -169,20 +200,47 @@ function initSearch() {
   const search = (q) => {
     q = q.trim().toLowerCase();
     const base = data.filter(passesFilters);
-    if (!q) { results = base.slice(0, 50); }
-    else {
-      results = base
-        .map((item) => ({ item, score: fuzzyScore(q, item) }))
-        .filter((x) => x.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 24)
-        .map((x) => x.item);
+    if (!q) { results = base.slice(0, 50); active = 0; render(); return; }
+
+    // 1) Page-level matches (title / intent / category) via the inline index.
+    const pageHits = base
+      .map((item) => ({ item, score: fuzzyScore(q, item) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.item);
+    const seen = new Set(pageHits.map((r) => r.u));
+
+    // 2) Content matches: sections whose text contains every query token. Each
+    //    deep-links to its heading anchor and shows a marked excerpt.
+    const secHits = [];
+    if (content) {
+      const tokens = q.split(/\s+/).filter(Boolean);
+      for (const pg of content) {
+        if (!passesFilters(pg)) continue;
+        for (const sec of pg.secs) {
+          const hay = (sec.h + ' ' + sec.x).toLowerCase();
+          if (!tokens.every((t) => hay.includes(t))) continue;
+          const u = sec.a ? pg.u + '#' + sec.a : pg.u;
+          if (seen.has(u)) continue;
+          seen.add(u);
+          const inHeading = tokens.some((t) => sec.h.toLowerCase().includes(t));
+          secHits.push({
+            t: pg.t, u, c: pg.c, s: pg.s, d: pg.d, h: sec.h,
+            snip: makeSnippet(sec.x || sec.h, tokens[0]),
+            _score: inHeading ? 90 : 50,
+          });
+        }
+      }
+      secHits.sort((a, b) => b._score - a._score);
     }
+
+    results = pageHits.concat(secHits).slice(0, 30);
     active = 0;
     render();
   };
 
   const open = () => {
+    loadContent();
     lastFocus = document.activeElement;
     modal.classList.add('is-open');
     modal.setAttribute('aria-hidden', 'false');
