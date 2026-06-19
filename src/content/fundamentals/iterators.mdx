@@ -1,0 +1,308 @@
+---
+title: "Iterators & range-over-func"
+category: types-methods
+kind: topic
+order: 13
+difficulty: "Intermediate"
+status: ready
+intent: "Since Go 1.23, range accepts an iterator function — iter.Seq[V] / iter.Seq2[K,V]. Drive your own for range loops, use the slices/maps helpers, and convert push to pull with iter.Pull."
+related:
+  - generics
+  - control-flow
+  - slices
+  - maps
+quiz:
+  - q: "What is the underlying type of `iter.Seq[V]`?"
+    options:
+      - text: "`func(yield func(V) bool)` — a function you call, that calls your loop body back"
+        correct: true
+      - text: "An interface with a `Next() (V, bool)` method"
+        correct: false
+      - text: "A channel `chan V`"
+        correct: false
+      - text: "A slice `[]V`"
+        correct: false
+    explain: "`iter.Seq[V]` is just `func(yield func(V) bool)`. The iterator pushes each value by calling `yield`; the compiler turns your `for v := range seq` loop body into that `yield` function. `iter.Seq2[K,V]` is `func(yield func(K, V) bool)` for two-value loops."
+  - q: "What does returning `false` from the `yield` function signal to a well-behaved iterator?"
+    options:
+      - text: "The consumer is done (a `break`, `return`, or error) — stop producing and clean up"
+        correct: true
+      - text: "The last value was invalid and should be skipped"
+        correct: false
+      - text: "Nothing — the return value is ignored"
+        correct: false
+      - text: "An error occurred inside yield"
+        correct: false
+    explain: "`yield` returns `false` when the loop is terminating early (the body hit `break`, `return`, `panic`, or a labeled break). An iterator must check `yield`'s result and stop — and run any deferred cleanup — instead of calling `yield` again."
+  - q: "Why must you call the `stop` function returned by `iter.Pull`?"
+    options:
+      - text: "It releases the iterator's resources — skipping it can leak a goroutine"
+        correct: true
+      - text: "It rewinds the iterator so it can be reused"
+        correct: false
+      - text: "It returns the number of values consumed"
+        correct: false
+      - text: "It is optional and has no effect"
+        correct: false
+    explain: "`iter.Pull` runs the push-style iterator on a separate goroutine so you can pull values on demand. If you stop pulling before the sequence ends, that goroutine is parked forever unless you call `stop` — so `defer stop()` right after the call."
+  - q: "What kind of value does `maps.Keys(m)` return in Go 1.23+?"
+    options:
+      - text: "An `iter.Seq[K]` you range over — not a materialized slice"
+        correct: true
+      - text: "A `[]K` slice of the keys"
+        correct: false
+      - text: "A sorted `[]K`"
+        correct: false
+      - text: "A channel of keys"
+        correct: false
+    explain: "`maps.Keys` / `maps.Values` return iterators (`iter.Seq`), lazily yielding without allocating a slice. To get a slice, pass the iterator to `slices.Collect`; to get them sorted, `slices.Sorted(maps.Keys(m))`."
+---
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Playground from '../../components/islands/Playground.tsx';
+
+<Callout type="analogy" title="🎚️ Analogy">
+Think of `range` as a universal remote. Before Go 1.23 it only spoke to a fixed set of devices — slices, maps, strings, channels, integers. An **iterator function** is a tiny adapter that lets *any* source — a tree walk, a paginated API, lines of a file, the keys of a map — speak the same `for range` language. You write the producer once; every consumer reads it with the loop they already know.
+</Callout>
+
+## The idea: a function the loop calls back
+
+Since **Go 1.23**, `for range` accepts a **function** as the thing being ranged over. The standard library names the two shapes in the [`iter`](https://pkg.go.dev/iter) package:
+
+```go
+type Seq[V any]     func(yield func(V) bool)
+type Seq2[K, V any] func(yield func(K, V) bool)
+```
+
+That's the whole protocol. An iterator is a function that takes one argument — a `yield` function — and calls it once per element. The compiler rewrites your loop body into that `yield`. So when you write:
+
+```go
+for v := range seq {        // seq is an iter.Seq[V]
+    fmt.Println(v)
+}
+```
+
+the compiler hands `seq` a `yield` whose body is `fmt.Println(v)`. `seq` drives the loop by calling `yield(v)` for each value; **`yield` returns `false`** when the loop wants to stop early (a `break`, `return`, or `panic` in the body), and the iterator must respect that and return.
+
+<Mermaid code={String.raw`sequenceDiagram
+  participant L as for range (consumer)
+  participant S as seq (iterator)
+  L->>S: call seq(yield)
+  loop until done or yield→false
+    S->>L: yield(value)
+    L-->>S: true (keep going) / false (stop)
+  end
+  S-->>L: return (loop ends)`} />
+
+## Ranging over an iterator
+
+`iter.Seq[V]` drives a one-variable loop; `iter.Seq2[K, V]` drives the two-variable form. You range over them exactly like a slice or map — the `break`, `continue`, and early `return` you already know all work:
+
+<Playground client:visible title="range-over-func.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"iter"
+)
+
+// Count yields 0, 1, 2, … up to n-1. Its type is iter.Seq[int].
+func Count(n int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := 0; i < n; i++ {
+			if !yield(i) { // consumer broke out — stop producing
+				return
+			}
+		}
+	}
+}
+
+func main() {
+	for i := range Count(5) {
+		if i == 3 {
+			break // yield returns false; Count sees it and returns
+		}
+		fmt.Println("tick", i)
+	}
+}`} />
+
+The producer (`Count`) and the consumer (`main`) are fully decoupled: `Count` knows nothing about the loop body, and `main` knows nothing about how the numbers are generated. Crucially, because the iterator is just a normal function call on the *same* goroutine, a `defer` inside `Count` still runs, and a `panic` in the loop body still unwinds through it — so cleanup is reliable.
+
+## The slices & maps helpers
+
+The real payoff is that the standard library now hands you iterators everywhere. The [`slices`](https://pkg.go.dev/slices) and [`maps`](https://pkg.go.dev/maps) packages gained iterator producers and consumers in Go 1.23:
+
+| Helper | Returns | Use |
+|---|---|---|
+| `slices.All(s)` | `iter.Seq2[int, V]` | index + value, like ranging the slice |
+| `slices.Values(s)` | `iter.Seq[V]` | just the values |
+| `slices.Backward(s)` | `iter.Seq2[int, V]` | iterate from the end |
+| `maps.Keys(m)` | `iter.Seq[K]` | the keys (random order) |
+| `maps.Values(m)` | `iter.Seq[V]` | the values |
+| `maps.All(m)` | `iter.Seq2[K, V]` | key + value pairs |
+| `slices.Collect(seq)` | `[]V` | drain an `iter.Seq` into a slice |
+| `slices.Sorted(seq)` | `[]V` | collect **and** sort |
+| `maps.Insert(m, seq2)` | — | bulk-insert pairs into a map |
+
+The producers are **lazy** — `maps.Keys(m)` doesn't allocate a slice of keys, it yields them one at a time. To turn a lazy sequence back into a concrete collection, hand it to a consumer like `slices.Collect` or `slices.Sorted`:
+
+<Playground client:visible title="stdlib-iterators.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"maps"
+	"slices"
+)
+
+func main() {
+	scores := map[string]int{"ana": 30, "bo": 25, "cy": 40}
+
+	// maps.Keys is lazy — no []string is built. Sort it deterministically.
+	for _, name := range slices.Sorted(maps.Keys(scores)) {
+		fmt.Printf("%s=%d\n", name, scores[name])
+	}
+
+	nums := []int{10, 20, 30}
+	// slices.Backward: index+value from the tail.
+	for i, v := range slices.Backward(nums) {
+		fmt.Printf("nums[%d]=%d\n", i, v)
+	}
+
+	// Collect an iterator into a slice.
+	fmt.Println(slices.Collect(maps.Values(scores))) // some order
+}`} />
+
+## Writing your own iterator
+
+Any type can expose an iterator method and instantly become rangeable. Here's an ordered set whose `All` method yields its elements — and a *filter* that wraps one iterator to produce another, the way `slices`/`maps` compose:
+
+<Playground client:visible title="custom-iterator.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"iter"
+	"sort"
+)
+
+type IntSet struct{ m map[int]struct{} }
+
+func NewIntSet(xs ...int) *IntSet {
+	s := &IntSet{m: map[int]struct{}{}}
+	for _, x := range xs {
+		s.m[x] = struct{}{}
+	}
+	return s
+}
+
+// All returns an iterator over the set's elements in sorted order.
+func (s *IntSet) All() iter.Seq[int] {
+	return func(yield func(int) bool) {
+		keys := make([]int, 0, len(s.m))
+		for k := range s.m {
+			keys = append(keys, k)
+		}
+		sort.Ints(keys)
+		for _, k := range keys {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+// Filter adapts any iter.Seq[V] into a new one keeping only matching values.
+func Filter[V any](seq iter.Seq[V], keep func(V) bool) iter.Seq[V] {
+	return func(yield func(V) bool) {
+		for v := range seq {
+			if keep(v) && !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+func main() {
+	set := NewIntSet(5, 2, 8, 2, 1, 8)
+	evens := Filter(set.All(), func(n int) bool { return n%2 == 0 })
+	for n := range evens {
+		fmt.Println(n) // 2, 8 — sorted, de-duplicated, even
+	}
+}`} />
+
+<Callout type="gotcha" title="⚠️ Three rules for a well-behaved iterator">
+1. **Stop when `yield` returns `false`.** Always write `if !yield(v) { return }`, never ignore the result — otherwise `break` in the consumer can't actually break.
+2. **Don't call `yield` again after it returns `false`** (or after a `panic`). The runtime will panic on a `yield` made to an already-finished loop.
+3. **Decide single-use vs. reusable.** A `Seq` built around a `*bufio.Scanner` or an open file is one-shot; one built around an in-memory slice can be ranged many times. Document which you are.
+</Callout>
+
+## Pull iterators: when you need to drive
+
+A `for range` loop is a **push** model — the iterator is in charge and pushes values at you. Sometimes you need the opposite: pull one value at a time, on your schedule — to merge two sequences, peek ahead, or interleave. [`iter.Pull`](https://pkg.go.dev/iter#Pull) converts a push iterator into a `next`/`stop` pair:
+
+<Playground client:visible title="iter-pull.go" code={String.raw`package main
+
+import (
+	"fmt"
+	"iter"
+	"slices"
+)
+
+// merge two sorted iterators into one sorted iter.Seq[int].
+func merge(a, b iter.Seq[int]) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		nextA, stopA := iter.Pull(a)
+		defer stopA() // MUST stop, or the producer goroutine leaks
+		nextB, stopB := iter.Pull(b)
+		defer stopB()
+
+		va, okA := nextA()
+		vb, okB := nextB()
+		for okA && okB {
+			if va <= vb {
+				if !yield(va) {
+					return
+				}
+				va, okA = nextA()
+			} else {
+				if !yield(vb) {
+					return
+				}
+				vb, okB = nextB()
+			}
+		}
+		for okA {
+			if !yield(va) {
+				return
+			}
+			va, okA = nextA()
+		}
+		for okB {
+			if !yield(vb) {
+				return
+			}
+			vb, okB = nextB()
+		}
+	}
+}
+
+func main() {
+	a := slices.Values([]int{1, 4, 7})
+	b := slices.Values([]int{2, 3, 8})
+	fmt.Println(slices.Collect(merge(a, b))) // [1 2 3 4 7 8]
+}`} />
+
+`iter.Pull` runs the push iterator on a separate goroutine and blocks it between `next()` calls. That goroutine only exits when the sequence is exhausted **or** you call `stop` — so `defer stop()` immediately, every time, even on the early-return paths. (`iter.Pull2` does the same for `Seq2`.)
+
+<Callout type="tip" title="💡 No iterator interface — by design">
+Other languages model iteration with an interface (`Iterator`/`IEnumerator`) and a `Next()` method holding explicit state. Go's choice — a plain function plus a callback — needs no new type, lets the compiler inline the whole loop, and makes the producer's *own* local variables and `defer`s the iteration state. The `for range` body and the iterator run on one goroutine, so errors and cancellation flow naturally. It's the same "few orthogonal features" instinct as [the single `for` loop](/fundamentals/control-flow/).
+</Callout>
+
+## See also
+
+- [Control flow](/fundamentals/control-flow/) — the `for range` loop and its other forms (slice, map, string, channel, integer).
+- [Generics](/fundamentals/generics/) — `iter.Seq[V]` is a generic function type; type parameters are what make reusable iterators like `Filter` possible.
+- [Slices](/fundamentals/slices/) — `slices.All`, `Values`, `Backward`, `Collect`, `Sorted`.
+- [Maps](/fundamentals/maps/) — `maps.Keys`, `Values`, `All`, and why their order is random.
+- The [iterator pattern](/patterns/iterator/) and [generator pattern](/patterns/generator/) — the design-pattern view, now expressible natively.
+- Go's own writeup: [Range Over Function Types](https://go.dev/blog/range-functions) and the [`iter` package docs](https://pkg.go.dev/iter).
+
+Next: branching on a value's dynamic type — [type assertions & switches](/fundamentals/type-assertions/).

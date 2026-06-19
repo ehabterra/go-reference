@@ -1071,3 +1071,142 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 [data-theme="light"] .dp-pg__out--err { color: #b91c1c; }
 [data-theme="light"] .dp-pg__out--ok { color: #047857; }
 [data-theme="light"] .dp-chal__expected pre { color: #047857; }
+
+/* =====================================================================
+   Text highlights — select-to-highlight marks, toolbar, popover, and the
+   /highlights/ collection page
+   ===================================================================== */
+mark.dp-hl {
+  --hl: 251, 191, 36;
+  background-color: rgba(var(--hl), .18);
+  box-shadow: inset 0 -2px 0 rgba(var(--hl), .9);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 .04em;
+  cursor: pointer;
+  transition: background-color .15s var(--dp-ease);
+}
+mark.dp-hl:hover,
+mark.dp-hl:focus-visible { background-color: rgba(var(--hl), .34); outline: none; }
+.dp-hl--yellow { --hl: 251, 191, 36; }
+.dp-hl--green  { --hl: 52, 211, 153; }
+.dp-hl--pink   { --hl: 244, 114, 182; }
+.dp-hl--blue   { --hl: 96, 165, 250; }
+
+/* floating toolbar shown above a live selection */
+.dp-hl-bar {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  gap: .45rem;
+  padding: .4rem .5rem;
+  background: var(--dp-surface-2);
+  border: 1px solid var(--dp-border-strong);
+  border-radius: 999px;
+  box-shadow: var(--dp-shadow-sm);
+}
+.dp-hl-bar[hidden] { display: none; }
+.dp-hl-bar__dot {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .3);
+  background-color: rgb(var(--hl));
+  cursor: pointer;
+  transition: transform .12s var(--dp-ease);
+}
+.dp-hl-bar__dot:hover { transform: scale(1.15); }
+
+/* remove / open popover on an existing highlight */
+.dp-hl-pop {
+  position: absolute;
+  z-index: 61;
+  display: flex;
+  gap: .35rem;
+  padding: .35rem;
+  background: var(--dp-surface-2);
+  border: 1px solid var(--dp-border-strong);
+  border-radius: var(--dp-radius-sm);
+  box-shadow: var(--dp-shadow-sm);
+}
+.dp-hl-pop__btn {
+  font: inherit;
+  font-size: .8rem;
+  padding: .3rem .6rem;
+  border-radius: 8px;
+  border: 1px solid var(--dp-border);
+  background: var(--dp-surface-3);
+  color: var(--dp-text);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dp-hl-pop__btn:hover { border-color: var(--dp-accent); }
+.dp-hl-pop__btn--ghost { background: transparent; color: var(--dp-muted); }
+
+/* the /highlights/ page */
+.dp-highlights { margin-top: 1.5rem; }
+.dp-highlights__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+}
+.dp-highlights__empty { text-align: center; padding: 2.5rem 1rem; }
+.dp-hl-group { margin: 1.8rem 0; }
+.dp-hl-group__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .55rem;
+  text-decoration: none;
+  border-bottom: 1px solid var(--dp-border);
+  padding-bottom: .45rem;
+}
+.dp-hl-group__title { font-weight: 700; color: var(--dp-text); }
+.dp-hl-group__head:hover .dp-hl-group__title { color: var(--dp-accent); }
+.dp-hl-group__path { font-family: var(--font-mono); font-size: .76rem; color: var(--dp-muted); }
+.dp-hl-card {
+  border: 1px solid var(--dp-border);
+  border-radius: var(--dp-radius);
+  background: var(--dp-surface);
+  padding: .85rem 1rem;
+  margin: .8rem 0;
+}
+.dp-hl-card__quote {
+  --hl: 251, 191, 36;
+  display: block;
+  color: var(--dp-text);
+  text-decoration: none;
+  line-height: 1.55;
+  padding: .5rem .8rem;
+  border-radius: var(--dp-radius-sm);
+  background-color: rgba(var(--hl), .12);
+  box-shadow: inset 3px 0 0 rgba(var(--hl), .9);
+}
+.dp-hl-card__quote:hover { background-color: rgba(var(--hl), .22); }
+.dp-hl-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: .55rem;
+  font-size: .78rem;
+  color: var(--dp-muted);
+}
+.dp-hl-card__del {
+  font: inherit;
+  font-size: .78rem;
+  color: var(--dp-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: .1rem .35rem;
+  border-radius: 6px;
+}
+.dp-hl-card__del:hover { color: var(--dp-practice); }
+
+/* light theme: deepen the underline so the mark reads on a white page */
+[data-theme="light"] mark.dp-hl { background-color: rgba(var(--hl), .28); }

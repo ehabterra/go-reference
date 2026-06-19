@@ -10,6 +10,7 @@ related:
   - variables-and-types
   - functions
   - slices
+  - iterators
 quiz:
   - q: "How many looping keywords does Go have?"
     options:
@@ -203,7 +204,7 @@ func main() {
 	}
 }`} />
 
-Since **Go 1.23**, `range` also accepts an **iterator function** — a function of type `iter.Seq[V]` or `iter.Seq2[K, V]` (a "range-over-func"). This lets your own types and the `slices`/`maps` package helpers (`slices.All`, `maps.Keys`, …) drive a `for range` loop just like a built-in collection, without materializing a slice.
+Since **Go 1.23**, `range` also accepts an **iterator function** — a function of type `iter.Seq[V]` or `iter.Seq2[K, V]` (a "range-over-func"). This lets your own types and the `slices`/`maps` package helpers (`slices.All`, `maps.Keys`, …) drive a `for range` loop just like a built-in collection, without materializing a slice. It's a whole topic of its own — see [Iterators & range-over-func](/fundamentals/iterators/).
 
 ## switch — clean multi-way branching
 

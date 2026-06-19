@@ -10,6 +10,7 @@ related:
   - slices
   - structs
   - hash-tables
+  - iterators
 quiz:
   - q: "What does `v, ok := m[key]` give you when the key is absent?"
     options:
@@ -257,7 +258,7 @@ Read-only sharing after construction needs no synchronization: once a map stops 
 
 ## The `maps` package (Go 1.21+)
 
-The standard `maps` package adds the operations the language leaves out. Note that in Go 1.23+ `maps.Keys` and `maps.Values` return an **iterator** (`iter.Seq`), not a slice — collect with `slices.Collect` and `slices.Sort` it when you need order:
+The standard `maps` package adds the operations the language leaves out. Note that in Go 1.23+ `maps.Keys` and `maps.Values` return an **[iterator](/fundamentals/iterators/)** (`iter.Seq`), not a slice — collect with `slices.Collect` and `slices.Sort` it when you need order:
 
 <Playground client:visible title="maps-package.go" code={String.raw`package main
 

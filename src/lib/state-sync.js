@@ -6,6 +6,7 @@ import { userEmail, visitorHash } from './visitor';
 import { loadReview, saveReview } from './review-store';
 import { loadStreak, adoptStreak } from './streak-store';
 import { loadChallenges, saveChallenges } from './challenge-store';
+import { loadHighlights, saveHighlights } from './highlight-store';
 
 const LAST_KEY = 'dp-last';
 
@@ -38,6 +39,11 @@ export function lastItem(rec) {
 
 export function chalItem(id, rec) {
   return { k: `chal:${id}`, v: JSON.stringify(rec), u: rec.u || 0 };
+}
+
+/* A text highlight (or its tombstone) — one key per highlight id. */
+export function hlItem(rec) {
+  return { k: `hl:${rec.id}`, v: JSON.stringify(rec), u: rec.u || 0 };
 }
 
 /* Pull the server copy, adopt whatever is newer there, push whatever is
@@ -97,6 +103,29 @@ export async function syncState() {
   if (chalChanged) {
     saveChallenges(chal);
     window.dispatchEvent(new CustomEvent('dp:chal', { detail: {} }));
+  }
+
+  // text highlights: last-write-wins per id, tombstones included so a removal
+  // on one device propagates as a delete to the others
+  const hl = loadHighlights();
+  let hlChanged = false;
+  for (const [k, it] of server) {
+    if (!k.startsWith('hl:')) continue;
+    let v;
+    try { v = JSON.parse(it.v); } catch { continue; }
+    const id = k.slice('hl:'.length);
+    if (!hl[id] || (it.u || 0) > (hl[id].u || 0)) {
+      hl[id] = v;
+      hlChanged = true;
+    }
+  }
+  for (const id of Object.keys(hl)) {
+    const it = server.get(`hl:${id}`);
+    if (!it || (hl[id].u || 0) > (it.u || 0)) toPush.push(hlItem(hl[id]));
+  }
+  if (hlChanged) {
+    saveHighlights(hl);
+    window.dispatchEvent(new CustomEvent('dp:highlights', { detail: {} }));
   }
 
   // streak: adopt the newer record, never lose the better "best"
