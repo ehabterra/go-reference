@@ -328,6 +328,29 @@ img { max-width: 100%; }
 .dp-prose > :first-child { margin-top: 0; }
 .dp-prose h2 { font-size: 1.55rem; margin: 2.6rem 0 1rem; padding-bottom: .35rem; border-bottom: 1px solid var(--dp-border); scroll-margin-top: 86px; letter-spacing: -.01em; }
 .dp-prose h3 { font-size: 1.2rem; margin: 1.8rem 0 .7rem; scroll-margin-top: 86px; }
+.dp-prose h4 { scroll-margin-top: 86px; }
+
+/* Self-linking headings: a "#" appears in the gutter on hover; click copies a
+   deep link. The marker is a pseudo-element so the bilingual innerHTML swap
+   (which rewrites heading contents) never wipes it. */
+.dp-prose :is(h2, h3, h4).dp-anchored { position: relative; cursor: pointer; }
+.dp-prose :is(h2, h3, h4).dp-anchored::before {
+  content: "#";
+  position: absolute;
+  left: -1em;
+  color: var(--dp-accent);
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.dp-prose :is(h2, h3, h4).dp-anchored:hover::before,
+.dp-prose :is(h2, h3, h4).dp-anchored:focus-within::before { opacity: .55; }
+.dp-prose :is(h2, h3, h4).dp-anchored.is-copied::before { content: "\2713"; opacity: 1; }
+[dir="rtl"] .dp-prose :is(h2, h3, h4).dp-anchored::before { left: auto; right: -1em; }
+@media (max-width: 640px) {
+  /* No left gutter on narrow screens — tuck the marker tight to the text. */
+  .dp-prose :is(h2, h3, h4).dp-anchored::before { left: -.85em; }
+}
 .dp-prose p { margin: 1rem 0; }
 .dp-prose ul, .dp-prose ol { margin: 1rem 0; padding-left: 1.4rem; }
 .dp-prose li { margin: .4rem 0; }
