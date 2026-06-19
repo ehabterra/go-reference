@@ -10,6 +10,7 @@ import {
   listHighlights,
   highlightsForPage,
   clearHighlights,
+  loadHighlights,
   newId,
   HL_COLORS,
 } from '../lib/highlight-store';
@@ -226,9 +227,27 @@ function updateToolbar() {
   showToolbarAt(range.getBoundingClientRect());
 }
 
+// Ids of existing highlights whose marks the range touches — so re-highlighting
+// over them toggles/recolours instead of stacking a second <mark>.
+function highlightsInRange(range) {
+  const ids = [];
+  document.querySelectorAll('.dp-hl').forEach((m) => {
+    try {
+      if (range.intersectsNode(m) && !ids.includes(m.dataset.hlId)) ids.push(m.dataset.hlId);
+    } catch {}
+  });
+  return ids;
+}
+
 function createHighlight(color) {
   const root = getRoot();
   if (!root || !pendingRange) return hideToolbar();
+
+  // what already-highlighted text does this selection cover?
+  const overlapIds = highlightsInRange(pendingRange);
+  const store = loadHighlights();
+  const overlapped = overlapIds.map((id) => store[id]).filter((h) => h && !h.del);
+
   const index = buildIndex(root);
   let start = offsetOf(index, pendingRange.startContainer, pendingRange.startOffset);
   let end = offsetOf(index, pendingRange.endContainer, pendingRange.endOffset);
@@ -237,8 +256,40 @@ function createHighlight(color) {
   const raw = index.text.slice(start, end);
   start += raw.length - raw.trimStart().length;
   end -= raw.length - raw.trimEnd().length;
-  const text = index.text.slice(start, end);
-  if (text.trim().length < 2) return hideToolbar();
+  let text = index.text.slice(start, end);
+
+  window.getSelection()?.removeAllRanges();
+  hideToolbar();
+
+  // never nest: drop every highlight the selection touches first
+  if (overlapIds.length) {
+    const now = Date.now();
+    for (const id of overlapIds) {
+      removeHighlight(id, now);
+      unwrap(id);
+    }
+    push(overlapIds.map((id) => ({ id, del: true, u: now })));
+  }
+
+  // re-highlighting one existing mark: same colour just removes it (an
+  // un-highlight), a different colour recolours its whole original span
+  const single = overlapped.length === 1 ? overlapped[0] : null;
+  const reselect = single && typeof single.start === 'number' && single.start <= start && single.end >= end;
+  if (reselect && (single.color || 'yellow') === color) {
+    window.dispatchEvent(new CustomEvent('dp:highlights', { detail: {} }));
+    return; // toggled off
+  }
+  if (reselect) {
+    start = single.start;
+    end = single.end;
+    text = single.text || index.text.slice(start, end);
+  }
+
+  if (text.trim().length < 2) {
+    window.dispatchEvent(new CustomEvent('dp:highlights', { detail: {} }));
+    return;
+  }
+
   const rec = putHighlight({
     id: newId(),
     page: pageId(),
@@ -250,8 +301,6 @@ function createHighlight(color) {
     end,
     color,
   });
-  window.getSelection()?.removeAllRanges();
-  hideToolbar();
   applyOne(root, rec);
   push([rec]);
   window.dispatchEvent(new CustomEvent('dp:highlights', { detail: { id: rec.id } }));
