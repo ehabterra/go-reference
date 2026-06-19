@@ -139,7 +139,7 @@ func main() {
 
 ## Idiomatic Go — range-over-func (Go 1.23+)
 
-Modern Go makes custom iteration first-class. A function of type `iter.Seq[T]` can be ranged over directly — no `HasNext`/`Next`, no exposed index:
+Modern Go makes custom iteration first-class. A function of type `iter.Seq[T]` can be ranged over directly — no `HasNext`/`Next`, no exposed index (the language feature is covered in depth in [Iterators & range-over-func](/fundamentals/iterators/)):
 
 ```go
 import "iter"
