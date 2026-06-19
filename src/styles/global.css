@@ -1095,6 +1095,15 @@ mark.dp-hl:focus-visible { background-color: rgba(var(--hl, 251, 191, 36), .34);
 .dp-hl--pink   { --hl: 244, 114, 182; }
 .dp-hl--blue   { --hl: 96, 165, 250; }
 
+/* cross-language fallback: the whole paragraph softly tinted (the exact words
+   can't be located in the other language's wording). Background + halo only —
+   no padding/border — so it never shifts the prose layout, in LTR or RTL. */
+.dp-hl-block {
+  background-color: rgba(var(--hl, 251, 191, 36), .12);
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(var(--hl, 251, 191, 36), .12);
+}
+
 /* floating toolbar shown above a live selection */
 .dp-hl-bar {
   position: fixed;

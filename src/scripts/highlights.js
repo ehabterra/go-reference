@@ -139,12 +139,61 @@ function wrapRange(index, start, end, hl) {
   return anchored;
 }
 
+const currentLang = () => (document.documentElement.dataset.lang === 'ar' ? 'ar' : 'en');
+
+// The page's translatable prose blocks, in document order. MUST mirror
+// i18nBlocks() in scripts/ui.js so block index N means the same paragraph in
+// either language — that positional alignment is what lets an English
+// highlight light up its Arabic counterpart.
+function proseBlocks() {
+  const body = getRoot();
+  if (!body) return [];
+  return Array.from(body.querySelectorAll('h2,h3,h4,p,li,.dp-opt')).filter(
+    (el) =>
+      !el.closest('pre, .dp-mermaid, .dp-pg, .dp-grid, .dp-pager, table') &&
+      !el.classList.contains('dp-card__intent') &&
+      (el.textContent || '').trim().length > 0
+  );
+}
+
+function blocksInRange(range) {
+  const out = [];
+  proseBlocks().forEach((el, i) => {
+    try {
+      if (range.intersectsNode(el)) out.push(i);
+    } catch {}
+  });
+  return out;
+}
+
+// Cross-language fallback: tint the whole matching paragraph(s). The class sits
+// on the block element, which survives the innerHTML swap a language switch does
+// (reconcile re-evaluates every highlight on dp:lang anyway).
+function applyBlocks(hl) {
+  if (!hl.blocks?.length) return false;
+  const blocks = proseBlocks();
+  const color = HL_COLORS.includes(hl.color) ? hl.color : 'yellow';
+  let any = false;
+  hl.blocks.forEach((i, k) => {
+    const el = blocks[i];
+    if (!el) return;
+    el.classList.add('dp-hl-block', `dp-hl--${color}`);
+    const tagged = (el.dataset.hlBlock || '').split(' ').filter(Boolean);
+    if (!tagged.includes(hl.id)) tagged.push(hl.id);
+    el.dataset.hlBlock = tagged.join(' ');
+    if (k === 0 && !el.id) el.id = 'hl-' + hl.id;
+    any = true;
+  });
+  return any;
+}
+
+// Render one highlight: exact word-level marks when its text is on the page
+// (same language), else the whole-paragraph fallback (other language / orphan).
 function applyOne(root, hl) {
-  if (document.querySelector(`.dp-hl[data-hl-id="${CSS.escape(hl.id)}"]`)) return true;
   const index = buildIndex(root);
   const r = findRange(index, hl);
-  if (!r) return false;
-  return wrapRange(index, r.start, r.end, hl);
+  if (r) return wrapRange(index, r.start, r.end, hl);
+  return applyBlocks(hl);
 }
 
 function unwrap(id) {
@@ -156,15 +205,40 @@ function unwrap(id) {
   });
 }
 
-/* Bring the DOM in line with the store — apply new highlights, drop removed
-   ones. Safe to call repeatedly (on load and after a cross-device sync). */
+// Highlight ids currently in the DOM — as precise marks or as block tints.
+function renderedIds() {
+  const ids = new Set();
+  document.querySelectorAll('.dp-hl[data-hl-id]').forEach((m) => ids.add(m.dataset.hlId));
+  document
+    .querySelectorAll('[data-hl-block]')
+    .forEach((el) => (el.dataset.hlBlock || '').split(' ').forEach((id) => id && ids.add(id)));
+  return ids;
+}
+
+// Remove every trace of one highlight: its marks and its share of any block tint.
+function removeRendered(id) {
+  unwrap(id);
+  document.querySelectorAll(`[data-hl-block~="${CSS.escape(id)}"]`).forEach((el) => {
+    const rest = (el.dataset.hlBlock || '').split(' ').filter((x) => x && x !== id);
+    if (rest.length) {
+      el.dataset.hlBlock = rest.join(' ');
+    } else {
+      delete el.dataset.hlBlock;
+      el.classList.remove('dp-hl-block', ...HL_COLORS.map((c) => `dp-hl--${c}`));
+      if (el.id === 'hl-' + id) el.removeAttribute('id');
+    }
+  });
+}
+
+/* Bring the DOM in line with the store. A full refresh (clear all, re-apply
+   from the store) — cheap for the handful of highlights a page carries, and the
+   only correct option after a language switch, where a highlight can flip
+   between precise marks and a paragraph tint. */
 function reconcile() {
   const root = getRoot();
   if (!root) return;
-  const want = new Map(highlightsForPage(pageId()).map((h) => [h.id, h]));
-  const present = new Set([...document.querySelectorAll('.dp-hl')].map((m) => m.dataset.hlId));
-  for (const id of present) if (!want.has(id)) unwrap(id);
-  for (const [id, h] of want) if (!present.has(id)) applyOne(root, h);
+  for (const id of renderedIds()) removeRendered(id);
+  for (const h of highlightsForPage(pageId())) applyOne(root, h);
 }
 
 /* --- cross-device sync --------------------------------------------------- */
@@ -231,9 +305,17 @@ function updateToolbar() {
 // over them toggles/recolours instead of stacking a second <mark>.
 function highlightsInRange(range) {
   const ids = [];
-  document.querySelectorAll('.dp-hl').forEach((m) => {
+  const add = (id) => {
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  document.querySelectorAll('.dp-hl[data-hl-id]').forEach((m) => {
     try {
-      if (range.intersectsNode(m) && !ids.includes(m.dataset.hlId)) ids.push(m.dataset.hlId);
+      if (range.intersectsNode(m)) add(m.dataset.hlId);
+    } catch {}
+  });
+  document.querySelectorAll('[data-hl-block]').forEach((el) => {
+    try {
+      if (range.intersectsNode(el)) (el.dataset.hlBlock || '').split(' ').forEach(add);
     } catch {}
   });
   return ids;
@@ -257,39 +339,38 @@ function createHighlight(color) {
   start += raw.length - raw.trimStart().length;
   end -= raw.length - raw.trimEnd().length;
   let text = index.text.slice(start, end);
+  let blocks = blocksInRange(pendingRange);
 
   window.getSelection()?.removeAllRanges();
   hideToolbar();
 
   // never nest: drop every highlight the selection touches first
-  if (overlapIds.length) {
-    const now = Date.now();
-    for (const id of overlapIds) {
-      removeHighlight(id, now);
-      unwrap(id);
-    }
-    push(overlapIds.map((id) => ({ id, del: true, u: now })));
-  }
+  const now = Date.now();
+  const tombs = overlapIds.map((id) => {
+    removeHighlight(id, now);
+    return { id, del: true, u: now };
+  });
 
   // re-highlighting one existing mark: same colour just removes it (an
   // un-highlight), a different colour recolours its whole original span
   const single = overlapped.length === 1 ? overlapped[0] : null;
   const reselect = single && typeof single.start === 'number' && single.start <= start && single.end >= end;
-  if (reselect && (single.color || 'yellow') === color) {
+  const finish = (extra) => {
+    if (extra) push([...tombs, extra]);
+    else if (tombs.length) push(tombs);
     window.dispatchEvent(new CustomEvent('dp:highlights', { detail: {} }));
-    return; // toggled off
-  }
+  };
+
+  if (reselect && (single.color || 'yellow') === color) return finish(); // toggled off
   if (reselect) {
     start = single.start;
     end = single.end;
     text = single.text || index.text.slice(start, end);
+    blocks = single.blocks || blocks;
   }
+  if (text.trim().length < 2) return finish();
 
-  if (text.trim().length < 2) {
-    window.dispatchEvent(new CustomEvent('dp:highlights', { detail: {} }));
-    return;
-  }
-
+  // store only — reconcile (via dp:highlights below) renders the marks/tints
   const rec = putHighlight({
     id: newId(),
     page: pageId(),
@@ -300,10 +381,10 @@ function createHighlight(color) {
     start,
     end,
     color,
+    blocks,
+    lang: currentLang(),
   });
-  applyOne(root, rec);
-  push([rec]);
-  window.dispatchEvent(new CustomEvent('dp:highlights', { detail: { id: rec.id } }));
+  finish(rec);
 }
 
 /* --- remove popover (tap an existing highlight) -------------------------- */
@@ -327,7 +408,7 @@ function showPopover(mark) {
   remove.textContent = t('hl.remove', 'Remove highlight');
   remove.addEventListener('click', () => {
     removeHighlight(id);
-    unwrap(id);
+    removeRendered(id);
     push([{ id, del: true, u: Date.now() }]);
     hidePopover();
     window.dispatchEvent(new CustomEvent('dp:highlights', { detail: { id } }));
