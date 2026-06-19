@@ -664,6 +664,29 @@ function initToc() {
   spy();
 }
 
+// Make content headings self-linking: clicking one copies a deep link to it
+// (and updates the URL hash). IDs come from the build-time rehype plugin; this
+// only wires the affordance. Runs against h2–h4 so any heading is referencable.
+function initHeadingAnchors() {
+  const body = document.querySelector('.dp-article__body');
+  if (!body) return;
+  body.querySelectorAll('h2[id], h3[id], h4[id]').forEach((h) => {
+    h.classList.add('dp-anchored');
+    h.setAttribute('title', 'Copy link to this section');
+    h.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return; // don't hijack real links in a heading
+      const url = location.href.split('#')[0] + '#' + h.id;
+      try { history.replaceState(null, '', '#' + h.id); } catch { location.hash = h.id; }
+      const flash = () => {
+        h.classList.add('is-copied');
+        setTimeout(() => h.classList.remove('is-copied'), 1400);
+      };
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(flash, flash);
+      else flash();
+    });
+  });
+}
+
 function initQuiz() {
   const quiz = document.querySelector('[data-dp-quiz]');
   if (!quiz) return;
@@ -713,6 +736,7 @@ function boot() {
   initStreakChip();
   initSkillTree();
   initToc();
+  initHeadingAnchors();
   initQuiz();
 }
 

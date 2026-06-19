@@ -4,6 +4,39 @@ import mdx from '@astrojs/mdx';
 import react from '@astrojs/react';
 import cloudflare from '@astrojs/cloudflare';
 
+// Give every content heading (h2–h4) a stable, build-time `id` derived from
+// its text, so deep links like `/stdlib/time#zones` resolve on first paint —
+// before any client JS runs. The slug rule MUST match `slugify()` in
+// src/scripts/progress.js so the runtime TOC fallback stays consistent.
+function rehypeHeadingIds() {
+  const slugify = (s) =>
+    s.toLowerCase().replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '');
+  const toText = (node) =>
+    node.type === 'text'
+      ? node.value
+      : (node.children || []).map(toText).join('');
+  return (tree) => {
+    const seen = new Map(); // base slug -> count, for de-duping repeats
+    const walk = (node) => {
+      for (const child of node.children || []) {
+        if (
+          child.type === 'element' &&
+          /^h[2-4]$/.test(child.tagName) &&
+          !child.properties?.id
+        ) {
+          const base = slugify(toText(child)) || 'section';
+          const n = seen.get(base) || 0;
+          seen.set(base, n + 1);
+          child.properties = child.properties || {};
+          child.properties.id = n ? `${base}-${n}` : base;
+        }
+        walk(child);
+      }
+    };
+    walk(tree);
+  };
+}
+
 // https://astro.build/config
 export default defineConfig({
   // Update to your custom domain once attached to the Worker.
@@ -14,6 +47,7 @@ export default defineConfig({
     platformProxy: { enabled: true },
   }),
   markdown: {
+    rehypePlugins: [rehypeHeadingIds],
     shikiConfig: {
       // Dual-theme output: colors come as --shiki-light/--shiki-dark CSS
       // vars (defaultColor:false), switched by [data-theme] in global.css.

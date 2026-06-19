@@ -13,7 +13,7 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && node scripts/write-assetsignore.mjs",
+    "build": "astro build && node scripts/build-search-index.mjs && node scripts/write-assetsignore.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },

@@ -328,6 +328,29 @@ img { max-width: 100%; }
 .dp-prose > :first-child { margin-top: 0; }
 .dp-prose h2 { font-size: 1.55rem; margin: 2.6rem 0 1rem; padding-bottom: .35rem; border-bottom: 1px solid var(--dp-border); scroll-margin-top: 86px; letter-spacing: -.01em; }
 .dp-prose h3 { font-size: 1.2rem; margin: 1.8rem 0 .7rem; scroll-margin-top: 86px; }
+.dp-prose h4 { scroll-margin-top: 86px; }
+
+/* Self-linking headings: a "#" appears in the gutter on hover; click copies a
+   deep link. The marker is a pseudo-element so the bilingual innerHTML swap
+   (which rewrites heading contents) never wipes it. */
+.dp-prose :is(h2, h3, h4).dp-anchored { position: relative; cursor: pointer; }
+.dp-prose :is(h2, h3, h4).dp-anchored::before {
+  content: "#";
+  position: absolute;
+  left: -1em;
+  color: var(--dp-accent);
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.dp-prose :is(h2, h3, h4).dp-anchored:hover::before,
+.dp-prose :is(h2, h3, h4).dp-anchored:focus-within::before { opacity: .55; }
+.dp-prose :is(h2, h3, h4).dp-anchored.is-copied::before { content: "\2713"; opacity: 1; }
+[dir="rtl"] .dp-prose :is(h2, h3, h4).dp-anchored::before { left: auto; right: -1em; }
+@media (max-width: 640px) {
+  /* No left gutter on narrow screens — tuck the marker tight to the text. */
+  .dp-prose :is(h2, h3, h4).dp-anchored::before { left: -.85em; }
+}
 .dp-prose p { margin: 1rem 0; }
 .dp-prose ul, .dp-prose ol { margin: 1rem 0; padding-left: 1.4rem; }
 .dp-prose li { margin: .4rem 0; }
@@ -636,6 +659,16 @@ main.dp-container { animation: dp-fade .45s var(--dp-ease) both; }
 .dp-cmdk__item-main { min-width: 0; flex: 1; }
 .dp-cmdk__item-title { color: var(--dp-text); font-weight: 600; font-size: .96rem; }
 .dp-cmdk__item-sub { color: var(--dp-muted); font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-cmdk__item-snip { color: var(--dp-muted); font-size: .8rem; line-height: 1.45; margin-top: .2rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dp-cmdk__item-snip mark { background: color-mix(in oklab, var(--dp-accent) 30%, transparent); color: var(--dp-text); border-radius: 3px; padding: 0 .12em; }
+.dp-cmdk__item.is-active .dp-cmdk__item-snip { color: var(--dp-text); }
+
+/* Occurrences of a search query on the page you land on (see initSearchHighlight). */
+::highlight(dp-search) {
+  background-color: color-mix(in oklab, var(--dp-accent) 38%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
 .dp-cmdk__tag { font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; padding: .22rem .5rem; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
 .dp-cmdk__empty { padding: 1.4rem; text-align: center; color: var(--dp-muted); }
 .dp-cmdk__hint { display: flex; gap: 1.1rem; padding: .6rem 1rem; border-top: 1px solid var(--dp-border); color: var(--dp-muted); font-size: .76rem; }
