@@ -249,6 +249,10 @@ function push(recs) {
 /* --- the floating "highlight" toolbar ------------------------------------ */
 let toolbar = null;
 let pendingRange = null;
+// Set while a toolbar dot is being pressed. On touch, tapping a dot collapses
+// the selection before the button's click fires; this guards selectionchange
+// from tearing down the bar (and pendingRange) in that window.
+let toolbarHold = false;
 
 function buildToolbar() {
   toolbar = document.createElement('div');
@@ -267,6 +271,13 @@ function buildToolbar() {
   }
   // keep the selection alive when the toolbar is pressed
   toolbar.addEventListener('mousedown', (e) => e.preventDefault());
+  // On touch there's no mousedown until after the tap; hold the bar from the
+  // first pointer/touch contact so the collapsing selection can't dismiss it.
+  const hold = () => {
+    toolbarHold = true;
+  };
+  toolbar.addEventListener('pointerdown', hold, { passive: true });
+  toolbar.addEventListener('touchstart', hold, { passive: true });
   document.body.appendChild(toolbar);
 }
 
@@ -285,6 +296,7 @@ function showToolbarAt(rect) {
 function hideToolbar() {
   if (toolbar) toolbar.hidden = true;
   pendingRange = null;
+  toolbarHold = false;
 }
 
 function updateToolbar() {
@@ -445,10 +457,35 @@ function initContentPage() {
     if (e.target.closest?.('.dp-hl-bar, .dp-hl-pop')) return;
     setTimeout(updateToolbar, 0);
   });
+
+  // Desktop pops the bar on mouseup. Touch devices fire no mouseup when you drag
+  // the native selection handles — only selectionchange — so on a coarse pointer
+  // we watch the selection settle and show the bar then.
+  const coarsePointer =
+    (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
+    navigator.maxTouchPoints > 0;
+  let selTimer = null;
   document.addEventListener('selectionchange', () => {
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) hideToolbar();
+    if (!sel || sel.isCollapsed) {
+      if (toolbarHold) return; // a toolbar tap collapsed it — keep the bar alive
+      clearTimeout(selTimer);
+      return hideToolbar();
+    }
+    if (coarsePointer) {
+      clearTimeout(selTimer);
+      selTimer = setTimeout(updateToolbar, 300); // debounce: wait for the drag to settle
+    }
   });
+  // A tap outside the bar (to dismiss, or to start a new selection) clears a
+  // bar left up after a cancelled toolbar press.
+  document.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (toolbar && !toolbar.hidden && !e.target.closest?.('.dp-hl-bar')) hideToolbar();
+    },
+    true
+  );
 
   root.addEventListener('click', (e) => {
     const mark = e.target.closest('.dp-hl');
