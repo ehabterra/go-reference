@@ -11,9 +11,10 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     <p class="dp-hero__eyebrow" data-i18n="hl.eyebrow">Your notebook</p>
     <h1 data-i18n="hl.h1">Highlights</h1>
     <p class="dp-hero__lede" data-i18n-html="hl.lede">
-      Select any text while you read and hit <strong>Highlight</strong> — it's saved here and
-      marked on the page. Everything stays in this browser (and syncs across your devices if you
-      add an email), so this is your private, growing reference of the bits that mattered.
+      Select any text while you read and hit <strong>Highlight</strong> — or tap <strong>✎</strong>
+      to highlight and add a <strong>note</strong>. It's saved here and marked on the page.
+      Everything stays in this browser (and syncs across your devices if you add an email), so this
+      is your private, growing reference of the bits that mattered — and why.
     </p>
   </header>
 
@@ -23,9 +24,15 @@ import BaseLayout from '../layouts/BaseLayout.astro';
         <strong data-dp-highlights-count>0</strong>
         <span data-i18n="hl.saved">highlights saved</span>
       </p>
-      <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-highlights-clear hidden data-i18n="hl.clear">
-        Clear all
-      </button>
+      <div class="dp-highlights__controls">
+        <label class="dp-hl-optout" title="Counts are anonymous — only the number of readers per paragraph is shared, never your text, notes, or identity.">
+          <input type="checkbox" data-dp-hl-stats-optout checked />
+          <span data-i18n="hl.statsShare">Share anonymous highlight counts</span>
+        </label>
+        <button class="dp-btn dp-btn--ghost dp-btn--sm" data-dp-highlights-clear hidden data-i18n="hl.clear">
+          Clear all
+        </button>
+      </div>
     </div>
 
     <div class="dp-highlights__empty" data-dp-highlights-empty hidden>

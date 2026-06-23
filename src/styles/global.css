@@ -1253,3 +1253,165 @@ mark.dp-hl:focus-visible { background-color: rgba(var(--hl, 251, 191, 36), .34);
 
 /* light theme: deepen the underline so the mark reads on a white page */
 [data-theme="light"] mark.dp-hl { background-color: rgba(var(--hl, 251, 191, 36), .28); }
+
+/* --- notes on highlights ------------------------------------------------- */
+/* a highlight carrying a note wears a small pencil badge (on its first mark, or
+   on the fallback-tinted paragraph) so the reader knows a margin note is there */
+mark.dp-hl[data-has-note]::after,
+.dp-hl-block[data-has-note]::after {
+  content: "\270E"; /* ✎ */
+  font-size: .68em;
+  line-height: 1;
+  margin-inline-start: .15em;
+  vertical-align: super;
+  color: rgb(var(--hl, 251, 191, 36));
+  opacity: .9;
+}
+
+/* toolbar: divider + the "highlight & note" pencil action */
+.dp-hl-bar__sep {
+  width: 1px;
+  align-self: stretch;
+  margin: .1rem 0;
+  background: var(--dp-border-strong);
+}
+.dp-hl-bar__note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dp-text);
+  cursor: pointer;
+  transition: color .12s var(--dp-ease), transform .12s var(--dp-ease);
+}
+.dp-hl-bar__note:hover { color: var(--dp-accent); transform: scale(1.12); }
+
+/* the highlight card: a quote of the passage, a note editor, recolour + remove */
+.dp-hl-pop--card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: .6rem;
+  width: min(300px, calc(100vw - 24px));
+  padding: .8rem;
+  border-radius: var(--dp-radius);
+  box-shadow: var(--dp-shadow);
+  transform-origin: top center;
+  animation: dp-hl-pop-in .14s var(--dp-ease);
+}
+@keyframes dp-hl-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dp-hl-pop--card { animation: none; }
+}
+
+.dp-hl-note {
+  font: inherit;
+  font-size: .88rem;
+  line-height: 1.55;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  min-height: 2.6rem;
+  padding: .5rem .6rem;
+  border-radius: var(--dp-radius-sm);
+  border: 1px solid var(--dp-border);
+  background: var(--dp-surface);
+  color: var(--dp-text);
+  transition: border-color .12s var(--dp-ease), box-shadow .12s var(--dp-ease);
+}
+.dp-hl-note:focus {
+  outline: none;
+  border-color: var(--dp-accent);
+  box-shadow: 0 0 0 3px rgba(var(--hl, 251, 191, 36), .18);
+}
+.dp-hl-note::placeholder { color: var(--dp-muted); }
+
+.dp-hl-pop__actions { display: flex; align-items: center; gap: .4rem; }
+.dp-hl-pop__colors { display: flex; gap: .35rem; margin-inline-end: auto; }
+.dp-hl-pop__swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .3);
+  background-color: rgb(var(--hl));
+  cursor: pointer;
+  transition: transform .12s var(--dp-ease), box-shadow .12s var(--dp-ease);
+}
+.dp-hl-pop__swatch:hover { transform: scale(1.15); }
+.dp-hl-pop__swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--dp-surface-2), 0 0 0 4px rgb(var(--hl));
+}
+.dp-hl-pop__btn--del {
+  color: var(--dp-practice);
+  border-color: transparent;
+  background: transparent;
+}
+.dp-hl-pop__btn--del:hover { border-color: var(--dp-practice); }
+
+.dp-hl-pop__hint {
+  margin: 0;
+  text-align: center;
+  font-size: .68rem;
+  color: var(--dp-muted);
+  opacity: .8;
+}
+
+/* note shown under a quote on the /highlights/ page */
+.dp-hl-card__note {
+  margin: .55rem 0 0;
+  padding: .55rem .75rem;
+  font-size: .88rem;
+  line-height: 1.6;
+  color: var(--dp-text);
+  background: var(--dp-surface-2);
+  border-radius: var(--dp-radius-sm);
+  border-inline-start: 3px solid var(--dp-border-strong);
+  white-space: pre-wrap;
+}
+.dp-hl-card__note::before {
+  content: "\270E"; /* ✎ */
+  margin-inline-end: .4em;
+  color: var(--dp-muted);
+}
+
+/* --- aggregate reader stats ---------------------------------------------- */
+/* a soft margin bar on paragraphs other readers have also highlighted; opacity
+   scales with the count. Mirrors the .dp-anchored "#" gutter so it sits inside
+   the container padding (no overflow), in LTR or RTL. */
+.dp-prose .dp-hl-stat { position: relative; }
+.dp-prose .dp-hl-stat::before {
+  content: "";
+  position: absolute;
+  left: -1em;
+  top: .3em;
+  bottom: .3em;
+  width: 3px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--dp-accent) calc(26% + var(--stat, 1) * 9%), transparent);
+  pointer-events: none;
+}
+[dir="rtl"] .dp-prose .dp-hl-stat::before { left: auto; right: -1em; }
+@media (max-width: 640px) {
+  .dp-prose .dp-hl-stat::before { left: -.7em; }
+  [dir="rtl"] .dp-prose .dp-hl-stat::before { left: auto; right: -.7em; }
+}
+
+/* opt-out control on the /highlights/ page */
+.dp-highlights__controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.dp-hl-optout {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .82rem;
+  color: var(--dp-muted);
+  cursor: pointer;
+}
+.dp-hl-optout input { accent-color: var(--dp-accent); cursor: pointer; }
