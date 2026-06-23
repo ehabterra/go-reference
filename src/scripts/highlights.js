@@ -7,6 +7,8 @@
 import {
   putHighlight,
   removeHighlight,
+  setHighlightNote,
+  setHighlightColor,
   listHighlights,
   highlightsForPage,
   clearHighlights,
@@ -15,6 +17,7 @@ import {
   HL_COLORS,
 } from '../lib/highlight-store';
 import { pushState, hlItem } from '../lib/state-sync';
+import { fetchStats, reportBlocks, statsOptedOut, setStatsOptOut } from '../lib/highlight-stats';
 import { t } from '../lib/i18n-client';
 
 // Prose only: skip the runnable editor, quiz, diagrams, and the after-content
@@ -23,6 +26,13 @@ const EXCLUDE =
   '.dp-pg, .dp-playground, [data-dp-quiz], .dp-quiz, .dp-pager, .dp-comments, ' +
   '.dp-grid, .dp-tradeoffs, .dp-mermaid, .mermaid, svg, script, style, button, .dp-draft';
 const CTX = 32; // chars of context stored on each side for re-anchoring
+const STAT_MIN = 2; // surface the "readers highlighted this" cue only past this count
+
+// inline pencil glyph, reused on the toolbar's note action and the "add note" cue
+const NOTE_ICON =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 
 const pageId = () => location.pathname.replace(/\/+$/, '') || '/';
 function pageTitle() {
@@ -131,6 +141,7 @@ function wrapRange(index, start, end, hl) {
     mark.setAttribute('role', 'button');
     if (!anchored) {
       mark.id = 'hl-' + hl.id;
+      if (hl.note) mark.dataset.hasNote = '1'; // ✎ badge on the first mark only
       anchored = true;
     }
     node.parentNode.insertBefore(mark, node);
@@ -181,7 +192,10 @@ function applyBlocks(hl) {
     const tagged = (el.dataset.hlBlock || '').split(' ').filter(Boolean);
     if (!tagged.includes(hl.id)) tagged.push(hl.id);
     el.dataset.hlBlock = tagged.join(' ');
-    if (k === 0 && !el.id) el.id = 'hl-' + hl.id;
+    if (k === 0) {
+      if (!el.id) el.id = 'hl-' + hl.id;
+      if (hl.note) el.dataset.hasNote = '1';
+    }
     any = true;
   });
   return any;
@@ -224,6 +238,7 @@ function removeRendered(id) {
       el.dataset.hlBlock = rest.join(' ');
     } else {
       delete el.dataset.hlBlock;
+      delete el.dataset.hasNote;
       el.classList.remove('dp-hl-block', ...HL_COLORS.map((c) => `dp-hl--${c}`));
       if (el.id === 'hl-' + id) el.removeAttribute('id');
     }
@@ -244,6 +259,48 @@ function reconcile() {
 /* --- cross-device sync --------------------------------------------------- */
 function push(recs) {
   if (recs.length) pushState(recs.map(hlItem));
+}
+
+/* --- anonymous "readers highlighted this" stats -------------------------- */
+// The prose blocks this visitor currently has any highlight on (deduped). This
+// is the only thing reported to the aggregate — paragraph indices, nothing else.
+function myBlocks() {
+  const set = new Set();
+  for (const h of highlightsForPage(pageId())) (h.blocks || []).forEach((b) => set.add(b));
+  return [...set];
+}
+
+// Paint the soft margin cue on paragraphs others have also highlighted. A
+// separate channel from the user's own marks/tints (a gutter bar, not a
+// background), so the two never fight.
+function renderStats(counts) {
+  proseBlocks().forEach((el, i) => {
+    const n = counts[i] || counts[String(i)] || 0;
+    if (n >= STAT_MIN) {
+      el.classList.add('dp-hl-stat');
+      el.dataset.hlCount = String(n);
+      el.style.setProperty('--stat', String(Math.min(n, 8)));
+      el.title = t('hl.statReaders', `Highlighted by ${n} readers`).replace('{n}', String(n));
+    } else if (el.classList.contains('dp-hl-stat')) {
+      el.classList.remove('dp-hl-stat');
+      delete el.dataset.hlCount;
+      el.style.removeProperty('--stat');
+      el.removeAttribute('title');
+    }
+  });
+}
+
+async function refreshStats() {
+  if (!getRoot()) return;
+  renderStats(await fetchStats(pageId()));
+}
+
+// Report my current block set, then repaint shortly after so my own change is
+// reflected (best-effort — the read is edge-cached, so others converge within
+// the cache window).
+function syncStats() {
+  reportBlocks(pageId(), myBlocks());
+  setTimeout(refreshStats, 1500);
 }
 
 /* --- the floating "highlight" toolbar ------------------------------------ */
@@ -269,6 +326,20 @@ function buildToolbar() {
     b.addEventListener('click', () => createHighlight(color));
     toolbar.appendChild(b);
   }
+  // a divider, then the "highlight + write a note" action: highlights in the
+  // first colour and opens the note editor on the new mark in one gesture
+  const sep = document.createElement('span');
+  sep.className = 'dp-hl-bar__sep';
+  sep.setAttribute('aria-hidden', 'true');
+  toolbar.appendChild(sep);
+  const note = document.createElement('button');
+  note.type = 'button';
+  note.className = 'dp-hl-bar__note';
+  note.title = t('hl.note', 'Highlight & add a note');
+  note.setAttribute('aria-label', t('hl.note', 'Highlight and add a note'));
+  note.innerHTML = NOTE_ICON;
+  note.addEventListener('click', () => createHighlight(HL_COLORS[0], true));
+  toolbar.appendChild(note);
   // keep the selection alive when the toolbar is pressed
   toolbar.addEventListener('mousedown', (e) => e.preventDefault());
   // On touch there's no mousedown until after the tap; hold the bar from the
@@ -333,7 +404,7 @@ function highlightsInRange(range) {
   return ids;
 }
 
-function createHighlight(color) {
+function createHighlight(color, withNote = false) {
   const root = getRoot();
   if (!root || !pendingRange) return hideToolbar();
 
@@ -397,28 +468,122 @@ function createHighlight(color) {
     lang: currentLang(),
   });
   finish(rec);
-}
-
-/* --- remove popover (tap an existing highlight) -------------------------- */
-let popover = null;
-
-function hidePopover() {
-  if (popover) {
-    popover.remove();
-    popover = null;
+  // "highlight + note": the mark now exists (reconcile ran inside finish) — open
+  // the editor on it so the reader can type straight away
+  if (withNote) {
+    const mark = document.getElementById('hl-' + rec.id);
+    if (mark) showPopover(mark, { focusNote: true });
   }
 }
 
-function showPopover(mark) {
+/* --- the highlight card (tap an existing highlight) ----------------------
+   A small editor: recolour swatches, a personal note, and remove. The note
+   saves on blur / on close (and recolours apply instantly); every change bumps
+   the record's `u` so it syncs across devices like the highlight itself. */
+let popover = null;
+let editing = null; // { id } of the highlight whose note is being edited
+
+// Persist the textarea's note if it changed since the card opened.
+function flushNote() {
+  if (!editing || !popover) return;
+  const ta = popover.querySelector('.dp-hl-note');
+  if (!ta) return;
+  const prev = loadHighlights()[editing.id]?.note || '';
+  if (ta.value.trim() === prev.trim()) return;
+  const rec = setHighlightNote(editing.id, ta.value);
+  if (rec) {
+    push([rec]);
+    window.dispatchEvent(new CustomEvent('dp:highlights', { detail: { id: editing.id } }));
+  }
+}
+
+function hidePopover() {
+  if (!popover) return;
+  flushNote();
+  popover.remove();
+  popover = null;
+  editing = null;
+}
+
+function positionPopover(mark) {
+  const rect = mark.getBoundingClientRect();
+  const w = popover.offsetWidth;
+  const h = popover.offsetHeight;
+  let left = rect.left + rect.width / 2 - w / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+  // below by default; flip above when it would run off the bottom and there's room
+  let top = rect.bottom + 8;
+  if (top + h > window.innerHeight - 8 && rect.top - h - 8 > 8) top = rect.top - h - 8;
+  popover.style.left = `${left + window.scrollX}px`;
+  popover.style.top = `${top + window.scrollY}px`;
+}
+
+function showPopover(mark, opts = {}) {
   hidePopover();
   const id = mark.dataset.hlId;
+  const hl = loadHighlights()[id];
+  if (!hl || hl.del) return;
+  editing = { id };
+
   popover = document.createElement('div');
-  popover.className = 'dp-hl-pop';
+  popover.className = `dp-hl-pop dp-hl-pop--card dp-hl--${HL_COLORS.includes(hl.color) ? hl.color : 'yellow'}`;
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', t('hl.edit', 'Edit highlight'));
+
+  // the note, with an auto-growing field (the passage itself is already marked
+  // in front of the reader, so the card doesn't repeat it)
+  const ta = document.createElement('textarea');
+  ta.className = 'dp-hl-note';
+  ta.rows = 2;
+  ta.placeholder = t('hl.notePlaceholder', 'Add a note…');
+  ta.value = hl.note || '';
+  const autoGrow = () => {
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  };
+  ta.addEventListener('input', autoGrow);
+  ta.addEventListener('change', flushNote); // blur
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
+      e.preventDefault();
+      hidePopover();
+    }
+  });
+
+  // recolour swatches
+  const colors = document.createElement('div');
+  colors.className = 'dp-hl-pop__colors';
+  for (const color of HL_COLORS) {
+    const sw = document.createElement('button');
+    sw.type = 'button';
+    sw.className = `dp-hl-pop__swatch dp-hl--${color}`;
+    sw.setAttribute('aria-label', `${t('hl.recolor', 'Recolour')} — ${color}`);
+    sw.setAttribute('aria-pressed', String((hl.color || 'yellow') === color));
+    sw.addEventListener('click', () => {
+      flushNote();
+      const rec = setHighlightColor(id, color);
+      if (rec) {
+        popover.classList.remove(...HL_COLORS.map((c) => `dp-hl--${c}`));
+        popover.classList.add(`dp-hl--${color}`);
+        push([rec]);
+        window.dispatchEvent(new CustomEvent('dp:highlights', { detail: { id } }));
+      }
+      colors
+        .querySelectorAll('.dp-hl-pop__swatch')
+        .forEach((s) => s.setAttribute('aria-pressed', String(s === sw)));
+    });
+    colors.appendChild(sw);
+  }
+
+  // actions row: recolour on the left, remove + open on the right
+  const actions = document.createElement('div');
+  actions.className = 'dp-hl-pop__actions';
   const remove = document.createElement('button');
   remove.type = 'button';
-  remove.className = 'dp-hl-pop__btn';
-  remove.textContent = t('hl.remove', 'Remove highlight');
+  remove.className = 'dp-hl-pop__btn dp-hl-pop__btn--del';
+  remove.textContent = t('hl.remove', 'Remove');
   remove.addEventListener('click', () => {
+    editing = null; // don't flush a note onto a highlight we're deleting
     removeHighlight(id);
     removeRendered(id);
     push([{ id, del: true, u: Date.now() }]);
@@ -429,15 +594,27 @@ function showPopover(mark) {
   open.className = 'dp-hl-pop__btn dp-hl-pop__btn--ghost';
   open.href = '/highlights/';
   open.textContent = t('hl.all', 'All highlights');
-  popover.append(remove, open);
+  open.addEventListener('click', flushNote); // save before we navigate away
+  actions.append(colors, remove, open);
+
+  // a quiet hint at the keyboard shortcuts
+  const mac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+  const hint = document.createElement('p');
+  hint.className = 'dp-hl-pop__hint';
+  hint.textContent = t('hl.noteHint', `${mac ? '⌘' : 'Ctrl'}↵ to save · Esc to close`);
+
+  popover.append(ta, actions, hint);
+  // a press inside the card must not bubble to the document mousedown that
+  // dismisses it, nor cancel the live selection logic
   popover.addEventListener('mousedown', (e) => e.stopPropagation());
   document.body.appendChild(popover);
-  const rect = mark.getBoundingClientRect();
-  const w = popover.offsetWidth;
-  let left = rect.left + rect.width / 2 - w / 2;
-  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
-  popover.style.left = `${left + window.scrollX}px`;
-  popover.style.top = `${rect.bottom + window.scrollY + 8}px`;
+  autoGrow();
+  positionPopover(mark);
+  if (opts.focusNote) {
+    ta.focus();
+    const end = ta.value.length;
+    ta.setSelectionRange(end, end); // caret at the end, ready to type
+  }
 }
 
 /* --- content-page wiring ------------------------------------------------- */
@@ -445,6 +622,9 @@ function initContentPage() {
   const root = getRoot();
   if (!root) return;
   reconcile();
+  refreshStats(); // paint how many readers marked each paragraph
+  const initial = myBlocks(); // backfill the aggregate with what's already here
+  if (initial.length) reportBlocks(pageId(), initial);
 
   // a /page/#hl-<id> deep link can't scroll on its own — the mark only exists
   // after reconcile() re-applies it, so jump to it now
@@ -503,11 +683,17 @@ function initContentPage() {
   document.addEventListener('mousedown', (e) => {
     if (!e.target.closest?.('.dp-hl, .dp-hl-pop')) hidePopover();
   });
-  window.addEventListener('dp:highlights', reconcile);
+  window.addEventListener('dp:highlights', () => {
+    reconcile();
+    syncStats(); // my block set may have changed — report it and repaint
+  });
   // a cross-device sync merges into the store, then fires dp:highlights → reconcile
   // a language switch re-renders the prose innerHTML (dropping our marks) — the
   // marks whose text exists in the now-current language get re-applied
-  window.addEventListener('dp:lang', reconcile);
+  window.addEventListener('dp:lang', () => {
+    reconcile();
+    refreshStats(); // blocks realign positionally across languages
+  });
 }
 
 /* --- the /highlights/ collection page ------------------------------------ */
@@ -518,6 +704,14 @@ function initHighlightsPage() {
   const emptyEl = wrap.querySelector('[data-dp-highlights-empty]');
   const countEl = wrap.querySelector('[data-dp-highlights-count]');
   const clearBtn = wrap.querySelector('[data-dp-highlights-clear]');
+
+  // opt in/out of contributing to the anonymous "readers highlighted this" counts
+  const optoutEl = wrap.querySelector('[data-dp-hl-stats-optout]');
+  if (optoutEl) {
+    optoutEl.checked = !statsOptedOut();
+    optoutEl.addEventListener('change', () => setStatsOptOut(!optoutEl.checked));
+  }
+
   const locale = document.documentElement.lang === 'ar' ? 'ar' : undefined;
   const fmtDate = (ms) => {
     const d = new Date(ms || 0);
@@ -577,7 +771,14 @@ function initHighlightsPage() {
           render();
         });
         meta.append(date, del);
-        card.append(quote, meta);
+        if (h.note) {
+          const noteEl = document.createElement('p');
+          noteEl.className = 'dp-hl-card__note';
+          noteEl.textContent = h.note;
+          card.append(quote, noteEl, meta);
+        } else {
+          card.append(quote, meta);
+        }
         sec.appendChild(card);
       }
       listEl.appendChild(sec);
