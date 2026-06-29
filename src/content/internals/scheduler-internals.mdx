@@ -195,7 +195,7 @@ GODEBUG=schedtrace=1000,scheddetail=1 ./myprogram
 | Async preemption | SIGURG-based interruption of hog goroutines (1.14+) |
 
 <Callout type="go" title="🐹 GOMAXPROCS, blocking, and the netpoller">
-Three practical takeaways. **`GOMAXPROCS` defaults to `NumCPU`** — usually right; in containers, set it to your CPU *limit* (or use `automaxprocs`) so the runtime doesn't over-schedule. **Network I/O doesn't burn a thread** — the netpoller parks the goroutine and frees the M, so "a goroutine per connection" scales to hundreds of thousands. But **blocking *syscalls* (file I/O, cgo, some DNS) do tie up an M** via handoff, so a flood of them can spawn many threads — bound that concurrency with a [semaphore](/concurrency/semaphore/) or [worker pool](/patterns/worker-pool/).
+Three practical takeaways. **`GOMAXPROCS` defaults to `NumCPU`** — usually right; in containers, set it to your CPU *limit* (or use `automaxprocs`) so the runtime doesn't over-schedule. **Network I/O doesn't burn a thread** — the netpoller parks the goroutine and frees the M, so "a goroutine per connection" scales to hundreds of thousands. But **blocking *syscalls* (file I/O, cgo, some DNS) do tie up an M** via handoff, so a flood of them can spawn many threads — bound that concurrency with a [semaphore](/patterns/semaphore/) or [worker pool](/patterns/worker-pool/).
 </Callout>
 
 <Callout type="gotcha" title="⚠️ Fairness is good now, but starvation patterns remain">

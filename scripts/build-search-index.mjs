@@ -9,7 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as cheerio from 'cheerio';
 
-const DIST = new URL('../dist/', import.meta.url).pathname;
+// Static assets live in dist/client/ since @astrojs/cloudflare v14 (Astro 7)
+// splits output into dist/client (public assets) + dist/server (the Worker).
+// We read the rendered HTML from there and write the index back into the same
+// assets dir so it's served at /search-index.json.
+const DIST = new URL('../dist/client/', import.meta.url).pathname;
 const LEVELS = ['Start here', 'Beginner', 'Intermediate', 'Advanced', 'Reference'];
 const SECTION_CAP = 1400; // max chars indexed per section, to bound index size
 // Appended chrome that isn't real page content — never index it.
@@ -69,7 +73,7 @@ for (const file of htmlFiles(DIST)) {
   if (title) index.push({ t: title, u: url, c: cat, s: track, d: level, secs: sections });
 }
 
-const out = new URL('../dist/search-index.json', import.meta.url);
+const out = new URL('../dist/client/search-index.json', import.meta.url);
 fs.writeFileSync(out, JSON.stringify(index));
 const kb = (fs.statSync(out).size / 1024).toFixed(0);
-console.log(`[postbuild] wrote dist/search-index.json — ${index.length} pages, ${kb} KB`);
+console.log(`[postbuild] wrote dist/client/search-index.json — ${index.length} pages, ${kb} KB`);

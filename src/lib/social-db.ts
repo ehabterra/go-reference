@@ -2,6 +2,7 @@
 // Identity is a SHA-256 fingerprint of the visitor's email, computed in the
 // browser (src/lib/visitor.ts) — the address itself never reaches the server,
 // so neither the Worker nor the database ever see it.
+import { env } from 'cloudflare:workers';
 
 // Minimal structural types for the D1 binding so we don't need
 // @cloudflare/workers-types for a couple of tables.
@@ -31,6 +32,9 @@ export function json(obj: unknown, status = 200) {
   });
 }
 
-export function getDB(locals: unknown): D1Database | null {
-  return (locals as any)?.runtime?.env?.DB ?? null;
+// Astro v6+ removed `Astro.locals.runtime.env`; the Cloudflare bindings are now
+// read from the `cloudflare:workers` virtual module. The `locals` parameter is
+// kept (unused) so the existing call sites don't all need to change.
+export function getDB(_locals?: unknown): D1Database | null {
+  return ((env as any)?.DB as D1Database) ?? null;
 }
