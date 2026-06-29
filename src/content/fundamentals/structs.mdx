@@ -152,13 +152,13 @@ func main() {
 	fmt.Println(p.Name, "lives in", p.Address.City)
 
 	// %v prints just the values; %+v adds the field names; %#v is Go syntax.
-	fmt.Printf("%v\\n", p)
-	fmt.Printf("%+v\\n", p)
-	fmt.Printf("%#v\\n", p)
+	fmt.Printf("%v\n", p)
+	fmt.Printf("%+v\n", p)
+	fmt.Printf("%#v\n", p)
 
 	// var z Person gives the zero value: every field set to its own zero.
 	var z Person
-	fmt.Printf("zero: %+v\\n", z)
+	fmt.Printf("zero: %+v\n", z)
 }`} />
 
 `%+v` (field names) is the everyday debugging verb for structs; reach for `%#v` when you want output that reads like the Go literal that produced it.
@@ -239,7 +239,7 @@ func main() {
 		Host string
 		Port int
 	}{Host: "localhost", Port: 8080}
-	fmt.Printf("%s:%d\\n", cfg.Host, cfg.Port)
+	fmt.Printf("%s:%d\n", cfg.Host, cfg.Port)
 }`} />
 
 ## Struct tags
@@ -283,7 +283,7 @@ func main() {
 	// Unmarshal: the same tags map JSON keys back onto fields.
 	var back User
 	_ = json.Unmarshal([]byte("{\"name\":\"Linus\",\"email\":\"l@x.io\",\"age\":54}"), &back)
-	fmt.Printf("decoded: %+v\\n", back)
+	fmt.Printf("decoded: %+v\n", back)
 }`} />
 
 Two rules worth burning in: only **exported** (capitalized) fields are visible to `encoding/json` — the lowercase `pwd` above is never marshaled — and a malformed tag fails silently, so double-check the spelling.

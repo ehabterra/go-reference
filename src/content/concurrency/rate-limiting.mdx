@@ -191,7 +191,7 @@ The `select { case ...: default: }` on refill is the heart of the burst cap: a f
 
 ## golang.org/x/time/rate — the idiomatic choice
 
-For production, don't hand-roll: [`golang.org/x/time/rate`](/patterns/worker-pool/) gives you a lock-free, timer-free token bucket with three usage styles. It's a `golang.org/x` module (Go-team maintained, outside the `std` tree), so the runnable Playgrounds above stay stdlib-only and this goes in a fenced block — it compiles and runs on go.dev:
+For production, don't hand-roll: [`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate) gives you a timer-free token bucket with three usage styles. It's a `golang.org/x` module (Go-team maintained, outside the `std` tree), so the runnable Playgrounds above stay stdlib-only and this goes in a fenced block — it compiles and runs on go.dev:
 
 ```go
 package main

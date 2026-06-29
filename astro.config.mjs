@@ -45,6 +45,9 @@ export default defineConfig({
   adapter: cloudflare({
     // Expose wrangler.jsonc bindings (D1) under `astro dev` via Miniflare.
     platformProxy: { enabled: true },
+    // This site uses no Astro <Image>/image transforms (only inline SVGs +
+    // webfonts), so skip Cloudflare Images — avoids requiring an IMAGES binding.
+    imageService: 'passthrough',
   }),
   markdown: {
     rehypePlugins: [rehypeHeadingIds],

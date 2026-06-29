@@ -117,11 +117,10 @@ func NewDSU(n int) *DSU {
 
 // Find returns x's representative, compressing the path on the way up.
 func (d *DSU) Find(x int) int {
-	for d.parent[x] != x {
-		d.parent[x] = d.parent[d.parent[x]] // path compression (halving)
-		x = d.parent[x]
+	if d.parent[x] != x {
+		d.parent[x] = d.Find(d.parent[x]) // re-point every node straight at the root
 	}
-	return x
+	return d.parent[x]
 }
 
 // Union merges the sets of a and b; returns false if already joined.

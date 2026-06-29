@@ -231,7 +231,7 @@ func main() {
 }`} />
 
 <Callout type="gotcha" title="⚠️ BFS hops ≠ weighted shortest path">
-BFS gives the shortest path *in number of edges*. The moment edges carry **weights** (distances, costs, times), the fewest-hops path may not be the cheapest — so BFS no longer applies. For non-negative weights use **[Dijkstra's algorithm](https://pkg.go.dev/container/heap)** (BFS with a priority queue / min-heap instead of a plain FIFO); for graphs with negative edges, Bellman-Ford. Also: mark a vertex visited *when you enqueue it*, not when you dequeue it, or it can land in the queue several times.
+BFS gives the shortest path *in number of edges*. The moment edges carry **weights** (distances, costs, times), the fewest-hops path may not be the cheapest — so BFS no longer applies. For non-negative weights use **Dijkstra's algorithm** (BFS with a priority queue / [min-heap](https://pkg.go.dev/container/heap) instead of a plain FIFO); for graphs with negative edges, Bellman-Ford. Also: mark a vertex visited *when you enqueue it*, not when you dequeue it, or it can land in the queue several times.
 </Callout>
 
 BFS and DFS are the foundation under a huge range of problems — connected components, flood fill, maze solving, dependency resolution, bipartite checking, and more — so getting these two traversals into your fingers pays off across the whole track.

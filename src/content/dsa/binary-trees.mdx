@@ -152,9 +152,9 @@ func collect(walk func(*Node, func(int)), root *Node) []int {
 
 func main() {
 	//        1
-	//       / \\
+	//       / \
 	//      2   3
-	//     / \\   \\
+	//     / \   \
 	//    4   5   6
 	root := &Node{Val: 1,
 		Left:  &Node{Val: 2, Left: &Node{Val: 4}, Right: &Node{Val: 5}},

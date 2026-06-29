@@ -189,7 +189,7 @@ if err := cmd.Run(); err != nil {
 | Feed input | set `cmd.Stdin` |
 | Add a timeout | `exec.CommandContext(ctx, ...)` |
 | Set working dir / env | `cmd.Dir` / `cmd.Env` |
-| Get the exit code | `errors.As(err, &exec.ExitError{})` → `ExitCode()` |
+| Get the exit code | `var ee *exec.ExitError; errors.As(err, &ee)` → `ee.ExitCode()` |
 | Find a binary on PATH | `exec.LookPath(name)` |
 
 <Callout type="gotcha" title="⚠️ No shell means no shell features — and that's the point">

@@ -102,7 +102,7 @@ The collector repeatedly takes a gray object, grays everything it points to, the
 
 Here's the danger of marking concurrently: while the collector works, your program (the **mutator**) keeps rewriting pointers. If it stores a pointer to a *white* object into an *already-black* object, and deletes the only other path to that white object, the collector would never revisit the black object — and would wrongly free a live object.
 
-The fix is a **write barrier**: a tiny piece of code the compiler inserts on pointer writes during marking. It notices such stores and re-colors the object (greys it), preserving the invariant. The barrier is only active during a GC cycle, so its cost is paid only while collecting.
+The fix is a **write barrier**: a tiny piece of code the compiler inserts on pointer writes during marking. It notices such stores and re-colors the object (grays it), preserving the invariant. The barrier is only active during a GC cycle, so its cost is paid only while collecting.
 
 ## The knobs: GOGC and GOMEMLIMIT
 

@@ -128,7 +128,7 @@ func (l Loud) Shout() string { return strings.ToUpper(string(l)) + "!" }
 
 func main() {
 	boiling := Celsius(100)
-	fmt.Printf("%s = %.1f°F\\n", boiling, boiling.Fahrenheit()) // 100.0°C = 212.0°F
+	fmt.Printf("%s = %.1f°F\n", boiling, boiling.Fahrenheit()) // 100.0°C = 212.0°F
 
 	nums := IntSlice{1, 2, 3, 4}
 	fmt.Println("sum:", nums.Sum()) // sum: 10

@@ -157,7 +157,7 @@ func main() {
 
 ## html/template: auto-escaping for safety
 
-Switching the import to `html/template` keeps the **identical API** but adds the feature that matters for the web: **context-aware auto-escaping**. The engine tracks whether a value is landing in HTML text, an attribute, a URL, or a `<script>` block, and escapes it the right way for that spot. This is what stops user input like `<script>steal()</script>` from becoming executable — the [cross-site scripting (XSS)](/web/tls-and-https/) defense you get for free:
+Switching the import to `html/template` keeps the **identical API** but adds the feature that matters for the web: **context-aware auto-escaping**. The engine tracks whether a value is landing in HTML text, an attribute, a URL, or a `<script>` block, and escapes it the right way for that spot. This is what stops user input like `<script>steal()</script>` from becoming executable — the [cross-site scripting (XSS)](/web/web-security/) defense you get for free:
 
 <Playground client:visible title="html.go" code={String.raw`package main
 

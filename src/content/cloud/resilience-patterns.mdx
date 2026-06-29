@@ -143,7 +143,7 @@ func main() {
 	dependencyDown := func() error { return errors.New("connection refused") }
 	dependencyUp := func() error { return nil }
 
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= 3; i++ {
 		err := b.Call(dependencyDown)
 		fmt.Printf("call %d: state=%d err=%v\n", i, b.state, err)
 	}
