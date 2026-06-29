@@ -115,7 +115,7 @@ log.Fatal(srv.ListenAndServeTLS("cert.pem", "key.pem"))
 For local testing you can generate a self-signed pair with Go's bundled tool:
 
 ```bash
-# writes cert.pem and key.pem for localhost, valid 24h
+# writes cert.pem and key.pem for localhost, valid ~1 year (the tool's default)
 go run $(go env GOROOT)/src/crypto/tls/generate_cert.go --host localhost
 ```
 

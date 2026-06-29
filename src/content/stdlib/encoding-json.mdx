@@ -234,7 +234,7 @@ func main() {
 - **Missing vs zero.** A plain `int` field can't tell "key absent" from `"x":0`. Use a pointer (`*int`) — nil means absent.
 - **Unknown keys are ignored** by default. Call `dec.DisallowUnknownFields()` to make extra keys an error (good for strict config parsing).
 - **`time.Time`** marshals/unmarshals as RFC 3339 automatically (it implements the interfaces).
-- **HTML escaping.** `Marshal` escapes `<`, `>`, `&` to `<` etc. for safe embedding in HTML; disable with `enc.SetEscapeHTML(false)`.
+- **HTML escaping.** `Marshal` escapes `<`, `>`, `&` to `<`, `>`, `&` for safe embedding in HTML; disable with `enc.SetEscapeHTML(false)`.
 - **Maps sort keys.** Marshaling a map produces keys in sorted order, so output is deterministic.
 
 <Callout type="gotcha" title="⚠️ Unmarshal needs a pointer, and is lenient by design">

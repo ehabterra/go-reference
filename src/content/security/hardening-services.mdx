@@ -35,7 +35,7 @@ quiz:
     explain: "Without a limit, a handler reading r.Body will happily buffer however much an attacker sends — a trivial memory-exhaustion DoS. http.MaxBytesReader wraps the body so reads fail past a cap, and returns a 413 to the client. Always bound request bodies (and use a low limit for endpoints that expect small JSON)."
   - q: "Why should middleware recover from panics in handlers?"
     options:
-      - text: "An unrecovered panic in a handler goroutine crashes the whole server process; recovery turns it into a 500 for that one request and keeps the server up"
+      - text: "net/http already recovers a panicking handler, but it only logs the trace and abruptly drops that one connection — recovery middleware instead returns a clean 500 and lets you log and alert on it"
         correct: true
       - text: "Recovery makes handlers faster"
         correct: false
@@ -43,7 +43,7 @@ quiz:
         correct: false
       - text: "Panics can't happen in handlers"
         correct: false
-    explain: "net/http runs each request in its own goroutine, but an unrecovered panic still terminates the process (a panic isn't isolated to the request unless you recover it). Recovery middleware defers a recover(), logs the error, and writes a 500 — so one buggy/attacker-triggered panic degrades a single request instead of taking down every connection. (Go's server does recover some panics, but explicit middleware gives you logging and a clean response.)"
+    explain: "net/http runs each request in its own goroutine and already recovers a panicking handler — but it just logs the stack trace and abruptly closes that one connection, so the client gets no clean response and nothing reaches your app-level logging or metrics. Recovery middleware defers a recover(), logs the error, and writes a proper 500 — so a buggy or attacker-triggered panic degrades a single request cleanly instead of dropping the connection. (The one panic it deliberately doesn't swallow is http.ErrAbortHandler.)"
   - q: "What do security headers like Content-Security-Policy and Strict-Transport-Security do?"
     options:
       - text: "They instruct the browser to enforce protections — CSP restricts what scripts/resources can load (mitigating XSS), HSTS forces HTTPS — defense in depth at the client"

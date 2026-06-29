@@ -99,7 +99,7 @@ case <-done:
 
 How it evaluates, precisely: Go first computes the channel operand (and any send value) of *every* case, once, top to bottom. Then it considers which operations can proceed *right now*. If one or more can, it picks one — uniformly at random when several are ready — and runs it. If none can and there is a `default`, it runs `default`. If none can and there is no `default`, the goroutine parks until some case becomes ready. So `select` evaluates all operands but executes exactly one case.
 
-## The four behaviors to internalize
+## The six behaviors to internalize
 
 | Behavior | Rule |
 |---|---|

@@ -174,7 +174,7 @@ GODEBUG=gctrace=1 ./app
 # Scheduler state every 1000ms: run queues, idle Ps/Ms, spinning threads.
 GODEBUG=schedtrace=1000 ./app
 
-# Combine; comma-separated. Allocation/free tracing (very verbose):
+# Combine; comma-separated:
 GODEBUG=gctrace=1,schedtrace=2000 ./app
 ```
 

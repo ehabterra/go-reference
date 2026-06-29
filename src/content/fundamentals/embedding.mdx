@@ -205,7 +205,7 @@ type Logging struct {
 
 func (l Logging) Sort(in []int) []int {
 	out := l.Sorter.Sort(in) // delegate to the wrapped implementation
-	fmt.Printf("[%s] sorted %d items\\n", l.Name(), len(in))
+	fmt.Printf("[%s] sorted %d items\n", l.Name(), len(in))
 	return out
 }
 

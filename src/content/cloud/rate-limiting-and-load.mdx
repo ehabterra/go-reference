@@ -97,35 +97,35 @@ This runs here — a semaphore caps concurrent work; requests over the limit are
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 func main() {
 	const capacity = 5 // max concurrent requests we can handle well
 	sem := make(chan struct{}, capacity)
 
-	var served, shed int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+	var served, shed int64
+	var attempted sync.WaitGroup
+	attempted.Add(12)
+	release := make(chan struct{}) // holds admitted requests "in flight"
 
 	// 12 requests arrive at once; we can only handle 5 concurrently.
 	for i := 0; i < 12; i++ {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			select {
-			case sem <- struct{}{}: // admitted
-				mu.Lock()
-				served++
-				mu.Unlock()
-				<-sem // (work happens here, then release)
+			case sem <- struct{}{}: // admitted — hold the slot while "working"
+				atomic.AddInt64(&served, 1)
+				attempted.Done()
+				<-release // simulated in-flight work keeps the slot taken
+				<-sem
 			default: // at capacity — shed immediately, don't queue
-				mu.Lock()
-				shed++
-				mu.Unlock()
+				atomic.AddInt64(&shed, 1)
+				attempted.Done()
 			}
 		}()
 	}
-	wg.Wait()
+	attempted.Wait() // every request has made its admit/shed decision
+	close(release)   // let the admitted ones finish
 	fmt.Printf("served: %d, shed (fast 429): %d\n", served, shed)
 	fmt.Println("-> accepted work stays within capacity and succeeds;")
 	fmt.Println("   excess is rejected fast instead of collapsing the service.")

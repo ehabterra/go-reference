@@ -151,7 +151,7 @@ func main() {
 	}
 }`} />
 
-The greedy pass picks A, D, F — three meetings — and no other selection does better. Crucially, picking the longest meeting C `[0,6)` first would have blocked everything else; earliest-finish avoids that trap.
+The greedy pass picks A, D, F — three meetings — and no other selection does better. Crucially, picking the longest meeting C `[0,6)` first would have blocked A, B, D and E — leaving only F, for 2 instead of 3; earliest-finish avoids that trap.
 
 ## Where greedy fails: coin change
 

@@ -95,6 +95,8 @@ message Todo {
   bool done = 3;
 }
 
+message ListTodosRequest {}
+
 service TodoService {
   // unary: one request in, one response out
   rpc GetTodo(GetTodoRequest) returns (Todo);
